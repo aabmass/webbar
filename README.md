@@ -56,3 +56,12 @@ cargo run -- --url http://localhost:5173 --height 86
 ```
 
 > **Note:** Only one daemon can own `org.freedesktop.Notifications` or `org.kde.StatusNotifierWatcher` on your session D-Bus at a time. If another bar or notification daemon (`waybar`, `mako`, `swaync`) is already running, `webbar` logs a warning and still runs, but notifications/tray items stay with the existing daemon until it is stopped.
+
+## Credits
+
+`webbar` builds directly on [domicile](https://github.com/cprussin/domicile) by Connor Prussin (MIT License):
+
+- The `window.domicile` bridge (`dbus`, `processes`, `files`) is designed to be compatible with `@domicile-desktop/sdk` and `@domicile-desktop/system-*` packages.
+- [`src/dbus_json.rs`](src/dbus_json.rs) is copied from `cprussin/domicile` (`packages/domicile-host/src/dbus_json.rs`).
+- [`src/dbus_bridge.rs`](src/dbus_bridge.rs), [`src/file_bridge.rs`](src/file_bridge.rs), and [`src/process_bridge.rs`](src/process_bridge.rs) are adapted from `cprussin/domicile` (`packages/domicile-host/src/system.rs`).
+- [`src/tray.rs`](src/tray.rs) is adapted from `cprussin/domicile` (`packages/domicile-host/src/tray.rs`).
