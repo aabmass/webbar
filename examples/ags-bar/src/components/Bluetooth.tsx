@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   type Bluetooth as BluetoothState,
   type Device,
@@ -7,11 +7,14 @@ import {
   watchBluetooth,
 } from "@domicile-desktop/system-bluetooth/bluetooth";
 import { BluetoothIcon } from "./Icons";
+import { Popover } from "./Popover";
 
 export function Bluetooth() {
   const [bt, setBt] = useState<BluetoothState | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [expanded, setExpanded] = useState(false);
+  const [open, setOpen] = useState(false);
+  const btnRef = useRef<HTMLButtonElement>(null);
+  const close = useCallback(() => setOpen(false), []);
   const [connectingPaths, setConnectingPaths] = useState<Set<string>>(
     () => new Set(),
   );
@@ -54,9 +57,25 @@ export function Bluetooth() {
   }
 
   return (
-    <div className="widget-group">
-      {expanded && (
-        <div className="inline-drawer bt-devices">
+    <>
+      <button
+        ref={btnRef}
+        type="button"
+        className={`bar-btn icon-btn${connectedCount > 0 ? " is-active" : ""}${error ? " is-dimmed" : ""}${open ? " is-open" : ""}`}
+        title={
+          error
+            ? `Bluetooth error: ${error}`
+            : connectedCount > 0
+              ? `Bluetooth: ${connectedCount} connected`
+              : "Bluetooth"
+        }
+        onClick={() => setOpen((prev) => !prev)}
+      >
+        <BluetoothIcon />
+      </button>
+
+      <Popover open={open} onClose={close} anchorRef={btnRef} align="end">
+        <div className="bt-popover-list">
           {pairedDevices.length === 0 ? (
             <span className="drawer-empty">No paired devices</span>
           ) : (
@@ -82,22 +101,7 @@ export function Bluetooth() {
             })
           )}
         </div>
-      )}
-
-      <button
-        type="button"
-        className={`bar-btn icon-btn${connectedCount > 0 ? " is-active" : ""}${error ? " is-dimmed" : ""}`}
-        title={
-          error
-            ? `Bluetooth error: ${error}`
-            : connectedCount > 0
-              ? `Bluetooth: ${connectedCount} connected`
-              : "Bluetooth"
-        }
-        onClick={() => setExpanded((prev) => !prev)}
-      >
-        <BluetoothIcon />
-      </button>
-    </div>
+      </Popover>
+    </>
   );
 }

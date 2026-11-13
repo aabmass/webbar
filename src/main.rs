@@ -13,6 +13,7 @@ use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::Arc;
 
+use gtk4::cairo;
 use gtk4::gdk::{self, Monitor, RGBA};
 use gtk4::gio::{self, MemoryInputStream};
 use gtk4::glib;
@@ -46,6 +47,7 @@ enum Source {
 struct Config {
     source: Source,
     height: i32,
+    overlay_height: Option<i32>,
 }
 
 impl Config {
@@ -53,6 +55,7 @@ impl Config {
         let mut dir: Option<PathBuf> = None;
         let mut url: Option<String> = None;
         let mut height: i32 = DEFAULT_BAR_HEIGHT;
+        let mut overlay_height: Option<i32> = None;
         let mut args = std::env::args().skip(1);
         while let Some(arg) = args.next() {
             match arg.as_str() {
@@ -72,6 +75,15 @@ impl Config {
                         .filter(|&h| h > 0)
                         .ok_or("invalid --height (must be a positive integer)")?;
                 }
+                "--overlay-height" => {
+                    let val = args.next().ok_or("missing value for --overlay-height")?;
+                    let parsed = val
+                        .parse::<i32>()
+                        .ok()
+                        .filter(|&h| h > 0)
+                        .ok_or("invalid --overlay-height (must be a positive integer)")?;
+                    overlay_height = Some(parsed);
+                }
                 other => return Err(format!("unknown argument: {other}")),
             }
         }
@@ -80,7 +92,11 @@ impl Config {
             (None, Some(u)) => Source::Url(u),
             _ => return Err("pass either --dir <path> or --url <url>".to_string()),
         };
-        Ok(Self { source, height })
+        Ok(Self {
+            source,
+            height,
+            overlay_height,
+        })
     }
 }
 
@@ -161,6 +177,16 @@ fn activate(app: &Application, config: &Config) {
         eprintln!("webbar: no GDK display available");
         return;
     };
+
+    let css = gtk4::CssProvider::new();
+    css.load_from_data(
+        "window, window.background { background-color: transparent; background-image: none; }",
+    );
+    gtk4::style_context_add_provider_for_display(
+        &display,
+        &css,
+        gtk4::STYLE_PROVIDER_PRIORITY_APPLICATION,
+    );
 
     let monitors = display.monitors();
     let windows: Rc<RefCell<HashMap<glib::Object, ApplicationWindow>>> =
@@ -261,10 +287,18 @@ fn create_bar_window(
     config: &Config,
     services: &Arc<HostServices>,
 ) -> ApplicationWindow {
+    let window_height = config
+        .overlay_height
+        .unwrap_or(config.height)
+        .max(config.height);
+    let has_overlay = window_height > config.height;
+    let monitor_width = monitor.geometry().width();
+    let bar_height = config.height;
+
     let window = ApplicationWindow::builder()
         .application(app)
         .title("webbar")
-        .default_height(config.height)
+        .default_height(window_height)
         .build();
 
     window.init_layer_shell();
@@ -273,7 +307,18 @@ fn create_bar_window(
     window.set_anchor(Edge::Top, true);
     window.set_anchor(Edge::Left, true);
     window.set_anchor(Edge::Right, true);
-    window.auto_exclusive_zone_enable();
+    if has_overlay {
+        window.set_exclusive_zone(bar_height);
+        window.connect_map(move |win| {
+            if let Some(surface) = win.surface() {
+                let rect = cairo::RectangleInt::new(0, 0, monitor_width, bar_height);
+                let region = cairo::Region::create_rectangle(&rect);
+                surface.set_input_region(&region);
+            }
+        });
+    } else {
+        window.auto_exclusive_zone_enable();
+    }
     window.set_keyboard_mode(KeyboardMode::None);
 
     let ucm = UserContentManager::new();
@@ -309,6 +354,7 @@ fn create_bar_window(
     });
 
     let services = services.clone();
+    let window_weak = window.downgrade();
     ucm.connect_script_message_received(Some("bridge"), move |_, value| {
         let raw = value.to_str();
         let req: BridgeRequest = match serde_json::from_str(&raw) {
@@ -380,6 +426,27 @@ fn create_bar_window(
             }
             BridgeRequest::TrayActivate { bus, path } => {
                 tray::activate(bus, path);
+            }
+            BridgeRequest::SetInputRegion { rects } => {
+                if let Some(win) = window_weak.upgrade() {
+                    if let Some(surface) = win.surface() {
+                        if rects.is_empty() {
+                            let rect = cairo::RectangleInt::new(0, 0, monitor_width, bar_height);
+                            let region = cairo::Region::create_rectangle(&rect);
+                            surface.set_input_region(&region);
+                            win.set_keyboard_mode(KeyboardMode::None);
+                        } else {
+                            let cairo_rects: Vec<cairo::RectangleInt> = rects
+                                .into_iter()
+                                .filter(|r| r.width > 0 && r.height > 0)
+                                .map(|r| cairo::RectangleInt::new(r.x, r.y, r.width, r.height))
+                                .collect();
+                            let region = cairo::Region::create_rectangles(&cairo_rects);
+                            surface.set_input_region(&region);
+                            win.set_keyboard_mode(KeyboardMode::OnDemand);
+                        }
+                    }
+                }
             }
         }
     });

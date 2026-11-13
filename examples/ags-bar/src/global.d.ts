@@ -52,5 +52,11 @@ declare global {
       dismiss: (id: number) => void;
       clearAll: () => void;
     };
+    webbar?: {
+      setInputRegion: (
+        rects: { x: number; y: number; width: number; height: number }[],
+      ) => void;
+      resetInputRegion: () => void;
+    };
   }
 }

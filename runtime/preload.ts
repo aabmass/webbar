@@ -562,9 +562,31 @@ export const notifications = {
   clearAll: () => postToHost({ type: "clear_notifications" }),
 };
 
+export type InputRect = {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+};
+
+export const webbar = {
+  setInputRegion: (rects: InputRect[]) =>
+    postToHost({
+      type: "set_input_region",
+      rects: rects.map((r) => ({
+        x: Math.round(r.x),
+        y: Math.round(r.y),
+        width: Math.round(r.width),
+        height: Math.round(r.height),
+      })),
+    }),
+  resetInputRegion: () => postToHost({ type: "set_input_region", rects: [] }),
+};
+
 Object.assign(window, {
   domicile: { dbus, processes, files },
   sway,
   tray,
   notifications,
+  webbar,
 });

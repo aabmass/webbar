@@ -1,11 +1,14 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Audio, AudioDevice } from "@domicile-desktop/system-audio/audio";
 import { soundServer } from "@domicile-desktop/system-audio/sound-server";
 import { SpeakerIcon } from "./Icons";
+import { Popover } from "./Popover";
 
 export function AudioOutput() {
   const [audioState, setAudioState] = useState<Audio | null>(null);
-  const [expanded, setExpanded] = useState(false);
+  const [open, setOpen] = useState(false);
+  const btnRef = useRef<HTMLButtonElement>(null);
+  const close = useCallback(() => setOpen(false), []);
 
   const audio = useMemo(
     () =>
@@ -28,35 +31,17 @@ export function AudioOutput() {
   const pct = Math.round(volume * 100);
 
   return (
-    <div className="widget-group">
-      {expanded && speaker && (
-        <div className="inline-drawer">
-          <input
-            type="range"
-            className="bar-slider"
-            min={0}
-            max={1}
-            step={0.01}
-            value={Math.min(1, volume)}
-            aria-label="Output volume"
-            onChange={(e) => {
-              const next = Number(e.target.value);
-              void audio?.setVolume(speaker.id, next);
-            }}
-          />
-          <span className="drawer-value">{pct}%</span>
-        </div>
-      )}
-
+    <>
       <button
+        ref={btnRef}
         type="button"
-        className={`bar-btn icon-btn${muted ? " is-muted" : ""}`}
+        className={`bar-btn icon-btn${muted ? " is-muted" : ""}${open ? " is-open" : ""}`}
         title={
           speaker
             ? `${speaker.description}: ${muted ? "Muted" : `${pct}%`} (click for slider, right-click to mute, scroll to adjust)`
             : "No audio output"
         }
-        onClick={() => setExpanded((prev) => !prev)}
+        onClick={() => setOpen((prev) => !prev)}
         onContextMenu={(e) => {
           e.preventDefault();
           if (!speaker || !audio) return;
@@ -72,6 +57,27 @@ export function AudioOutput() {
       >
         <SpeakerIcon volume={volume} muted={muted} />
       </button>
-    </div>
+
+      <Popover open={open} onClose={close} anchorRef={btnRef} align="end">
+        <div className="popover-slider-row">
+          <SpeakerIcon volume={volume} muted={muted} />
+          <input
+            type="range"
+            className="bar-slider popover-slider"
+            min={0}
+            max={1}
+            step={0.01}
+            value={Math.min(1, volume)}
+            disabled={!speaker}
+            aria-label="Output volume"
+            onChange={(e) => {
+              if (!speaker) return;
+              void audio?.setVolume(speaker.id, Number(e.target.value));
+            }}
+          />
+          <span className="drawer-value">{speaker ? `${pct}%` : "--"}</span>
+        </div>
+      </Popover>
+    </>
   );
 }

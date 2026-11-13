@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Bus, ListenedKind } from "@domicile-desktop/sdk/system";
 import { DisplayIcon } from "./Icons";
+import { Popover } from "./Popover";
 
 const DDC_BUS = "com.ddcutil.DdcutilService";
 const DDC_PATH = "/com/ddcutil/DdcutilObject";
@@ -11,7 +12,9 @@ const DISPLAY_NUMBER = 1;
 export function MonitorBacklight() {
   const [brightness, setBrightness] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [expanded, setExpanded] = useState(false);
+  const [open, setOpen] = useState(false);
+  const btnRef = useRef<HTMLButtonElement>(null);
+  const close = useCallback(() => setOpen(false), []);
   const maxRef = useRef(100);
   const debounceRef = useRef<number | null>(null);
 
@@ -139,12 +142,33 @@ export function MonitorBacklight() {
   }, []);
 
   return (
-    <div className="widget-group">
-      {expanded && (
-        <div className="inline-drawer">
+    <>
+      <button
+        ref={btnRef}
+        type="button"
+        className={`bar-btn icon-btn${error ? " is-dimmed" : ""}${open ? " is-open" : ""}`}
+        title={
+          error
+            ? `Monitor brightness unavailable: ${error}`
+            : `Monitor brightness: ${brightness !== null ? `${brightness}%` : "--"} (click for slider, scroll to adjust)`
+        }
+        onClick={() => setOpen((prev) => !prev)}
+        onWheel={(e) => {
+          if (brightness === null) return;
+          e.preventDefault();
+          const step = e.deltaY < 0 ? 5 : -5;
+          applyBrightness(brightness + step);
+        }}
+      >
+        <DisplayIcon />
+      </button>
+
+      <Popover open={open} onClose={close} anchorRef={btnRef} align="end">
+        <div className="popover-slider-row">
+          <DisplayIcon />
           <input
             type="range"
-            className="bar-slider"
+            className="bar-slider popover-slider"
             min={0}
             max={100}
             step={1}
@@ -156,26 +180,7 @@ export function MonitorBacklight() {
             {brightness !== null ? `${brightness}%` : "--"}
           </span>
         </div>
-      )}
-
-      <button
-        type="button"
-        className={`bar-btn icon-btn${error ? " is-dimmed" : ""}`}
-        title={
-          error
-            ? `Monitor brightness unavailable: ${error}`
-            : `Monitor brightness: ${brightness !== null ? `${brightness}%` : "--"} (click for slider, scroll to adjust)`
-        }
-        onClick={() => setExpanded((prev) => !prev)}
-        onWheel={(e) => {
-          if (brightness === null) return;
-          e.preventDefault();
-          const step = e.deltaY < 0 ? 5 : -5;
-          applyBrightness(brightness + step);
-        }}
-      >
-        <DisplayIcon />
-      </button>
-    </div>
+      </Popover>
+    </>
   );
 }

@@ -82,7 +82,7 @@
           default = webbarPkg;
           ags-bar-ui = agsBarUi;
           ags-bar = pkgs.writeShellScriptBin "webbar-ags-bar" ''
-            exec ${webbarPkg}/bin/webbar --dir ${agsBarUi} --height 86 "$@"
+            exec ${webbarPkg}/bin/webbar --dir ${agsBarUi} --height 86 --overlay-height 400 "$@"
           '';
         });
 

@@ -26,6 +26,14 @@ pub enum Bus {
 }
 
 #[derive(Debug, Deserialize)]
+pub struct InputRect {
+    pub x: i32,
+    pub y: i32,
+    pub width: i32,
+    pub height: i32,
+}
+
+#[derive(Debug, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum BridgeRequest {
     DbusCall {
@@ -93,6 +101,9 @@ pub enum BridgeRequest {
     TrayActivate {
         bus: String,
         path: String,
+    },
+    SetInputRegion {
+        rects: Vec<InputRect>,
     },
 }
 
