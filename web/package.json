@@ -1,0 +1,21 @@
+{
+  "name": "webbar-ui",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "esbuild src/main.ts --bundle --format=iife --outfile=dist/bundle.js --sourcemap && cp index.html style.css dist/",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@cprussin/option-result": "^2.0.1",
+    "@domicile-desktop/sdk": "^2.2.0",
+    "@domicile-desktop/system-audio": "^1.1.2",
+    "@domicile-desktop/system-bluetooth": "^1.1.2",
+    "@domicile-desktop/system-network": "^1.1.2"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.0",
+    "typescript": "^5.7.0"
+  }
+}

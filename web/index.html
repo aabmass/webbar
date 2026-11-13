@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>webbar</title>
+    <link rel="stylesheet" href="./style.css" />
+  </head>
+  <body>
+    <header class="bar">
+      <div class="group left">
+        <div id="workspaces" class="workspaces"></div>
+        <span id="sway-mode" class="pill mode-badge" hidden></span>
+        <span id="focused-title" class="focused-title"></span>
+      </div>
+      <div class="group center">
+        <span id="clock" class="pill clock">--:--</span>
+      </div>
+      <div class="group right">
+        <div id="tray" class="tray-group"></div>
+        <button id="audio-status" class="pill clickable" data-state="unavailable">
+          Vol: …
+        </button>
+        <span id="network-status" class="pill" data-state="offline">
+          Net: …
+        </span>
+        <button id="bt-status" class="pill clickable" data-state="off">
+          BT: …
+        </button>
+        <div class="notif-group">
+          <button id="notif-status" class="pill clickable" data-has-items="false">
+            No notifications
+          </button>
+          <button id="notif-clear" class="pill clear-btn" hidden title="Clear all">
+            ×
+          </button>
+        </div>
+      </div>
+    </header>
+    <script src="./bundle.js"></script>
+  </body>
+</html>
