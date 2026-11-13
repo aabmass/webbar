@@ -18,7 +18,7 @@
             version = "0.1.0";
             src = ./web;
 
-            npmDepsHash = "sha256-rU8beK89p5TvM73ANM0TNHasEun/doqO3nNy42/K4rY=";
+            npmDepsHash = "sha256-VKOg+lKp/NDpD3B4fxS1ORxsbQpqNodb1FtBU7tjkmM=";
 
             installPhase = ''
               runHook preInstall
@@ -27,9 +27,23 @@
               runHook postInstall
             '';
           };
-        in
-        {
-          default = pkgs.rustPlatform.buildRustPackage {
+
+          agsBarUi = pkgs.buildNpmPackage {
+            pname = "webbar-ags-bar";
+            version = "0.1.0";
+            src = ./examples/ags-bar;
+
+            npmDepsHash = "sha256-ECu2RknM6+YVzy2geTTkWFQ2VzNIVv4ZSmkR3hLhhUg=";
+
+            installPhase = ''
+              runHook preInstall
+              mkdir -p $out
+              cp -r dist/* $out/
+              runHook postInstall
+            '';
+          };
+
+          webbarPkg = pkgs.rustPlatform.buildRustPackage {
             pname = "webbar";
             version = "0.1.0";
             src = ./.;
@@ -63,6 +77,13 @@
               platforms = platforms.linux;
             };
           };
+        in
+        {
+          default = webbarPkg;
+          ags-bar-ui = agsBarUi;
+          ags-bar = pkgs.writeShellScriptBin "webbar-ags-bar" ''
+            exec ${webbarPkg}/bin/webbar --dir ${agsBarUi} --height 86 "$@"
+          '';
         });
 
       devShells = forAllSystems (pkgs: {

@@ -1,0 +1,255 @@
+:root {
+  --theme-bg-color: #242424;
+  --theme-fg-color: #ffffff;
+  --surface-color: #383838;
+  --surface-hover: #464646;
+  --accent-color: #99c1f1;
+  --accent-green: #2ec27e;
+  --accent-slate: #4f5b66;
+  --virtual-bg: #77767b;
+  --urgent-bg: #e01b24;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  height: 100%;
+  background: transparent;
+  color: var(--theme-fg-color);
+  font-family: "Cantarell", "Inter", system-ui, -apple-system, sans-serif;
+  font-size: 13px;
+  font-weight: 700;
+  overflow: hidden;
+  user-select: none;
+}
+
+.bar-shell {
+  width: 100%;
+  height: 100%;
+  padding: 8px;
+  background: transparent;
+}
+
+.centerbox {
+  width: 100%;
+  height: 100%;
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+  background: var(--theme-bg-color);
+  border-radius: 10px;
+  padding: 0 6px;
+  gap: 8px;
+}
+
+.bar-start {
+  display: flex;
+  align-items: center;
+  justify-self: start;
+  gap: 8px;
+}
+
+.bar-center {
+  display: flex;
+  align-items: center;
+  justify-self: center;
+}
+
+.bar-end {
+  display: flex;
+  align-items: center;
+  justify-self: end;
+  gap: 4px;
+}
+
+button {
+  font: inherit;
+  color: inherit;
+  border: none;
+  cursor: pointer;
+  transition: background-color 120ms ease, filter 120ms ease;
+}
+
+button:focus-visible {
+  outline: 2px solid var(--accent-color);
+  outline-offset: 1px;
+}
+
+/* Workspaces 2-row grid */
+.workspaces-wrap {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.workspaces-grid {
+  display: grid;
+  grid-auto-rows: 28px;
+  grid-auto-columns: 36px;
+  gap: 3px;
+  padding: 4px;
+}
+
+.ws-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  background: var(--surface-color);
+  color: var(--theme-fg-color);
+  padding: 0 6px;
+  font-size: 13px;
+}
+
+.ws-btn:hover {
+  background: var(--surface-hover);
+}
+
+.ws-btn.visible {
+  background: #424242;
+}
+
+.ws-btn.focused {
+  background: var(--accent-color);
+  color: #ffffff;
+}
+
+.ws-btn.virtual {
+  background: var(--virtual-bg);
+  color: var(--virtual-bg);
+}
+
+.ws-btn.virtual:hover {
+  color: #242424;
+  filter: brightness(1.08);
+}
+
+.ws-btn.urgent {
+  background: var(--urgent-bg);
+  color: #ffffff;
+}
+
+.sway-mode {
+  padding: 4px 10px;
+  border-radius: 8px;
+  background: #e5a50a;
+  color: #1c1c1c;
+  font-size: 12px;
+}
+
+/* Standard bar buttons (Clock, Audio, Backlight, Bluetooth, Tray) */
+.bar-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 60px;
+  border-radius: 8px;
+  margin: 2px;
+  padding: 0 12px;
+  background: var(--surface-color);
+  color: var(--theme-fg-color);
+}
+
+.bar-btn:hover {
+  background: var(--surface-hover);
+}
+
+.clock {
+  min-width: 290px;
+  font-variant-numeric: tabular-nums;
+}
+
+.icon-btn {
+  width: 36px;
+  padding: 0;
+}
+
+.icon-btn.is-muted {
+  color: #f66151;
+}
+
+.icon-btn.is-active {
+  color: #62a0ea;
+}
+
+.icon-btn.is-dimmed {
+  opacity: 0.55;
+}
+
+.widget-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.inline-drawer {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 60px;
+  padding: 0 8px;
+  margin: 2px;
+  border-radius: 8px;
+  background: #2f2f2f;
+}
+
+.bar-slider {
+  width: 110px;
+  accent-color: var(--accent-color);
+  cursor: pointer;
+}
+
+.drawer-value {
+  min-width: 34px;
+  text-align: right;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.drawer-empty {
+  font-size: 12px;
+  color: #9a9996;
+  padding: 0 4px;
+}
+
+.bt-devices {
+  gap: 4px;
+  padding: 0 4px;
+}
+
+.bt-device {
+  height: 28px;
+  padding: 0 8px;
+  font-size: 12px;
+}
+
+.bt-device.paired {
+  background: var(--accent-slate);
+}
+
+.bt-device.connected {
+  background: var(--accent-green);
+  color: #141414;
+}
+
+.bt-device.connecting {
+  background: var(--accent-color);
+}
+
+.tray {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.tray-item {
+  font-size: 12px;
+  padding: 0 8px;
+}
