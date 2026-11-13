@@ -287,18 +287,17 @@ fn create_bar_window(
     config: &Config,
     services: &Arc<HostServices>,
 ) -> ApplicationWindow {
-    let window_height = config
-        .overlay_height
-        .unwrap_or(config.height)
-        .max(config.height);
-    let has_overlay = window_height > config.height;
-    let monitor_width = monitor.geometry().width();
     let bar_height = config.height;
+    let overlay_height = config
+        .overlay_height
+        .unwrap_or_else(|| (monitor.geometry().height() / 2).max(bar_height))
+        .max(bar_height);
+    let monitor_width = monitor.geometry().width();
 
     let window = ApplicationWindow::builder()
         .application(app)
         .title("webbar")
-        .default_height(window_height)
+        .default_height(bar_height)
         .build();
 
     window.init_layer_shell();
@@ -307,18 +306,7 @@ fn create_bar_window(
     window.set_anchor(Edge::Top, true);
     window.set_anchor(Edge::Left, true);
     window.set_anchor(Edge::Right, true);
-    if has_overlay {
-        window.set_exclusive_zone(bar_height);
-        window.connect_map(move |win| {
-            if let Some(surface) = win.surface() {
-                let rect = cairo::RectangleInt::new(0, 0, monitor_width, bar_height);
-                let region = cairo::Region::create_rectangle(&rect);
-                surface.set_input_region(&region);
-            }
-        });
-    } else {
-        window.auto_exclusive_zone_enable();
-    }
+    window.set_exclusive_zone(bar_height);
     window.set_keyboard_mode(KeyboardMode::None);
 
     let ucm = UserContentManager::new();
@@ -355,6 +343,7 @@ fn create_bar_window(
 
     let services = services.clone();
     let window_weak = window.downgrade();
+    let web_view_weak = web_view.downgrade();
     ucm.connect_script_message_received(Some("bridge"), move |_, value| {
         let raw = value.to_str();
         let req: BridgeRequest = match serde_json::from_str(&raw) {
@@ -445,6 +434,23 @@ fn create_bar_window(
                             surface.set_input_region(&region);
                             win.set_keyboard_mode(KeyboardMode::OnDemand);
                         }
+                    }
+                }
+            }
+            BridgeRequest::SetOverlay { active } => {
+                if let (Some(win), Some(view)) = (window_weak.upgrade(), web_view_weak.upgrade()) {
+                    let target_h = if active { overlay_height } else { bar_height };
+                    view.set_size_request(-1, target_h);
+                    win.set_default_size(-1, target_h);
+                    win.set_keyboard_mode(if active {
+                        KeyboardMode::OnDemand
+                    } else {
+                        KeyboardMode::None
+                    });
+                    if let Some(surface) = win.surface() {
+                        let rect = cairo::RectangleInt::new(0, 0, monitor_width, target_h);
+                        let region = cairo::Region::create_rectangle(&rect);
+                        surface.set_input_region(&region);
                     }
                 }
             }

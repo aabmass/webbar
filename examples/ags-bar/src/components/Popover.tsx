@@ -18,21 +18,13 @@ export function Popover({
   useEffect(() => {
     if (!open) return;
 
-    window.webbar?.setInputRegion([
-      { x: 0, y: 0, width: window.innerWidth, height: window.innerHeight },
-    ]);
-
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
         onClose();
       }
     };
     window.addEventListener("keydown", onKeyDown);
-
-    return () => {
-      window.removeEventListener("keydown", onKeyDown);
-      window.webbar?.resetInputRegion();
-    };
+    return () => window.removeEventListener("keydown", onKeyDown);
   }, [open, onClose]);
 
   if (!open) return null;

@@ -105,6 +105,9 @@ pub enum BridgeRequest {
     SetInputRegion {
         rects: Vec<InputRect>,
     },
+    SetOverlay {
+        active: bool,
+    },
 }
 
 fn empty_array_json() -> String {

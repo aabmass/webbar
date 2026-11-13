@@ -590,3 +590,53 @@ Object.assign(window, {
   notifications,
   webbar,
 });
+
+// Automatically expand/collapse the Wayland overlay when HTML popovers or dialogs open.
+let lastOverlayActive = false;
+let overlaySyncPending = false;
+const OVERLAY_SELECTOR =
+  ':popover-open, [role="dialog"]:not([hidden]):not([aria-hidden="true"]), [aria-modal="true"]:not([hidden]):not([aria-hidden="true"]), [data-webbar-overlay]:not([hidden])';
+
+function syncOverlay(): void {
+  overlaySyncPending = false;
+  let active = false;
+  try {
+    active = document.querySelector(OVERLAY_SELECTOR) !== null;
+  } catch {
+    // Fallback if :popover-open is unsupported in an older WebKitGTK build.
+    active =
+      document.querySelector(
+        '[role="dialog"]:not([hidden]):not([aria-hidden="true"]), [aria-modal="true"]:not([hidden]):not([aria-hidden="true"]), [data-webbar-overlay]:not([hidden])',
+      ) !== null;
+  }
+  if (active !== lastOverlayActive) {
+    lastOverlayActive = active;
+    postToHost({ type: "set_overlay", active });
+  }
+}
+
+function scheduleOverlaySync(): void {
+  if (overlaySyncPending) return;
+  overlaySyncPending = true;
+  requestAnimationFrame(syncOverlay);
+}
+
+window.addEventListener("DOMContentLoaded", () => {
+  document.addEventListener("toggle", scheduleOverlaySync, true);
+  if (document.body) {
+    new MutationObserver(scheduleOverlaySync).observe(document.body, {
+      childList: true,
+      subtree: true,
+      attributes: true,
+      attributeFilter: [
+        "open",
+        "hidden",
+        "aria-hidden",
+        "role",
+        "aria-modal",
+        "data-webbar-overlay",
+      ],
+    });
+  }
+  scheduleOverlaySync();
+});
