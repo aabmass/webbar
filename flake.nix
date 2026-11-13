@@ -3,9 +3,10 @@
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+    crane.url = "github:ipetkov/crane";
   };
 
-  outputs = { self, nixpkgs }:
+  outputs = { self, nixpkgs, crane }:
     let
       systems = [ "x86_64-linux" "aarch64-linux" ];
       forAllSystems = f: nixpkgs.lib.genAttrs systems (system: f nixpkgs.legacyPackages.${system});
@@ -43,21 +44,22 @@
             '';
           };
 
-          webbarPkg = pkgs.rustPlatform.buildRustPackage {
+          craneLib = crane.mkLib pkgs;
+
+          rustSrc = pkgs.lib.fileset.toSource {
+            root = ./.;
+            fileset = pkgs.lib.fileset.unions [
+              ./Cargo.toml
+              ./Cargo.lock
+              ./src
+            ];
+          };
+
+          commonArgs = {
             pname = "webbar";
             version = "0.1.0";
-            src = pkgs.lib.fileset.toSource {
-              root = ./.;
-              fileset = pkgs.lib.fileset.unions [
-                ./Cargo.toml
-                ./Cargo.lock
-                ./src
-              ];
-            };
-
-            cargoLock = {
-              lockFile = ./Cargo.lock;
-            };
+            src = rustSrc;
+            strictDeps = true;
 
             nativeBuildInputs = with pkgs; [
               pkg-config
@@ -71,6 +73,12 @@
               glib
               dbus
             ];
+          };
+
+          cargoArtifacts = craneLib.buildDepsOnly commonArgs;
+
+          webbarPkg = craneLib.buildPackage (commonArgs // {
+            inherit cargoArtifacts;
 
             postInstall = ''
               mkdir -p $out/share/webbar
@@ -83,7 +91,7 @@
               mainProgram = "webbar";
               platforms = platforms.linux;
             };
-          };
+          });
         in
         {
           default = webbarPkg;
