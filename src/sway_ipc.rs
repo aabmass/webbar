@@ -89,6 +89,25 @@ pub fn extract_focused_title(tree: &Value) -> String {
     find_focused(tree).unwrap_or_default()
 }
 
+use std::sync::{Mutex, OnceLock};
+
+static LATEST_STATE: OnceLock<Mutex<Option<BridgeEvent>>> = OnceLock::new();
+
+fn store_and_send(send: &SendEvent, event: BridgeEvent) {
+    let lock = LATEST_STATE.get_or_init(|| Mutex::new(None));
+    if let Ok(mut guard) = lock.lock() {
+        *guard = Some(event.clone());
+    }
+    send(event);
+}
+
+pub fn latest_state() -> Option<BridgeEvent> {
+    LATEST_STATE
+        .get()
+        .and_then(|lock| lock.lock().ok())
+        .and_then(|guard| guard.clone())
+}
+
 pub fn spawn(send: SendEvent) {
     thread::spawn(move || {
         let sock_path = match env::var("SWAYSOCK") {
@@ -119,11 +138,14 @@ pub fn spawn(send: SendEvent) {
         let mut focused_title = fetch_focused_title(&mut query_stream).unwrap_or_default();
         let mut mode = "default".to_string();
 
-        send(BridgeEvent::SwayState {
-            workspaces: workspaces.clone(),
-            focused_title: focused_title.clone(),
-            mode: mode.clone(),
-        });
+        store_and_send(
+            &send,
+            BridgeEvent::SwayState {
+                workspaces: workspaces.clone(),
+                focused_title: focused_title.clone(),
+                mode: mode.clone(),
+            },
+        );
 
         let sub_payload = br#"["workspace","window","mode"]"#;
         if let Err(err) = event_stream
@@ -159,11 +181,14 @@ pub fn spawn(send: SendEvent) {
                 _ => continue,
             }
 
-            send(BridgeEvent::SwayState {
-                workspaces: workspaces.clone(),
-                focused_title: focused_title.clone(),
-                mode: mode.clone(),
-            });
+            store_and_send(
+                &send,
+                BridgeEvent::SwayState {
+                    workspaces: workspaces.clone(),
+                    focused_title: focused_title.clone(),
+                    mode: mode.clone(),
+                },
+            );
         }
     });
 }

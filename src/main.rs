@@ -21,15 +21,15 @@ use gtk4::{Application, ApplicationWindow};
 use gtk4_layer_shell::{Edge, KeyboardMode, Layer, LayerShell};
 use webkit6::prelude::*;
 use webkit6::{
-    UserContentInjectedFrames, UserContentManager, UserScript, UserScriptInjectionTime, WebContext,
-    WebView,
+    LoadEvent, UserContentInjectedFrames, UserContentManager, UserScript,
+    UserScriptInjectionTime, WebContext, WebView,
 };
 
 use crate::dbus_bridge::{BridgeEvent, BridgeRequest, DbusBridge, SendEvent};
 use crate::notifications::NotificationStore;
 use crate::process_bridge::ProcessBridge;
 
-const BAR_HEIGHT: i32 = 34;
+const DEFAULT_BAR_HEIGHT: i32 = 34;
 const PRELOAD_JS: &str = include_str!("preload.js");
 
 thread_local! {
@@ -42,10 +42,17 @@ enum Source {
     Url(String),
 }
 
-impl Source {
+#[derive(Clone)]
+struct Config {
+    source: Source,
+    height: i32,
+}
+
+impl Config {
     fn from_args() -> Result<Self, String> {
         let mut dir: Option<PathBuf> = None;
         let mut url: Option<String> = None;
+        let mut height: i32 = DEFAULT_BAR_HEIGHT;
         let mut args = std::env::args().skip(1);
         while let Some(arg) = args.next() {
             match arg.as_str() {
@@ -57,14 +64,23 @@ impl Source {
                     let val = args.next().ok_or("missing value for --url")?;
                     url = Some(val);
                 }
+                "--height" => {
+                    let val = args.next().ok_or("missing value for --height")?;
+                    height = val
+                        .parse::<i32>()
+                        .ok()
+                        .filter(|&h| h > 0)
+                        .ok_or("invalid --height (must be a positive integer)")?;
+                }
                 other => return Err(format!("unknown argument: {other}")),
             }
         }
-        match (dir, url) {
-            (Some(d), None) => Ok(Self::Dir(d)),
-            (None, Some(u)) => Ok(Self::Url(u)),
-            _ => Err("pass either --dir <path> or --url <url>".to_string()),
-        }
+        let source = match (dir, url) {
+            (Some(d), None) => Source::Dir(d),
+            (None, Some(u)) => Source::Url(u),
+            _ => return Err("pass either --dir <path> or --url <url>".to_string()),
+        };
+        Ok(Self { source, height })
     }
 }
 
@@ -76,10 +92,10 @@ struct HostServices {
 }
 
 fn main() {
-    let source = match Source::from_args() {
-        Ok(s) => s,
+    let config = match Config::from_args() {
+        Ok(c) => c,
         Err(err) => {
-            eprintln!("webbar: {err}\nUsage: webbar (--dir <path> | --url <url>)");
+            eprintln!("webbar: {err}\nUsage: webbar (--dir <path> | --url <url>) [--height <px>]");
             std::process::exit(1);
         }
     };
@@ -88,12 +104,12 @@ fn main() {
         .application_id("dev.local.webbar")
         .build();
 
-    app.connect_activate(move |app| activate(app, &source));
+    app.connect_activate(move |app| activate(app, &config));
     app.run_with_args::<&str>(&[]);
 }
 
-fn activate(app: &Application, source: &Source) {
-    if let Source::Dir(dir) = source {
+fn activate(app: &Application, config: &Config) {
+    if let Source::Dir(dir) = &config.source {
         register_webbar_scheme(dir.clone());
     }
 
@@ -152,7 +168,7 @@ fn activate(app: &Application, source: &Source) {
 
     let sync_monitors = {
         let app = app.clone();
-        let source = source.clone();
+        let config = config.clone();
         let services = services.clone();
         let windows = windows.clone();
         let monitors = monitors.clone();
@@ -167,7 +183,7 @@ fn activate(app: &Application, source: &Source) {
                     continue;
                 }
                 if let Ok(monitor) = obj.clone().downcast::<Monitor>() {
-                    let win = create_bar_window(&app, &monitor, &source, &services);
+                    let win = create_bar_window(&app, &monitor, &config, &services);
                     windows.borrow_mut().insert(obj, win);
                 }
             }
@@ -242,13 +258,13 @@ fn mime_for(rel: &str) -> &'static str {
 fn create_bar_window(
     app: &Application,
     monitor: &Monitor,
-    source: &Source,
+    config: &Config,
     services: &Arc<HostServices>,
 ) -> ApplicationWindow {
     let window = ApplicationWindow::builder()
         .application(app)
         .title("webbar")
-        .default_height(BAR_HEIGHT)
+        .default_height(config.height)
         .build();
 
     window.init_layer_shell();
@@ -277,6 +293,19 @@ fn create_bar_window(
 
     WEB_VIEWS.with(|cell| {
         cell.borrow_mut().push(web_view.downgrade());
+    });
+
+    web_view.connect_load_changed(|view, event| {
+        if event == LoadEvent::Finished {
+            if let Some(state) = sway_ipc::latest_state() {
+                if let Ok(json) = serde_json::to_string(&state) {
+                    let script = format!(
+                        "window.__swayWebbarReceive && window.__swayWebbarReceive({json});"
+                    );
+                    view.evaluate_javascript(&script, None, None, None::<&gio::Cancellable>, |_| {});
+                }
+            }
+        }
     });
 
     let services = services.clone();
@@ -359,7 +388,7 @@ fn create_bar_window(
         .connector()
         .map(|s| s.to_string())
         .unwrap_or_default();
-    let uri = match source {
+    let uri = match &config.source {
         Source::Url(url) => {
             let sep = if url.contains('?') { '&' } else { '?' };
             format!("{url}{sep}output={connector}")
