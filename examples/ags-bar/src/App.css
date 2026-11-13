@@ -350,3 +350,15 @@ button:focus-visible {
   font-size: 12px;
   padding: 0 8px;
 }
+
+.tray-item.icon-btn {
+  width: 36px;
+  padding: 0;
+}
+
+.tray-icon {
+  width: 20px;
+  height: 20px;
+  object-fit: contain;
+  display: block;
+}

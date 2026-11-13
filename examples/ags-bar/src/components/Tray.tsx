@@ -27,11 +27,15 @@ export function Tray() {
           <button
             key={key}
             type="button"
-            className="bar-btn tray-item"
+            className={`bar-btn tray-item${item.icon_url ? " icon-btn" : ""}`}
             title={`${label} (${item.bus}${item.path})`}
             onClick={() => window.tray?.activate(item.bus, item.path)}
           >
-            {trayShortLabel(item)}
+            {item.icon_url ? (
+              <img className="tray-icon" src={item.icon_url} alt={label} />
+            ) : (
+              trayShortLabel(item)
+            )}
           </button>
         );
       })}

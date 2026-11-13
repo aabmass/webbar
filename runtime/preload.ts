@@ -49,6 +49,7 @@ export type TrayItem = {
   path: string;
   title: string;
   icon_name: string;
+  icon_url: string;
 };
 
 type HostEvent =

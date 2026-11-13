@@ -46,7 +46,14 @@
           webbarPkg = pkgs.rustPlatform.buildRustPackage {
             pname = "webbar";
             version = "0.1.0";
-            src = ./.;
+            src = pkgs.lib.fileset.toSource {
+              root = ./.;
+              fileset = pkgs.lib.fileset.unions [
+                ./Cargo.toml
+                ./Cargo.lock
+                ./src
+              ];
+            };
 
             cargoLock = {
               lockFile = ./Cargo.lock;

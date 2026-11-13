@@ -23,6 +23,7 @@ export type TrayItem = {
   path: string;
   title: string;
   icon_name: string;
+  icon_url?: string;
 };
 
 export type NotificationItem = {
