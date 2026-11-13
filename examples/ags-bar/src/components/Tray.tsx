@@ -73,7 +73,6 @@ function MenuList({
 function TrayButton({ item }: { item: TrayItem }) {
   const [open, setOpen] = useState(false);
   const [menuItems, setMenuItems] = useState<TrayMenuItem[]>([]);
-  const [loading, setLoading] = useState(false);
   const btnRef = useRef<HTMLButtonElement>(null);
   const close = useCallback(() => setOpen(false), []);
 
@@ -91,17 +90,14 @@ function TrayButton({ item }: { item: TrayItem }) {
       return;
     }
 
-    setOpen(true);
-    setLoading(true);
     try {
       const items = await window.tray.getMenu(item.bus, item.menu_path);
       setMenuItems(items);
+      setOpen(true);
     } catch {
       setMenuItems([]);
       setOpen(false);
       window.tray?.activate(item.bus, item.path);
-    } finally {
-      setLoading(false);
     }
   }
 
@@ -128,19 +124,15 @@ function TrayButton({ item }: { item: TrayItem }) {
       {hasMenu && (
         <Popover open={open} onClose={close} anchorRef={btnRef} align="end">
           <div className="tray-menu">
-            {loading && menuItems.length === 0 ? (
-              <span className="drawer-empty">Loading…</span>
-            ) : (
-              <MenuList
-                items={menuItems}
-                onSelect={(itemId) => {
-                  if (item.menu_path) {
-                    window.tray?.menuEvent?.(item.bus, item.menu_path, itemId);
-                  }
-                  close();
-                }}
-              />
-            )}
+            <MenuList
+              items={menuItems}
+              onSelect={(itemId) => {
+                if (item.menu_path) {
+                  window.tray?.menuEvent?.(item.bus, item.menu_path, itemId);
+                }
+                close();
+              }}
+            />
           </div>
         </Popover>
       )}

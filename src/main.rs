@@ -297,7 +297,7 @@ fn create_bar_window(
     let window = ApplicationWindow::builder()
         .application(app)
         .title("webbar")
-        .default_height(bar_height)
+        .default_height(overlay_height)
         .build();
 
     window.init_layer_shell();
@@ -307,6 +307,13 @@ fn create_bar_window(
     window.set_anchor(Edge::Left, true);
     window.set_anchor(Edge::Right, true);
     window.set_exclusive_zone(bar_height);
+    window.connect_map(move |win| {
+        if let Some(surface) = win.surface() {
+            let rect = cairo::RectangleInt::new(0, 0, monitor_width, bar_height);
+            let region = cairo::Region::create_rectangle(&rect);
+            surface.set_input_region(&region);
+        }
+    });
     window.set_keyboard_mode(KeyboardMode::None);
 
     let ucm = UserContentManager::new();
@@ -343,7 +350,6 @@ fn create_bar_window(
 
     let services = services.clone();
     let window_weak = window.downgrade();
-    let web_view_weak = web_view.downgrade();
     ucm.connect_script_message_received(Some("bridge"), move |_, value| {
         let raw = value.to_str();
         let req: BridgeRequest = match serde_json::from_str(&raw) {
@@ -448,10 +454,8 @@ fn create_bar_window(
                 }
             }
             BridgeRequest::SetOverlay { active } => {
-                if let (Some(win), Some(view)) = (window_weak.upgrade(), web_view_weak.upgrade()) {
+                if let Some(win) = window_weak.upgrade() {
                     let target_h = if active { overlay_height } else { bar_height };
-                    view.set_size_request(-1, target_h);
-                    win.set_default_size(-1, target_h);
                     win.set_keyboard_mode(if active {
                         KeyboardMode::OnDemand
                     } else {
