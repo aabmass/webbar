@@ -102,6 +102,16 @@ pub enum BridgeRequest {
         bus: String,
         path: String,
     },
+    TrayGetMenu {
+        id: u32,
+        bus: String,
+        menu_path: String,
+    },
+    TrayMenuEvent {
+        bus: String,
+        menu_path: String,
+        item_id: i32,
+    },
     SetInputRegion {
         rects: Vec<InputRect>,
     },
@@ -174,6 +184,12 @@ pub enum BridgeEvent {
     },
     Tray {
         items: Vec<crate::tray::TrayItem>,
+    },
+    TrayMenuReply {
+        id: u32,
+        ok: bool,
+        items: Vec<crate::tray::TrayMenuItem>,
+        error: Option<String>,
     },
 }
 

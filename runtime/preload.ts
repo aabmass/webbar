@@ -50,6 +50,18 @@ export type TrayItem = {
   title: string;
   icon_name: string;
   icon_url: string;
+  menu_path: string;
+};
+
+export type TrayMenuItem = {
+  id: number;
+  label: string;
+  enabled: boolean;
+  visible: boolean;
+  item_type: string;
+  toggle_type: string;
+  toggle_state: number;
+  children: TrayMenuItem[];
 };
 
 type HostEvent =
@@ -96,7 +108,14 @@ type HostEvent =
       error?: string | null;
     }
   | ({ type: "sway_state" } & SwayState)
-  | { type: "tray"; items: TrayItem[] };
+  | { type: "tray"; items: TrayItem[] }
+  | {
+      type: "tray_menu_reply";
+      id: number;
+      ok: boolean;
+      items: TrayMenuItem[];
+      error?: string | null;
+    };
 
 declare global {
   interface Window {
@@ -148,6 +167,10 @@ let latestSwayState: SwayState | undefined;
 
 const trayListeners = new Set<(items: TrayItem[]) => void>();
 let latestTrayItems: TrayItem[] = [];
+const pendingTrayMenus = new Map<
+  number,
+  { resolve: (items: TrayMenuItem[]) => void; reject: (err: Error) => void }
+>();
 
 function sysErr(
   message: string,
@@ -412,6 +435,17 @@ window.__swayWebbarReceive = (event: HostEvent) => {
       }
       break;
     }
+    case "tray_menu_reply": {
+      const pending = pendingTrayMenus.get(event.id);
+      if (!pending) return;
+      pendingTrayMenus.delete(event.id);
+      if (event.ok) {
+        pending.resolve(event.items);
+      } else {
+        pending.reject(new Error(event.error ?? "Failed to fetch tray menu"));
+      }
+      break;
+    }
   }
 };
 
@@ -551,6 +585,24 @@ export const tray = {
   },
   activate: (bus: string, path: string) =>
     postToHost({ type: "tray_activate", bus, path }),
+  getMenu: (bus: string, menuPath: string): Promise<TrayMenuItem[]> =>
+    new Promise((resolve, reject) => {
+      const id = nextId++;
+      pendingTrayMenus.set(id, { resolve, reject });
+      postToHost({
+        type: "tray_get_menu",
+        id,
+        bus,
+        menu_path: menuPath,
+      });
+    }),
+  menuEvent: (bus: string, menuPath: string, itemId: number) =>
+    postToHost({
+      type: "tray_menu_event",
+      bus,
+      menu_path: menuPath,
+      item_id: itemId,
+    }),
 };
 
 export const notifications = {

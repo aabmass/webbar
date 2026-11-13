@@ -21,7 +21,7 @@ use zbus::blocking::connection::Builder as ConnectionBuilder;
 use zbus::blocking::Connection;
 use zbus::interface;
 use zbus::message::Header;
-use zbus::zvariant::OwnedValue;
+use zbus::zvariant::{OwnedObjectPath, OwnedValue, Value};
 
 use crate::dbus_bridge::{BridgeEvent, SendEvent};
 
@@ -32,6 +32,19 @@ pub struct TrayItem {
     pub title: String,
     pub icon_name: String,
     pub icon_url: String,
+    pub menu_path: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct TrayMenuItem {
+    pub id: i32,
+    pub label: String,
+    pub enabled: bool,
+    pub visible: bool,
+    pub item_type: String,
+    pub toggle_type: String,
+    pub toggle_state: i32,
+    pub children: Vec<TrayMenuItem>,
 }
 
 #[derive(Clone)]
@@ -96,13 +109,14 @@ impl StatusNotifierWatcher {
 
         let store = self.store.clone();
         thread::spawn(move || {
-            let (title, icon_name, icon_url) = fetch_item_properties(&bus, &path);
+            let (title, icon_name, icon_url, menu_path) = fetch_item_properties(&bus, &path);
             store.upsert(TrayItem {
                 bus,
                 path,
                 title,
                 icon_name,
                 icon_url,
+                menu_path,
             });
         });
     }
@@ -125,10 +139,10 @@ impl StatusNotifierWatcher {
     }
 }
 
-fn fetch_item_properties(bus: &str, path: &str) -> (String, String, String) {
+fn fetch_item_properties(bus: &str, path: &str) -> (String, String, String, String) {
     let conn = match Connection::session() {
         Ok(c) => c,
-        Err(_) => return (String::new(), String::new(), String::new()),
+        Err(_) => return (String::new(), String::new(), String::new(), String::new()),
     };
 
     let reply = conn.call_method(
@@ -140,11 +154,11 @@ fn fetch_item_properties(bus: &str, path: &str) -> (String, String, String) {
     );
 
     let Ok(msg) = reply else {
-        return (String::new(), String::new(), String::new());
+        return (String::new(), String::new(), String::new(), String::new());
     };
 
     let Ok(props) = msg.body().deserialize::<HashMap<String, OwnedValue>>() else {
-        return (String::new(), String::new(), String::new());
+        return (String::new(), String::new(), String::new(), String::new());
     };
 
     let id = props
@@ -170,9 +184,14 @@ fn fetch_item_properties(bus: &str, path: &str) -> (String, String, String) {
         .get("IconPixmap")
         .and_then(|v| Vec::<(i32, i32, Vec<u8>)>::try_from(v.clone()).ok())
         .unwrap_or_default();
+    let menu_path = props
+        .get("Menu")
+        .and_then(|v| OwnedObjectPath::try_from(v.clone()).ok())
+        .map(|p| p.to_string())
+        .unwrap_or_default();
 
     let icon_url = resolve_icon_url(&icon_name, &icon_theme_path, pixmaps);
-    (title, icon_name, icon_url)
+    (title, icon_name, icon_url, menu_path)
 }
 
 fn resolve_icon_url(
@@ -310,4 +329,157 @@ pub fn activate(bus: String, path: String) {
             eprintln!("webbar: failed to activate tray item {bus}{path}: {err}");
         }
     });
+}
+
+type RawMenuNode = (i32, HashMap<String, OwnedValue>, Vec<OwnedValue>);
+
+fn strip_mnemonic(raw: &str) -> String {
+    raw.replace("__", "\x00")
+        .replace('_', "")
+        .replace('\x00', "_")
+}
+
+fn parse_menu_node(node: RawMenuNode) -> TrayMenuItem {
+    let (id, props, raw_children) = node;
+    let label = props
+        .get("label")
+        .and_then(|v| String::try_from(v.clone()).ok())
+        .map(|s| strip_mnemonic(&s))
+        .unwrap_or_default();
+    let enabled = props
+        .get("enabled")
+        .and_then(|v| bool::try_from(v.clone()).ok())
+        .unwrap_or(true);
+    let visible = props
+        .get("visible")
+        .and_then(|v| bool::try_from(v.clone()).ok())
+        .unwrap_or(true);
+    let item_type = props
+        .get("type")
+        .and_then(|v| String::try_from(v.clone()).ok())
+        .unwrap_or_else(|| "standard".to_string());
+    let toggle_type = props
+        .get("toggle-type")
+        .and_then(|v| String::try_from(v.clone()).ok())
+        .unwrap_or_default();
+    let toggle_state = props
+        .get("toggle-state")
+        .and_then(|v| i32::try_from(v.clone()).ok())
+        .unwrap_or(-1);
+
+    let children = raw_children
+        .into_iter()
+        .filter_map(|child_val| RawMenuNode::try_from(child_val).ok())
+        .map(parse_menu_node)
+        .filter(|item| item.visible)
+        .collect();
+
+    TrayMenuItem {
+        id,
+        label,
+        enabled,
+        visible,
+        item_type,
+        toggle_type,
+        toggle_state,
+        children,
+    }
+}
+
+pub fn get_menu(id: u32, bus: String, menu_path: String, send: SendEvent) {
+    thread::spawn(move || {
+        let send_err = |msg: String| {
+            send(BridgeEvent::TrayMenuReply {
+                id,
+                ok: false,
+                items: Vec::new(),
+                error: Some(msg),
+            });
+        };
+
+        let conn = match Connection::session() {
+            Ok(c) => c,
+            Err(err) => return send_err(err.to_string()),
+        };
+
+        let _ = conn.call_method(
+            Some(bus.as_str()),
+            menu_path.as_str(),
+            Some("com.canonical.dbusmenu"),
+            "AboutToShow",
+            &(0i32,),
+        );
+
+        let reply = conn.call_method(
+            Some(bus.as_str()),
+            menu_path.as_str(),
+            Some("com.canonical.dbusmenu"),
+            "GetLayout",
+            &(0i32, -1i32, Vec::<&str>::new()),
+        );
+
+        let msg = match reply {
+            Ok(m) => m,
+            Err(err) => return send_err(err.to_string()),
+        };
+
+        let (_rev, root): (u32, RawMenuNode) = match msg.body().deserialize() {
+            Ok(parsed) => parsed,
+            Err(err) => return send_err(err.to_string()),
+        };
+
+        let parsed_root = parse_menu_node(root);
+        send(BridgeEvent::TrayMenuReply {
+            id,
+            ok: true,
+            items: parsed_root.children,
+            error: None,
+        });
+    });
+}
+
+pub fn menu_event(bus: String, menu_path: String, item_id: i32) {
+    thread::spawn(move || {
+        let conn = match Connection::session() {
+            Ok(c) => c,
+            Err(err) => {
+                eprintln!("webbar: failed to connect to session bus for tray menu event: {err}");
+                return;
+            }
+        };
+        if let Err(err) = conn.call_method(
+            Some(bus.as_str()),
+            menu_path.as_str(),
+            Some("com.canonical.dbusmenu"),
+            "Event",
+            &(item_id, "clicked", Value::from(""), 0u32),
+        ) {
+            eprintln!("webbar: failed to send tray menu event {bus}{menu_path}#{item_id}: {err}");
+        }
+    });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_nested_dbusmenu_node_and_strips_mnemonics() {
+        let mut child_props: HashMap<String, OwnedValue> = HashMap::new();
+        child_props.insert(
+            "label".to_string(),
+            Value::from("Turn Bluetooth _Off").try_into().unwrap(),
+        );
+        child_props.insert("enabled".to_string(), OwnedValue::from(true));
+
+        let child_tuple: RawMenuNode = (65536, child_props, Vec::new());
+        let child_val: OwnedValue = Value::from(child_tuple).try_into().unwrap();
+
+        let root_props: HashMap<String, OwnedValue> = HashMap::new();
+        let parsed = parse_menu_node((0, root_props, vec![child_val]));
+        assert_eq!(parsed.children.len(), 1);
+        assert_eq!(parsed.children[0].id, 65536);
+        assert_eq!(parsed.children[0].label, "Turn Bluetooth Off");
+        assert!(parsed.children[0].enabled);
+    }
 }

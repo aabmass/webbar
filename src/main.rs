@@ -416,6 +416,16 @@ fn create_bar_window(
             BridgeRequest::TrayActivate { bus, path } => {
                 tray::activate(bus, path);
             }
+            BridgeRequest::TrayGetMenu { id, bus, menu_path } => {
+                tray::get_menu(id, bus, menu_path, services.send_event.clone());
+            }
+            BridgeRequest::TrayMenuEvent {
+                bus,
+                menu_path,
+                item_id,
+            } => {
+                tray::menu_event(bus, menu_path, item_id);
+            }
             BridgeRequest::SetInputRegion { rects } => {
                 if let Some(win) = window_weak.upgrade() {
                     if let Some(surface) = win.surface() {

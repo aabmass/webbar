@@ -362,3 +362,63 @@ button:focus-visible {
   object-fit: contain;
   display: block;
 }
+
+.tray-menu {
+  min-width: 240px;
+  max-width: 360px;
+  max-height: 480px;
+  overflow-y: auto;
+}
+
+.tray-menu-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.tray-menu-item {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 6px 10px;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--theme-fg-color);
+  font-size: 13px;
+  font-weight: 500;
+  text-align: left;
+}
+
+.tray-menu-item:hover:not(.is-disabled) {
+  background: var(--surface-hover);
+}
+
+.tray-menu-item.is-disabled {
+  color: #77767b;
+  cursor: default;
+}
+
+.tray-menu-label {
+  white-space: pre;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tray-menu-arrow {
+  color: #9a9996;
+  font-size: 11px;
+}
+
+.tray-menu-sep {
+  height: 1px;
+  margin: 4px 6px;
+  background: #3c3c3c;
+}
+
+.tray-menu-sub {
+  margin-left: 12px;
+  padding-left: 8px;
+  border-left: 1px solid #3c3c3c;
+}

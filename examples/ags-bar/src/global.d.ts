@@ -24,6 +24,18 @@ export type TrayItem = {
   title: string;
   icon_name: string;
   icon_url?: string;
+  menu_path?: string;
+};
+
+export type TrayMenuItem = {
+  id: number;
+  label: string;
+  enabled: boolean;
+  visible: boolean;
+  item_type: string;
+  toggle_type: string;
+  toggle_state: number;
+  children: TrayMenuItem[];
 };
 
 export type NotificationItem = {
@@ -47,6 +59,8 @@ declare global {
     tray: {
       onChange: (cb: (items: TrayItem[]) => void) => () => void;
       activate: (bus: string, path: string) => void;
+      getMenu?: (bus: string, menuPath: string) => Promise<TrayMenuItem[]>;
+      menuEvent?: (bus: string, menuPath: string, itemId: number) => void;
     };
     notifications: {
       onChange: (cb: (items: NotificationItem[]) => void) => () => void;
