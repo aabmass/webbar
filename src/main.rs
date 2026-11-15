@@ -53,12 +53,16 @@ struct Config {
 
 impl Config {
     fn from_args() -> Result<Self, String> {
+        Self::from_iter(std::env::args().skip(1))
+    }
+
+    fn from_iter<I: IntoIterator<Item = String>>(args: I) -> Result<Self, String> {
         let mut dir: Option<PathBuf> = None;
         let mut url: Option<String> = None;
         let mut height: i32 = DEFAULT_BAR_HEIGHT;
         let mut overlay_height: Option<i32> = None;
         let mut replace = false;
-        let mut args = std::env::args().skip(1);
+        let mut args = args.into_iter();
         while let Some(arg) = args.next() {
             match arg.as_str() {
                 "--dir" => {
@@ -102,6 +106,14 @@ impl Config {
             replace,
         })
     }
+
+    fn application_flags(&self) -> gio::ApplicationFlags {
+        let mut flags = gio::ApplicationFlags::ALLOW_REPLACEMENT;
+        if self.replace {
+            flags |= gio::ApplicationFlags::REPLACE;
+        }
+        flags
+    }
 }
 
 struct HostServices {
@@ -120,14 +132,9 @@ fn main() {
         }
     };
 
-    let mut flags = gio::ApplicationFlags::ALLOW_REPLACEMENT;
-    if config.replace {
-        flags |= gio::ApplicationFlags::REPLACE;
-    }
-
     let app = Application::builder()
         .application_id("dev.local.webbar")
-        .flags(flags)
+        .flags(config.application_flags())
         .build();
 
     app.connect_activate(move |app| activate(app, &config));
@@ -497,4 +504,44 @@ fn create_bar_window(
     window.set_child(Some(&web_view));
     window.present();
     window
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn parse(args: &[&str]) -> Result<Config, String> {
+        Config::from_iter(args.iter().map(|s| (*s).to_string()))
+    }
+
+    #[test]
+    fn defaults_allow_replacement_without_replace() {
+        let cfg = parse(&["--dir", "/tmp/ui"]).unwrap();
+        assert!(!cfg.replace);
+        assert_eq!(cfg.height, DEFAULT_BAR_HEIGHT);
+        assert_eq!(cfg.overlay_height, None);
+        assert_eq!(
+            cfg.application_flags(),
+            gio::ApplicationFlags::ALLOW_REPLACEMENT
+        );
+    }
+
+    #[test]
+    fn replace_flag_sets_replace_application_flag() {
+        let cfg = parse(&["--url", "http://localhost:8080", "--height", "86", "--replace"]).unwrap();
+        assert!(cfg.replace);
+        assert_eq!(cfg.height, 86);
+        assert_eq!(
+            cfg.application_flags(),
+            gio::ApplicationFlags::ALLOW_REPLACEMENT | gio::ApplicationFlags::REPLACE
+        );
+    }
+
+    #[test]
+    fn rejects_unknown_argument() {
+        let err = parse(&["--dir", "/tmp/ui", "-b", "bar-0"])
+            .err()
+            .expect("expected error");
+        assert_eq!(err, "unknown argument: -b");
+    }
 }
