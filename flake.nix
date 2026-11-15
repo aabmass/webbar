@@ -202,6 +202,33 @@
             ags-bar = pkgs.writeShellScriptBin "webbar-ags-bar" ''
               exec ${webbarPkg}/bin/webbar --dir ${agsBarUi} --height 86 "$@"
             '';
+            ags-bar-dev = pkgs.writeShellApplication {
+              name = "webbar-ags-bar-dev";
+              runtimeInputs = [ pkgs.nodejs pkgs.curl ];
+              text = ''
+                if [ ! -f examples/ags-bar/package.json ]; then
+                  echo "webbar-ags-bar-dev: run from the webbar repository root" >&2
+                  exit 1
+                fi
+
+                if [ ! -d examples/ags-bar/node_modules ]; then
+                  npm --prefix examples/ags-bar install
+                fi
+
+                npm --prefix examples/ags-bar run dev -- --port 5173 --strictPort &
+                VITE_PID=$!
+                trap 'kill "$VITE_PID" 2>/dev/null || true' EXIT INT TERM
+
+                for _ in $(seq 1 100); do
+                  if curl -fsS http://localhost:5173 >/dev/null 2>&1; then
+                    break
+                  fi
+                  sleep 0.15
+                done
+
+                ${webbarPkg}/bin/webbar --url http://localhost:5173 --height 86 --replace "$@"
+              '';
+            };
           };
 
           checks = {

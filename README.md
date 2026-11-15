@@ -45,15 +45,29 @@ cd ..
 cargo run -- --dir ./web/dist
 ```
 
-Or with Vite live reload on `examples/react-tray` or `examples/ags-bar`:
+### Live Reload with Vite (`examples/ags-bar`)
+
+Run both the Vite dev server and `webbar` with a single command from the repo root:
 
 ```bash
-# Terminal 1
-cd examples/ags-bar && npm install && npm run dev
-
-# Terminal 2
-cargo run -- --url http://localhost:5173 --height 86
+nix run .#ags-bar-dev
 ```
+
+Or start them in two terminals manually (`--replace` swaps out any already-running `webbar` instance):
+
+```bash
+# Terminal 1: start Vite dev server (inside nix develop if you don't have Node locally)
+cd examples/ags-bar
+npm install
+npm run dev
+
+# Terminal 2: launch webbar against the Vite dev server
+nix run . -- --url http://localhost:5173 --height 86 --replace
+# Or with Cargo directly:
+# cargo run -- --url http://localhost:5173 --height 86 --replace
+```
+
+Edits to `examples/ags-bar/src/` will hot-reload in the bar, and `webbar` automatically replays the latest system snapshots on reload.
 
 > **Note:** Only one daemon can own `org.freedesktop.Notifications` or `org.kde.StatusNotifierWatcher` on your session D-Bus at a time. If another bar or notification daemon (`waybar`, `mako`, `swaync`) is already running, `webbar` logs a warning and still runs, but notifications/tray items stay with the existing daemon until it is stopped.
 
