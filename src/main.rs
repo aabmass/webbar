@@ -1,6 +1,10 @@
+mod audio;
+mod backlight;
+mod bluetooth;
+mod bridge;
 mod dbus_bridge;
 mod dbus_json;
-mod file_bridge;
+mod network;
 mod notifications;
 mod process_bridge;
 mod sway_ipc;
@@ -26,7 +30,11 @@ use webkit6::{
     UserScriptInjectionTime, WebContext, WebView,
 };
 
-use crate::dbus_bridge::{BridgeEvent, BridgeRequest, DbusBridge, SendEvent};
+use crate::audio::AudioController;
+use crate::backlight::BacklightController;
+use crate::bluetooth::BluetoothController;
+use crate::bridge::{BridgeEvent, BridgeRequest, SendEvent, SnapshotCache};
+use crate::dbus_bridge::DbusBridge;
 use crate::notifications::NotificationStore;
 use crate::process_bridge::ProcessBridge;
 
@@ -120,6 +128,10 @@ struct HostServices {
     dbus: Arc<DbusBridge>,
     processes: Arc<ProcessBridge>,
     notifications: NotificationStore,
+    audio: AudioController,
+    bluetooth: BluetoothController,
+    backlight: BacklightController,
+    snapshots: SnapshotCache,
     send_event: SendEvent,
 }
 
@@ -146,47 +158,60 @@ fn activate(app: &Application, config: &Config) {
         register_webbar_scheme(dir.clone());
     }
 
-    let send_event: SendEvent = Arc::new(move |event: BridgeEvent| {
-        let json = match serde_json::to_string(&event) {
-            Ok(json) => json,
-            Err(err) => {
-                eprintln!("webbar: failed to serialize event: {err}");
-                return;
-            }
-        };
-        glib::idle_add_once(move || {
-            WEB_VIEWS.with(|cell| {
-                let mut views = cell.borrow_mut();
-                views.retain(|weak| {
-                    if let Some(view) = weak.upgrade() {
-                        let script = format!(
-                            "window.__swayWebbarReceive && window.__swayWebbarReceive({json});"
-                        );
-                        view.evaluate_javascript(
-                            &script,
-                            None,
-                            None,
-                            None::<&gio::Cancellable>,
-                            |_| {},
-                        );
-                        true
-                    } else {
-                        false
-                    }
+    let snapshots = SnapshotCache::new();
+    let send_event: SendEvent = {
+        let snapshots = snapshots.clone();
+        Arc::new(move |event: BridgeEvent| {
+            snapshots.record(&event);
+            let json = match serde_json::to_string(&event) {
+                Ok(json) => json,
+                Err(err) => {
+                    eprintln!("webbar: failed to serialize event: {err}");
+                    return;
+                }
+            };
+            glib::idle_add_once(move || {
+                WEB_VIEWS.with(|cell| {
+                    let mut views = cell.borrow_mut();
+                    views.retain(|weak| {
+                        if let Some(view) = weak.upgrade() {
+                            let script = format!(
+                                "window.__webbarReceive && window.__webbarReceive({json});"
+                            );
+                            view.evaluate_javascript(
+                                &script,
+                                None,
+                                None,
+                                None::<&gio::Cancellable>,
+                                |_| {},
+                            );
+                            true
+                        } else {
+                            false
+                        }
+                    });
                 });
             });
-        });
-    });
+        })
+    };
 
     let notifications = NotificationStore::new(send_event.clone());
     notifications::spawn_server(notifications.clone());
     sway_ipc::spawn(send_event.clone());
     tray::spawn_server(send_event.clone());
+    let audio = audio::spawn(send_event.clone());
+    let bluetooth = bluetooth::spawn(send_event.clone());
+    network::spawn(send_event.clone());
+    let backlight = backlight::spawn(send_event.clone());
 
     let services = Arc::new(HostServices {
         dbus: Arc::new(DbusBridge::new(send_event.clone())),
         processes: Arc::new(ProcessBridge::new(send_event.clone())),
         notifications,
+        audio,
+        bluetooth,
+        backlight,
+        snapshots,
         send_event,
     });
 
@@ -352,18 +377,27 @@ fn create_bar_window(
         cell.borrow_mut().push(web_view.downgrade());
     });
 
-    web_view.connect_load_changed(|view, event| {
-        if event == LoadEvent::Finished {
-            if let Some(state) = sway_ipc::latest_state() {
-                if let Ok(json) = serde_json::to_string(&state) {
-                    let script = format!(
-                        "window.__swayWebbarReceive && window.__swayWebbarReceive({json});"
-                    );
-                    view.evaluate_javascript(&script, None, None, None::<&gio::Cancellable>, |_| {});
+    {
+        let snapshots = services.snapshots.clone();
+        web_view.connect_load_changed(move |view, event| {
+            if event == LoadEvent::Finished {
+                for state in snapshots.snapshot_all() {
+                    if let Ok(json) = serde_json::to_string(&state) {
+                        let script = format!(
+                            "window.__webbarReceive && window.__webbarReceive({json});"
+                        );
+                        view.evaluate_javascript(
+                            &script,
+                            None,
+                            None,
+                            None::<&gio::Cancellable>,
+                            |_| {},
+                        );
+                    }
                 }
             }
-        }
-    });
+        });
+    }
 
     let services = services.clone();
     let window_weak = window.downgrade();
@@ -422,14 +456,36 @@ fn create_bar_window(
             BridgeRequest::ProcessKill { id, signal } => {
                 services.processes.kill(id, signal);
             }
-            BridgeRequest::FileReadText { id, path } => {
-                file_bridge::read_text(id, path, services.send_event.clone());
+            BridgeRequest::AudioSetVolume {
+                id,
+                device_id,
+                volume,
+            } => services.audio.set_volume(id, device_id, volume),
+            BridgeRequest::AudioSetMuted {
+                id,
+                device_id,
+                muted,
+            } => services.audio.set_muted(id, device_id, muted),
+            BridgeRequest::AudioSetDefault { id, device_id } => {
+                services.audio.set_default(id, device_id);
             }
-            BridgeRequest::FileReadDir { id, path } => {
-                file_bridge::read_dir(id, path, services.send_event.clone());
+            BridgeRequest::BluetoothSetPowered { id, path, powered } => {
+                services
+                    .bluetooth
+                    .set_powered(id, path, powered, services.send_event.clone());
             }
-            BridgeRequest::FileStat { id, path } => {
-                file_bridge::stat(id, path, services.send_event.clone());
+            BridgeRequest::BluetoothConnect { id, path } => {
+                services
+                    .bluetooth
+                    .connect(id, path, services.send_event.clone());
+            }
+            BridgeRequest::BluetoothDisconnect { id, path } => {
+                services
+                    .bluetooth
+                    .disconnect(id, path, services.send_event.clone());
+            }
+            BridgeRequest::BacklightSet { id, percent } => {
+                services.backlight.set_brightness(id, percent);
             }
             BridgeRequest::SwayCommand { command } => {
                 if let Err(err) = sway_ipc::run_command(&command) {

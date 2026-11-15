@@ -8,7 +8,7 @@ use std::thread;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::dbus_bridge::{BridgeEvent, SendEvent};
+use crate::bridge::{BridgeEvent, SendEvent};
 
 const MAGIC: &[u8; 6] = b"i3-ipc";
 
@@ -89,23 +89,8 @@ pub fn extract_focused_title(tree: &Value) -> String {
     find_focused(tree).unwrap_or_default()
 }
 
-use std::sync::{Mutex, OnceLock};
-
-static LATEST_STATE: OnceLock<Mutex<Option<BridgeEvent>>> = OnceLock::new();
-
 fn store_and_send(send: &SendEvent, event: BridgeEvent) {
-    let lock = LATEST_STATE.get_or_init(|| Mutex::new(None));
-    if let Ok(mut guard) = lock.lock() {
-        *guard = Some(event.clone());
-    }
     send(event);
-}
-
-pub fn latest_state() -> Option<BridgeEvent> {
-    LATEST_STATE
-        .get()
-        .and_then(|lock| lock.lock().ok())
-        .and_then(|guard| guard.clone())
 }
 
 pub fn spawn(send: SendEvent) {

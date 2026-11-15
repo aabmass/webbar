@@ -23,7 +23,7 @@ use zbus::interface;
 use zbus::message::Header;
 use zbus::zvariant::{OwnedObjectPath, OwnedValue, Value};
 
-use crate::dbus_bridge::{BridgeEvent, SendEvent};
+use crate::bridge::{BridgeEvent, SendEvent};
 
 #[derive(Debug, Clone, Serialize)]
 pub struct TrayItem {

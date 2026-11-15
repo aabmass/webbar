@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
-import type { SwayState, SwayWorkspace } from "../global";
+import { useMemo, useSyncExternalStore } from "react";
+import type { SwayWorkspace } from "../global";
 
 type WorkspaceSlot = {
   row: 1 | 2;
@@ -42,16 +42,10 @@ type WorkspaceItem = {
 };
 
 export function Workspaces() {
-  const [swayState, setSwayState] = useState<SwayState>({
-    workspaces: [],
-    focused_title: "",
-    mode: "default",
-  });
-
-  useEffect(() => {
-    if (!window.sway) return;
-    return window.sway.onState(setSwayState);
-  }, []);
+  const swayState = useSyncExternalStore(
+    window.webbar.sway.subscribe,
+    window.webbar.sway.get,
+  );
 
   const items = useMemo<WorkspaceItem[]>(() => {
     const byName = new Map<string, SwayWorkspace>();
@@ -126,7 +120,7 @@ export function Workspaces() {
               title={ws.output ? `${ws.name} (${ws.output})` : `Workspace ${ws.name}`}
               onClick={() => {
                 const escaped = ws.name.replace(/"/g, '\\"');
-                window.sway?.command(`workspace "${escaped}"`);
+                window.webbar.sway.command(`workspace "${escaped}"`);
               }}
             >
               {ws.name}

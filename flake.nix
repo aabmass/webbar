@@ -72,6 +72,7 @@
               webkitgtk_6_0
               glib
               dbus
+              libpulseaudio
             ];
           };
 
@@ -117,6 +118,7 @@
             webkitgtk_6_0
             glib
             dbus
+            libpulseaudio
           ];
         };
       });

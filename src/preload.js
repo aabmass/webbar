@@ -1,1 +1,459 @@
-(()=>{var z=e=>({isSome:!0,value:e}),G=()=>({isSome:!1}),c=class e{data;constructor(t){this.data=t}static Some(t){return new e(z(t))}static None(){return new e(G())}static collect(t){let r=[];for(let s of t)if(s.data.isSome)r.push(s.data.value);else return e.None();return e.Some(r)}static wrap(t){return t==null?e.None():e.Some(t)}isSome(){return this.data.isSome}isNone(){return!this.data.isSome}match(t){return this.data.isSome?t.Some(this.data.value):t.None()}unwrapOrElse(t){return this.match({Some:r=>r,None:t})}unwrapOr(t){return this.unwrapOrElse(()=>t)}andThen(t){return this.match({Some:t,None:()=>e.None()})}and(t){return this.andThen(()=>t)}andThenAsync(t){return this.match({Some:t,None:()=>Promise.resolve(e.None())})}orElse(t){return this.match({Some:()=>this,None:t})}or(t){return this.orElse(()=>t)}orElseAsync(t){return this.match({Some:()=>Promise.resolve(this),None:t})}xor(t){return this.isSome()&&t.isSome()?e.None():this.or(t)}map(t){return this.andThen(r=>e.Some(t(r)))}mapAsync(t){return this.andThenAsync(async r=>e.Some(await t(r)))}mapOr(t,r){return this.map(r).unwrapOr(t)}filter(t){return this.andThen(r=>t(r)?this:e.None())}zip(t){return this.match({Some:r=>t.map(s=>[r,s]),None:()=>e.None()})}unzip(){return this.match({Some:t=>[e.Some(t[0]),e.Some(t[1])],None:()=>[e.None(),e.None()]})}okOrElse(t){return this.match({Some:r=>o(r),None:()=>u(t())})}okOr(t){return this.okOrElse(()=>t)}transpose(){return this.match({Some:t=>t.map(r=>h(r)),None:()=>o(k())})}},h=e=>c.Some(e),k=()=>c.None();var V=e=>({isOk:!0,value:e}),Y=e=>({isOk:!1,error:e}),E=class e{data;constructor(t){this.data=t}static Ok(t){return new e(V(t))}static Err(t){return new e(Y(t))}static collect(t){let r=[];for(let s of t)if(s.data.isOk)r.push(s.data.value);else return e.Err(s.data.error);return o(r)}static wrap(t){try{return e.Ok(t())}catch(r){return e.Err(c.wrap(r))}}static async wrapAsync(t){try{return e.Ok(await t)}catch(r){return e.Err(c.wrap(r))}}isOk(){return this.data.isOk}isErr(){return!this.data.isOk}match(t){return this.data.isOk?t.Ok(this.data.value):t.Err(this.data.error)}unwrapOrElse(t){return this.match({Ok:r=>r,Err:t})}unwrapOr(t){return this.unwrapOrElse(()=>t)}andThen(t){return this.match({Ok:t,Err:r=>e.Err(r)})}and(t){return this.andThen(()=>t)}andThenAsync(t){return this.match({Ok:t,Err:r=>Promise.resolve(e.Err(r))})}orElse(t){return this.match({Ok:r=>e.Ok(r),Err:t})}or(t){return this.orElse(()=>t)}orElseAsync(t){return this.match({Ok:r=>Promise.resolve(e.Ok(r)),Err:t})}map(t){return this.andThen(r=>o(t(r)))}mapAsync(t){return this.andThenAsync(async r=>o(await t(r)))}mapOr(t,r){return this.map(r).unwrapOr(t)}mapErr(t){return this.match({Ok:r=>e.Ok(r),Err:r=>e.Err(t(r))})}mapErrAsync(t){return this.match({Ok:r=>Promise.resolve(e.Ok(r)),Err:async r=>e.Err(await t(r))})}ok(){return this.match({Ok:t=>h(t),Err:()=>k()})}err(){return this.match({Ok:()=>k(),Err:t=>h(t)})}transpose(){return this.match({Ok:t=>t.map(r=>e.Ok(r)),Err:t=>h(e.Err(t))})}},o=e=>E.Ok(e),u=e=>E.Err(e);var a;(function(e){e[e.NotFound=0]="NotFound",e[e.PermissionDenied=1]="PermissionDenied",e[e.AlreadyExists=2]="AlreadyExists",e[e.NotADirectory=3]="NotADirectory",e[e.IsADirectory=4]="IsADirectory",e[e.InvalidInput=5]="InvalidInput",e[e.Locked=6]="Locked",e[e.Dbus=7]="Dbus",e[e.Canceled=8]="Canceled",e[e.CompositorGone=9]="CompositorGone",e[e.Other=10]="Other"})(a||(a={}));var L;(function(e){e[e.WrongPassphrase=0]="WrongPassphrase",e[e.Unverifiable=1]="Unverifiable",e[e.TooSoon=2]="TooSoon"})(L||(L={}));var U;(function(e){e[e.File=0]="File",e[e.Directory=1]="Directory",e[e.Symlink=2]="Symlink",e[e.Other=3]="Other"})(U||(U={}));var d;(function(e){e[e.Hup=0]="Hup",e[e.Int=1]="Int",e[e.Term=2]="Term",e[e.Kill=3]="Kill",e[e.Usr1=4]="Usr1",e[e.Usr2=5]="Usr2"})(d||(d={}));var b;(function(e){e[e.Session=0]="Session",e[e.System=1]="System"})(b||(b={}));var O;(function(e){e[e.Heard=0]="Heard",e[e.Missed=1]="Missed"})(O||(O={}));var F={Heard:e=>({item:e,kind:O.Heard}),Missed:()=>({kind:O.Missed})},H;(function(e){e[e.Saved=0]="Saved",e[e.Copied=1]="Copied"})(H||(H={}));var f=1,N=new Map,m=new Map,p=new Map,D=new Map,A=new Set,P=[],R=new Set,x,T=new Set,I=[],C=new Map;function g(e,t=a.Other){return{kind:t,message:e}}function Q(e){switch(e){case"NotFound":return a.NotFound;case"PermissionDenied":return a.PermissionDenied;case"AlreadyExists":return a.AlreadyExists;case"NotADirectory":return a.NotADirectory;case"IsADirectory":return a.IsADirectory;default:return a.Other}}function X(e=d.Term){switch(e){case d.Hup:return 1;case d.Int:return 2;case d.Term:return 15;case d.Kill:return 9;case d.Usr1:return 10;case d.Usr2:return 12}}function Z(e){let t=atob(e),r=new Uint8Array(t.length);for(let s=0;s<t.length;s++)r[s]=t.charCodeAt(s);return r}function $(e){let t=typeof e=="string"?new TextEncoder().encode(e):e,r="";for(let s=0;s<t.length;s++)r+=String.fromCharCode(t[s]);return btoa(r)}async function q(e){let t=e.getReader(),r=new TextDecoder,s="";for(;;){let{done:i,value:l}=await t.read();if(i)break;s+=r.decode(l,{stream:!0})}return s+=r.decode(),s}function n(e){let t=window.webkit?.messageHandlers?.bridge;if(!t){console.error("webbar: webkit bridge handler is not available");return}t.postMessage(JSON.stringify(e))}window.__swayWebbarReceive=e=>{switch(e.type){case"dbus_call_reply":{let t=N.get(e.id);if(!t)return;N.delete(e.id),e.ok?t(o({signature:e.signature??"",body:JSON.parse(e.body??"[]")})):t(u(g(e.error??"D-Bus call failed")));break}case"dbus_match_started":{let t=m.get(e.id);if(!t)return;if(!e.ok){m.delete(e.id),t.resolveStart(u(g(e.error??"D-Bus match failed")));return}let r=new ReadableStream({start(s){t.controller=s},cancel(){n({type:"dbus_unwatch",id:e.id})}});t.resolveStart(o({items:r,stop:()=>n({type:"dbus_unwatch",id:e.id}),ended:t.ended}));break}case"dbus_signal":{let t=m.get(e.id);if(!t?.controller)return;t.controller.enqueue(F.Heard({sender:e.sender,path:e.path,interface:e.interface,member:e.member,signature:e.signature,body:JSON.parse(e.body)}));break}case"dbus_match_ended":{let t=m.get(e.id);if(!t)return;m.delete(e.id);try{t.controller?.close()}catch{}t.resolveEnd(e.error?u(g(e.error)):o("stopped"));break}case"notifications":{P=e.items;for(let t of A)t(P);break}case"process_started":{let t=p.get(e.id);if(!t)return;if(!e.ok){p.delete(e.id),t.resolveStart(u(g(e.error??"Process spawn failed")));return}t.resolveStart(o({stdout:t.stdout,stderr:t.stderr,exited:t.exited,write:r=>n({type:"process_write",id:e.id,data_b64:$(r)}),closeStdin:()=>n({type:"process_close_stdin",id:e.id}),kill:r=>n({type:"process_kill",id:e.id,signal:X(r)})}));break}case"process_output":{let t=p.get(e.id);if(!t)return;let r=Z(e.data_b64);e.stream==="stdout"?t.stdoutController?.enqueue(r):e.stream==="stderr"&&t.stderrController?.enqueue(r);break}case"process_exited":{let t=p.get(e.id);if(!t)return;p.delete(e.id);try{t.stdoutController?.close()}catch{}try{t.stderrController?.close()}catch{}t.resolveExit(o({code:e.code??void 0,signal:e.signal??void 0}));break}case"file_reply":{let t=D.get(e.id);if(!t)return;D.delete(e.id),e.ok?t(o(e.data??{})):t(u(g(e.error??"File operation failed",Q(e.error_kind))));break}case"sway_state":{x={workspaces:e.workspaces,focused_title:e.focused_title,mode:e.mode};for(let t of R)t(x);break}case"tray":{I=e.items;for(let t of T)t(I);break}case"tray_menu_reply":{let t=C.get(e.id);if(!t)return;C.delete(e.id),e.ok?t.resolve(e.items):t.reject(new Error(e.error??"Failed to fetch tray menu"));break}}};var K={call:e=>new Promise(t=>{let r=f++;N.set(r,t),n({type:"dbus_call",id:r,bus:e.bus===b.System?"system":"session",destination:e.destination,path:e.path,interface:e.interface,member:e.member,signature:e.signature??"",body:JSON.stringify(e.body??[])})}),match:e=>new Promise(t=>{let r=f++,s,i=new Promise(l=>{s=l});m.set(r,{resolveStart:t,resolveEnd:s,ended:i}),n({type:"dbus_match",id:r,bus:e.bus===b.System?"system":"session",sender:e.sender??null,path:e.path??null,interface:e.interface??null,member:e.member??null})})},B={spawn:(e,t)=>new Promise(r=>{let s=f++,i,l=new Promise(y=>{i=y}),w,S,J=new ReadableStream({start(y){w=y}}),j=new ReadableStream({start(y){S=y}});p.set(s,{resolveStart:r,resolveExit:i,stdoutController:w,stderrController:S,stdout:J,stderr:j,exited:l}),n({type:"process_spawn",id:s,argv:[...e],cwd:t?.cwd??null,env:t?.env??{},stdin:t?.stdin??!1})}),run:async(e,t)=>(await B.spawn(e,t)).andThenAsync(async s=>{let[i,l,w]=await Promise.all([q(s.stdout),q(s.stderr),s.exited]);return w.map(S=>({...S,stdout:i,stderr:l}))})};function _(e,t){return new Promise(r=>{let s=f++;D.set(s,r),n({type:e,id:s,path:t})})}var ee={readText:e=>_("file_read_text",e),readDir:e=>_("file_read_dir",e),stat:e=>_("file_stat",e)},te={onState:e=>(R.add(e),x&&e(x),()=>R.delete(e)),command:e=>n({type:"sway_command",command:e})},re={onChange:e=>(T.add(e),e(I),()=>T.delete(e)),activate:(e,t)=>n({type:"tray_activate",bus:e,path:t}),getMenu:(e,t)=>new Promise((r,s)=>{let i=f++;C.set(i,{resolve:r,reject:s}),n({type:"tray_get_menu",id:i,bus:e,menu_path:t})}),menuEvent:(e,t,r)=>n({type:"tray_menu_event",bus:e,menu_path:t,item_id:r})},se={onChange:e=>(A.add(e),e(P),()=>A.delete(e)),dismiss:e=>n({type:"dismiss_notification",id:e}),clearAll:()=>n({type:"clear_notifications"})},ne={setInputRegion:e=>n({type:"set_input_region",rects:e.map(t=>({x:Math.round(t.x),y:Math.round(t.y),width:Math.round(t.width),height:Math.round(t.height)}))}),resetInputRegion:()=>n({type:"set_input_region",rects:[]})};Object.assign(window,{domicile:{dbus:K,processes:B,files:ee},sway:te,tray:re,notifications:se,webbar:ne});var W=!1,M=!1,oe=':popover-open, [role="dialog"]:not([hidden]):not([aria-hidden="true"]), [aria-modal="true"]:not([hidden]):not([aria-hidden="true"]), [data-webbar-overlay]:not([hidden])';function ie(){M=!1;let e=!1;try{e=document.querySelector(oe)!==null}catch{e=document.querySelector('[role="dialog"]:not([hidden]):not([aria-hidden="true"]), [aria-modal="true"]:not([hidden]):not([aria-hidden="true"]), [data-webbar-overlay]:not([hidden])')!==null}e!==W&&(W=e,n({type:"set_overlay",active:e}))}function v(){M||(M=!0,requestAnimationFrame(ie))}window.addEventListener("DOMContentLoaded",()=>{document.addEventListener("toggle",v,!0),document.body&&new MutationObserver(v).observe(document.body,{childList:!0,subtree:!0,attributes:!0,attributeFilter:["open","hidden","aria-hidden","role","aria-modal","data-webbar-overlay"]}),v()});})();
+"use strict";
+(() => {
+  // src/preload.ts
+  function createStore(initial) {
+    let current = initial;
+    const subscribeListeners = /* @__PURE__ */ new Set();
+    const changeListeners = /* @__PURE__ */ new Set();
+    return {
+      get: () => current,
+      subscribe: (listener) => {
+        subscribeListeners.add(listener);
+        return () => {
+          subscribeListeners.delete(listener);
+        };
+      },
+      onChange: (listener) => {
+        changeListeners.add(listener);
+        listener(current);
+        return () => {
+          changeListeners.delete(listener);
+        };
+      },
+      _update: (next) => {
+        current = next;
+        for (const listener of subscribeListeners) {
+          listener();
+        }
+        for (const listener of changeListeners) {
+          listener(current);
+        }
+      }
+    };
+  }
+  function decodeBase64Bytes(b64) {
+    const bin = atob(b64);
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) {
+      bytes[i] = bin.charCodeAt(i);
+    }
+    return bytes;
+  }
+  function createWebbarBridge(postMessage) {
+    let nextId = 1;
+    const actionPending = /* @__PURE__ */ new Map();
+    const dbusCallPending = /* @__PURE__ */ new Map();
+    const dbusWatches = /* @__PURE__ */ new Map();
+    const execPending = /* @__PURE__ */ new Map();
+    function send(payload) {
+      postMessage(JSON.stringify(payload));
+    }
+    function invokeAction(type, payload = {}) {
+      const id = nextId++;
+      return new Promise((resolve, reject) => {
+        actionPending.set(id, {
+          resolve: () => resolve(),
+          reject
+        });
+        send({ type, id, ...payload });
+      });
+    }
+    const swayStore = createStore({
+      workspaces: [],
+      focused_title: "",
+      mode: "default"
+    });
+    const trayStore = createStore([]);
+    const notificationsStore = createStore([]);
+    const audioStore = createStore({
+      available: false,
+      outputs: [],
+      inputs: []
+    });
+    const bluetoothStore = createStore({
+      available: false,
+      adapters: [],
+      devices: []
+    });
+    const networkStore = createStore({
+      available: false,
+      connectivity: "unknown",
+      link: { kind: "none" }
+    });
+    const backlightStore = createStore({
+      available: false,
+      brightness: null,
+      error: null
+    });
+    function receive2(event) {
+      switch (event.type) {
+        case "action_reply": {
+          const id = event.id;
+          const pending = actionPending.get(id);
+          if (!pending) return;
+          actionPending.delete(id);
+          if (event.ok) {
+            pending.resolve(void 0);
+          } else {
+            pending.reject(
+              new Error(event.error ?? "Action failed")
+            );
+          }
+          break;
+        }
+        case "tray_menu_reply": {
+          const id = event.id;
+          const pending = actionPending.get(id);
+          if (!pending) return;
+          actionPending.delete(id);
+          if (event.ok) {
+            pending.resolve(event.items);
+          } else {
+            pending.reject(
+              new Error(
+                event.error ?? "Failed to fetch tray menu"
+              )
+            );
+          }
+          break;
+        }
+        case "sway_state": {
+          swayStore._update({
+            workspaces: event.workspaces ?? [],
+            focused_title: event.focused_title ?? "",
+            mode: event.mode ?? "default"
+          });
+          break;
+        }
+        case "tray": {
+          trayStore._update(event.items ?? []);
+          break;
+        }
+        case "notifications": {
+          notificationsStore._update(event.items ?? []);
+          break;
+        }
+        case "audio_state": {
+          audioStore._update({
+            available: Boolean(event.available),
+            outputs: event.outputs ?? [],
+            inputs: event.inputs ?? []
+          });
+          break;
+        }
+        case "bluetooth_state": {
+          bluetoothStore._update({
+            available: Boolean(event.available),
+            adapters: event.adapters ?? [],
+            devices: event.devices ?? []
+          });
+          break;
+        }
+        case "network_state": {
+          networkStore._update({
+            available: Boolean(event.available),
+            connectivity: event.connectivity ?? "unknown",
+            link: event.link ?? { kind: "none" }
+          });
+          break;
+        }
+        case "backlight_state": {
+          backlightStore._update({
+            available: Boolean(event.available),
+            brightness: typeof event.brightness === "number" ? event.brightness : null,
+            error: typeof event.error === "string" ? event.error : null
+          });
+          break;
+        }
+        case "dbus_call_reply": {
+          const id = event.id;
+          const pending = dbusCallPending.get(id);
+          if (!pending) return;
+          dbusCallPending.delete(id);
+          if (event.ok) {
+            pending.resolve({
+              signature: event.signature ?? "",
+              body: JSON.parse(event.body ?? "[]")
+            });
+          } else {
+            pending.reject(
+              new Error(
+                event.error ?? "D-Bus call failed"
+              )
+            );
+          }
+          break;
+        }
+        case "dbus_match_started": {
+          const id = event.id;
+          const watch = dbusWatches.get(id);
+          if (!watch) return;
+          if (!event.ok) {
+            dbusWatches.delete(id);
+            watch.rejectStart?.(
+              new Error(
+                event.error ?? "D-Bus match failed"
+              )
+            );
+            return;
+          }
+          watch.resolveStart?.({
+            stop: () => {
+              dbusWatches.delete(id);
+              send({ type: "dbus_unwatch", id });
+            }
+          });
+          break;
+        }
+        case "dbus_signal": {
+          const watch = dbusWatches.get(event.id);
+          if (!watch) return;
+          watch.onSignal({
+            sender: event.sender,
+            path: event.path,
+            interface: event.interface,
+            member: event.member,
+            signature: event.signature,
+            body: JSON.parse(event.body ?? "[]")
+          });
+          break;
+        }
+        case "dbus_match_ended": {
+          dbusWatches.delete(event.id);
+          break;
+        }
+        case "process_started": {
+          const id = event.id;
+          const pending = execPending.get(id);
+          if (!pending) return;
+          if (!event.ok) {
+            execPending.delete(id);
+            pending.reject(
+              new Error(
+                event.error ?? "Process spawn failed"
+              )
+            );
+          }
+          break;
+        }
+        case "process_output": {
+          const pending = execPending.get(event.id);
+          if (!pending) return;
+          const chunk = decodeBase64Bytes(event.data_b64);
+          if (event.stream === "stdout") {
+            pending.stdout.push(chunk);
+          } else if (event.stream === "stderr") {
+            pending.stderr.push(chunk);
+          }
+          break;
+        }
+        case "process_exited": {
+          const id = event.id;
+          const pending = execPending.get(id);
+          if (!pending) return;
+          execPending.delete(id);
+          const decoder = new TextDecoder();
+          const joinText = (chunks) => chunks.map((c) => decoder.decode(c, { stream: true })).join("") + decoder.decode();
+          pending.resolve({
+            code: typeof event.code === "number" ? event.code : void 0,
+            signal: typeof event.signal === "number" ? event.signal : void 0,
+            stdout: joinText(pending.stdout),
+            stderr: joinText(pending.stderr)
+          });
+          break;
+        }
+      }
+    }
+    const api2 = {
+      sway: {
+        get: swayStore.get,
+        subscribe: swayStore.subscribe,
+        onChange: swayStore.onChange,
+        command: (command) => send({ type: "sway_command", command })
+      },
+      tray: {
+        get: trayStore.get,
+        subscribe: trayStore.subscribe,
+        onChange: trayStore.onChange,
+        activate: (bus, path) => send({ type: "tray_activate", bus, path }),
+        getMenu: (bus, menuPath) => {
+          const id = nextId++;
+          return new Promise((resolve, reject) => {
+            actionPending.set(id, {
+              resolve: (val) => resolve(val),
+              reject
+            });
+            send({ type: "tray_get_menu", id, bus, menu_path: menuPath });
+          });
+        },
+        menuEvent: (bus, menuPath, itemId) => send({
+          type: "tray_menu_event",
+          bus,
+          menu_path: menuPath,
+          item_id: itemId
+        })
+      },
+      notifications: {
+        get: notificationsStore.get,
+        subscribe: notificationsStore.subscribe,
+        onChange: notificationsStore.onChange,
+        dismiss: (id) => send({ type: "dismiss_notification", id }),
+        clearAll: () => send({ type: "clear_notifications" })
+      },
+      audio: {
+        get: audioStore.get,
+        subscribe: audioStore.subscribe,
+        onChange: audioStore.onChange,
+        setVolume: (deviceId, volume) => invokeAction("audio_set_volume", { device_id: deviceId, volume }),
+        setMuted: (deviceId, muted) => invokeAction("audio_set_muted", { device_id: deviceId, muted }),
+        setDefault: (deviceId) => invokeAction("audio_set_default", { device_id: deviceId })
+      },
+      bluetooth: {
+        get: bluetoothStore.get,
+        subscribe: bluetoothStore.subscribe,
+        onChange: bluetoothStore.onChange,
+        setPowered: (path, powered) => invokeAction("bluetooth_set_powered", { path, powered }),
+        connect: (path) => invokeAction("bluetooth_connect", { path }),
+        disconnect: (path) => invokeAction("bluetooth_disconnect", { path })
+      },
+      network: {
+        get: networkStore.get,
+        subscribe: networkStore.subscribe,
+        onChange: networkStore.onChange
+      },
+      backlight: {
+        get: backlightStore.get,
+        subscribe: backlightStore.subscribe,
+        onChange: backlightStore.onChange,
+        set: (percent) => invokeAction("backlight_set", {
+          percent: Math.max(0, Math.min(100, Math.round(percent)))
+        })
+      },
+      setInputRegion: (rects) => send({
+        type: "set_input_region",
+        rects: rects.map((r) => ({
+          x: Math.round(r.x),
+          y: Math.round(r.y),
+          width: Math.round(r.width),
+          height: Math.round(r.height)
+        }))
+      }),
+      resetInputRegion: () => send({ type: "set_input_region", rects: [] }),
+      dbus: {
+        call: (opts) => {
+          const id = nextId++;
+          return new Promise((resolve, reject) => {
+            dbusCallPending.set(id, { resolve, reject });
+            send({
+              type: "dbus_call",
+              id,
+              bus: opts.bus ?? "session",
+              destination: opts.destination,
+              path: opts.path,
+              interface: opts.interface,
+              member: opts.member,
+              signature: opts.signature ?? "",
+              body: JSON.stringify(opts.body ?? [])
+            });
+          });
+        },
+        watch: (opts, onSignal) => {
+          const id = nextId++;
+          return new Promise((resolve, reject) => {
+            dbusWatches.set(id, {
+              resolveStart: resolve,
+              rejectStart: reject,
+              onSignal
+            });
+            send({
+              type: "dbus_match",
+              id,
+              bus: opts.bus ?? "session",
+              sender: opts.sender ?? null,
+              path: opts.path ?? null,
+              interface: opts.interface ?? null,
+              member: opts.member ?? null
+            });
+          });
+        }
+      },
+      exec: (argv, opts) => {
+        const id = nextId++;
+        return new Promise((resolve, reject) => {
+          execPending.set(id, {
+            resolve,
+            reject,
+            stdout: [],
+            stderr: []
+          });
+          send({
+            type: "process_spawn",
+            id,
+            argv: [...argv],
+            cwd: opts?.cwd ?? null,
+            env: opts?.env ?? {},
+            stdin: false
+          });
+        });
+      }
+    };
+    return { api: api2, receive: receive2 };
+  }
+
+  // src/index.ts
+  var { api, receive } = createWebbarBridge((json) => {
+    const handler = window.webkit?.messageHandlers?.bridge;
+    if (!handler) {
+      console.error("webbar: webkit bridge handler is not available");
+      return;
+    }
+    handler.postMessage(json);
+  });
+  window.webbar = api;
+  window.__webbarReceive = receive;
+  var overlayActive = false;
+  var overlayScheduled = false;
+  var OVERLAY_SELECTOR = ':popover-open, [role="dialog"]:not([hidden]):not([aria-hidden="true"]), [aria-modal="true"]:not([hidden]):not([aria-hidden="true"]), [data-webbar-overlay]:not([hidden])';
+  function checkOverlay() {
+    overlayScheduled = false;
+    let active = false;
+    try {
+      active = document.querySelector(OVERLAY_SELECTOR) !== null;
+    } catch {
+      active = document.querySelector(
+        '[role="dialog"]:not([hidden]):not([aria-hidden="true"]), [aria-modal="true"]:not([hidden]):not([aria-hidden="true"]), [data-webbar-overlay]:not([hidden])'
+      ) !== null;
+    }
+    if (active !== overlayActive) {
+      overlayActive = active;
+      window.webkit?.messageHandlers?.bridge?.postMessage(
+        JSON.stringify({ type: "set_overlay", active })
+      );
+    }
+  }
+  function scheduleOverlayCheck() {
+    if (!overlayScheduled) {
+      overlayScheduled = true;
+      requestAnimationFrame(checkOverlay);
+    }
+  }
+  window.addEventListener("DOMContentLoaded", () => {
+    document.addEventListener("toggle", scheduleOverlayCheck, true);
+    if (document.body) {
+      new MutationObserver(scheduleOverlayCheck).observe(document.body, {
+        childList: true,
+        subtree: true,
+        attributes: true,
+        attributeFilter: [
+          "open",
+          "hidden",
+          "aria-hidden",
+          "role",
+          "aria-modal",
+          "data-webbar-overlay"
+        ]
+      });
+    }
+    scheduleOverlayCheck();
+  });
+})();

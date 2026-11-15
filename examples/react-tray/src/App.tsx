@@ -1,20 +1,11 @@
-import { useEffect, useState } from "react";
-import type { TrayItem } from "./global";
+import { useSyncExternalStore } from "react";
 import "./App.css";
 
-function useTray(): TrayItem[] {
-  const [items, setItems] = useState<TrayItem[]>([]);
-
-  useEffect(() => {
-    if (!window.tray) return;
-    return window.tray.onChange(setItems);
-  }, []);
-
-  return items;
-}
-
 export function App() {
-  const trayItems = useTray();
+  const trayItems = useSyncExternalStore(
+    window.webbar.tray.subscribe,
+    window.webbar.tray.get,
+  );
 
   return (
     <header className="bar">
@@ -24,16 +15,19 @@ export function App() {
         {trayItems.length === 0 ? (
           <span className="empty">No tray items</span>
         ) : (
-          trayItems.map((item) => (
-            <button
-              key={item.id}
-              className="tray-item"
-              title={item.title || item.icon_name || item.id}
-              onClick={() => window.tray?.activate(item.bus, item.path)}
-            >
-              {item.title || item.icon_name || item.bus}
-            </button>
-          ))
+          trayItems.map((item) => {
+            const key = item.id || `${item.bus}${item.path}`;
+            return (
+              <button
+                key={key}
+                className="tray-item"
+                title={item.title || item.icon_name || key}
+                onClick={() => window.webbar.tray.activate(item.bus, item.path)}
+              >
+                {item.title || item.icon_name || item.bus}
+              </button>
+            );
+          })
         )}
       </div>
     </header>

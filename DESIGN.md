@@ -1,49 +1,52 @@
 # `webbar` Design Doc
 
 ## Goal
-Let users build a Sway status bar in plain HTML, CSS, and TypeScript/React—without switching away from Sway as their Wayland compositor and without rewriting Linux D-Bus/Audio/Network integrations from scratch.
+Let users build a Sway status bar in plain HTML, CSS, and TypeScript/React—without switching away from Sway as their Wayland compositor and without fighting imperative D-Bus or CLI plumbing in frontend code.
 
 ## Architecture
 
 `webbar` splits responsibilities across three layers:
 
 ```
-┌────────────────────────────────────────────────────────────────────┐
-│  User Bar UI (web/ or ~/.config/webbar/)                      │
-│  HTML / CSS / TS using window.domicile, window.sway,               │
-│  window.tray, window.notifications, and @domicile-desktop/system-* │
-└─────────────────────────────────▲──────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────────┐
+│  User Bar UI (web/, examples/ags-bar/, or ~/.config/webbar/)         │
+│  HTML / CSS / TS / React using window.webbar.*                       │
+│  (sway, tray, notifications, audio, bluetooth, network, backlight)   │
+└─────────────────────────────────▲────────────────────────────────────┘
                                   │ injected at DocumentStart
-┌─────────────────────────────────┴──────────────────────────────────┐
-│  Runtime Preload (runtime/preload.ts -> embedded src/preload.js)   │
-│  Exposes Domicile-compatible dbus/processes/files + sway/tray/     │
-│  notifications over WebKitGTK UserContentManager                   │
-└─────────────────────────────────▲──────────────────────────────────┘
+┌─────────────────────────────────┴────────────────────────────────────┐
+│  Preload Bridge (preload/src/ -> src/preload.js + types/*.d.ts)      │
+│  Exposes reactive { get, subscribe, onChange } stores + Promise      │
+│  actions over WebKitGTK UserContentManager                           │
+└─────────────────────────────────▲────────────────────────────────────┘
                                   │ JSON over webkit.messageHandlers
-┌─────────────────────────────────┴──────────────────────────────────┐
-│  Rust Host (src/*.rs)                                              │
-│  gtk4-layer-shell (1 bar/monitor) + webkit6 WebView                │
-│  - dbus_json.rs / dbus_bridge.rs  (zbus D-Bus call & async match)  │
-│  - process_bridge.rs / file_bridge.rs (OS primitives)              │
-│  - sway_ipc.rs ($SWAYSOCK workspaces, title, mode)                 │
-│  - tray.rs (StatusNotifierWatcher) + notifications.rs              │
-└────────────────────────────────────────────────────────────────────┘
+┌─────────────────────────────────┴────────────────────────────────────┐
+│  Rust Host (src/*.rs) — 1 shared instance across all monitors        │
+│  gtk4-layer-shell (1 bar/monitor) + webkit6 WebView                  │
+│  - bridge.rs (protocol + SnapshotCache replay on LoadEvent::Finished)│
+│  - sway_ipc.rs ($SWAYSOCK workspaces, title, mode)                   │
+│  - tray.rs (StatusNotifierWatcher + DBusMenu) + notifications.rs     │
+│  - audio.rs (libpulse) + bluetooth.rs (BlueZ) + network.rs (NM)      │
+│  - backlight.rs (ddcutil D-Bus)                                      │
+│  - dbus_bridge.rs / process_bridge.rs (Promise-based escape hatches) │
+└──────────────────────────────────────────────────────────────────────┘
 ```
 
 ## Key Design Decisions
 
-1. **WebKitGTK `UserScript` injection instead of per-bar bridge code**
-   - WebKitGTK runs the web page in a sandboxed `WebKitWebProcess` separate from the GTK4 UI process.
-   - Instead of requiring every bar project to copy bridge code, `src/main.rs` injects `src/preload.js` at `UserScriptInjectionTime::Start` into every page.
-   - Any HTML/CSS/JS (including a plain `index.html` in `~/.config/webbar/` or a Vite+React app) immediately has `window.domicile`, `window.sway`, `window.tray`, and `window.notifications` available.
+1. **WebKitGTK `UserScript` injection with a TypeScript preload**
+   - WebKitGTK runs each bar in a sandboxed `WebKitWebProcess` separate from the GTK4 UI process.
+   - `preload/src/preload.ts` and `preload/src/index.ts` compile to `src/preload.js` (embedded at `UserScriptInjectionTime::Start`) and `types/{preload,index}.d.ts` (shared by all TS/React frontends).
+   - Every page immediately has `window.webbar` without per-bar bridge boilerplate.
 
-2. **Reusing `@domicile-desktop/system-*` instead of reimplementing Linux plumbing**
-   - In [`cprussin/domicile`](https://github.com/cprussin/domicile), subsystem logic (BlueZ Bluetooth, PipeWire/PulseAudio, NetworkManager) lives in TypeScript npm packages (`@domicile-desktop/system-*`), while Rust (`domicile-host`) provides generic `dbus`, `processes`, and `files` primitives.
-   - `webbar` copies `dbus_json.rs` and adapts `system.rs`/`tray.rs` from `domicile-host`, swapping Chromium Mojo IPC for WebKitGTK `UserContentManager` so those npm packages run unmodified.
+2. **System state aggregation in Rust, web-native stores in JS**
+   - Instead of pushing raw D-Bus signals or subprocesses into every monitor's `WebView`, Rust runs one shared watcher per subsystem (`audio`, `bluetooth`, `network`, `backlight`, `sway`, `tray`, `notifications`), deduplicates/debounces updates, and caches the latest snapshot in `SnapshotCache` for instant replay on page load or Vite HMR reload.
+   - Each store exposes `{ get(), subscribe(cb), onChange(cb) }`, working directly with React's `useSyncExternalStore(store.subscribe, store.get)` as well as vanilla TS listeners, while mutations return standard `Promise`s.
+   - `window.webbar.dbus` and `window.webbar.exec` remain available as Promise-based escape hatches for custom widgets.
 
 3. **Sway IPC in Rust (`src/sway_ipc.rs`)**
-   - Domicile is its own Wayland compositor and has no Sway client. `sway_ipc.rs` bridges that gap by subscribing to `$SWAYSOCK` (`workspace`, `window`, `mode`) and forwarding commands like workspace switches.
+   - `sway_ipc.rs` subscribes directly to `$SWAYSOCK` (`workspace`, `window`, `mode`) and forwards commands like workspace switches without spawning `swaymsg`.
 
 4. **Explicit UI source (`--dir` / `--url`) + Nix**
    - `webbar` takes either `--dir <path>` (served over a custom `webbar://app/...` URI scheme) or `--url <url>` (e.g., a Vite dev server for live reload).
-   - `flake.nix` provides both a reproducible `devShell` and `packages.default` (which also installs the sample `web/dist` into `$out/share/webbar`).
+   - `flake.nix` provides both a reproducible `devShell` and `packages.default` (which installs the sample `web/dist` into `$out/share/webbar`).

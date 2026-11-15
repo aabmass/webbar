@@ -1,0 +1,15 @@
+{
+  "name": "webbar-preload",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "esbuild src/index.ts --bundle --format=iife --outfile=../src/preload.js && tsc --emitDeclarationOnly",
+    "typecheck": "tsc --noEmit",
+    "test": "esbuild src/preload.ts --bundle --format=esm --outfile=dist/preload.mjs && node --test test/preload.test.mjs"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.0",
+    "typescript": "^5.7.0"
+  }
+}

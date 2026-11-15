@@ -1,16 +1,13 @@
-import { useCallback, useEffect, useRef, useState } from "react";
-import {
-  type Bluetooth as BluetoothState,
-  type Device,
-  connect,
-  disconnect,
-  watchBluetooth,
-} from "@domicile-desktop/system-bluetooth/bluetooth";
+import { useCallback, useRef, useState, useSyncExternalStore } from "react";
+import type { BluetoothDevice } from "../global";
 import { BluetoothIcon } from "./Icons";
 import { Popover } from "./Popover";
 
 export function Bluetooth() {
-  const [bt, setBt] = useState<BluetoothState | null>(null);
+  const bt = useSyncExternalStore(
+    window.webbar.bluetooth.subscribe,
+    window.webbar.bluetooth.get,
+  );
   const [error, setError] = useState<string | null>(null);
   const [open, setOpen] = useState(false);
   const btnRef = useRef<HTMLButtonElement>(null);
@@ -19,34 +16,20 @@ export function Bluetooth() {
     () => new Set(),
   );
 
-  useEffect(() => {
-    const dbus = window.domicile?.dbus;
-    if (!dbus) return;
-    return watchBluetooth({ dbus }, (result) => {
-      result.match({
-        Ok: (next) => {
-          setBt(next);
-          setError(null);
-        },
-        Err: (err) => setError(err.message),
-      });
-    });
-  }, []);
-
-  const pairedDevices = bt?.devices.filter((d) => d.paired) ?? [];
+  const pairedDevices = bt.devices.filter((d) => d.paired);
   const connectedCount = pairedDevices.filter((d) => d.connected).length;
 
-  async function toggleDevice(device: Device) {
-    const dbus = window.domicile?.dbus;
-    if (!dbus) return;
-
+  async function toggleDevice(device: BluetoothDevice) {
     setConnectingPaths((prev) => new Set(prev).add(device.path));
+    setError(null);
     try {
       if (device.connected) {
-        await disconnect({ dbus }, device.path);
+        await window.webbar.bluetooth.disconnect(device.path);
       } else {
-        await connect({ dbus }, device.path);
+        await window.webbar.bluetooth.connect(device.path);
       }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
     } finally {
       setConnectingPaths((prev) => {
         const next = new Set(prev);
@@ -61,13 +44,15 @@ export function Bluetooth() {
       <button
         ref={btnRef}
         type="button"
-        className={`bar-btn icon-btn${connectedCount > 0 ? " is-active" : ""}${error ? " is-dimmed" : ""}${open ? " is-open" : ""}`}
+        className={`bar-btn icon-btn${connectedCount > 0 ? " is-active" : ""}${error || !bt.available ? " is-dimmed" : ""}${open ? " is-open" : ""}`}
         title={
           error
             ? `Bluetooth error: ${error}`
-            : connectedCount > 0
-              ? `Bluetooth: ${connectedCount} connected`
-              : "Bluetooth"
+            : !bt.available
+              ? "Bluetooth unavailable"
+              : connectedCount > 0
+                ? `Bluetooth: ${connectedCount} connected`
+                : "Bluetooth"
         }
         onClick={() => setOpen((prev) => !prev)}
       >
@@ -95,7 +80,7 @@ export function Bluetooth() {
                   onClick={() => void toggleDevice(device)}
                 >
                   {device.name}
-                  {device.battery !== undefined ? ` (${device.battery}%)` : ""}
+                  {device.battery != null ? ` (${device.battery}%)` : ""}
                 </button>
               );
             })

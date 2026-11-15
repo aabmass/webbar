@@ -2,7 +2,7 @@
 
 Build your Sway status bar with plain HTML, CSS, and TypeScript/React—without switching away from Sway or reinventing Linux D-Bus plumbing.
 
-`webbar` is a Rust Wayland host (`gtk4` + `gtk4-layer-shell` + `webkit6`) that docks a transparent WebView at the top of each monitor and automatically injects `window.domicile`, `window.sway`, `window.tray`, and `window.notifications` into every page.
+`webbar` is a Rust Wayland host (`gtk4` + `gtk4-layer-shell` + `webkit6`) that docks a transparent WebView at the top of each monitor and automatically injects `window.webbar` into every page with reactive stores (`sway`, `tray`, `notifications`, `audio`, `bluetooth`, `network`, `backlight`) plus Promise-based `dbus` and `exec` escape hatches.
 
 ## Usage
 
@@ -32,7 +32,7 @@ nix develop
 
 ## Running without Nix
 
-Requires `rustc`/`cargo`, `node`/`npm`, and system dev libraries for `gtk4`, `gtk4-layer-shell-0`, and `webkitgtk-6.0`.
+Requires `rustc`/`cargo`, `node`/`npm`, and system dev libraries for `gtk4`, `gtk4-layer-shell-0`, `webkitgtk-6.0`, and `libpulse`.
 
 ```bash
 # 1. Build the default bar UI (or examples/react-tray)
@@ -57,11 +57,8 @@ cargo run -- --url http://localhost:5173 --height 86
 
 > **Note:** Only one daemon can own `org.freedesktop.Notifications` or `org.kde.StatusNotifierWatcher` on your session D-Bus at a time. If another bar or notification daemon (`waybar`, `mako`, `swaync`) is already running, `webbar` logs a warning and still runs, but notifications/tray items stay with the existing daemon until it is stopped.
 
-## Credits
+## Architecture & Credits
 
-`webbar` builds directly on [domicile](https://github.com/cprussin/domicile) by Connor Prussin (MIT License):
-
-- The `window.domicile` bridge (`dbus`, `processes`, `files`) is designed to be compatible with `@domicile-desktop/sdk` and `@domicile-desktop/system-*` packages.
-- [`src/dbus_json.rs`](src/dbus_json.rs) is copied from `cprussin/domicile` (`packages/domicile-host/src/dbus_json.rs`).
-- [`src/dbus_bridge.rs`](src/dbus_bridge.rs), [`src/file_bridge.rs`](src/file_bridge.rs), and [`src/process_bridge.rs`](src/process_bridge.rs) are adapted from `cprussin/domicile` (`packages/domicile-host/src/system.rs`).
-- [`src/tray.rs`](src/tray.rs) is adapted from `cprussin/domicile` (`packages/domicile-host/src/tray.rs`).
+- `preload/src/preload.ts` and `preload/src/index.ts` compile to `src/preload.js` and `types/{preload,index}.d.ts`, providing `{ get, subscribe, onChange }` stores compatible with React's `useSyncExternalStore` and vanilla TypeScript.
+- System state (`sway`, `tray`, `notifications`, `audio`, `bluetooth`, `network`, `backlight`) is aggregated once in the Rust host and shared across all monitor WebViews.
+- [`src/dbus_json.rs`](src/dbus_json.rs) and [`src/tray.rs`](src/tray.rs) were originally inspired by [domicile](https://github.com/cprussin/domicile) (MIT License).

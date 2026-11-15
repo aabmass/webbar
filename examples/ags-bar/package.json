@@ -9,10 +9,6 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@cprussin/option-result": "^2.0.1",
-    "@domicile-desktop/sdk": "^2.2.0",
-    "@domicile-desktop/system-audio": "^1.1.2",
-    "@domicile-desktop/system-bluetooth": "^1.1.2",
     "react": "^19.0.0",
     "react-dom": "^19.0.0"
   },

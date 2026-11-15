@@ -13,7 +13,7 @@ use std::thread;
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
 
-use crate::dbus_bridge::{BridgeEvent, SendEvent};
+use crate::bridge::{BridgeEvent, SendEvent};
 
 struct ProcessHandle {
     pid: u32,

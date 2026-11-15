@@ -10,7 +10,7 @@ use zbus::blocking::connection::Builder as ConnectionBuilder;
 use zbus::interface;
 use zbus::zvariant::OwnedValue;
 
-use crate::dbus_bridge::{BridgeEvent, SendEvent};
+use crate::bridge::{BridgeEvent, SendEvent};
 
 const MAX_HISTORY: usize = 50;
 

@@ -1,24 +1,14 @@
-import type { Audio, AudioDevice } from "@domicile-desktop/system-audio/audio";
-import { soundServer } from "@domicile-desktop/system-audio/sound-server";
-import {
-  type Bluetooth,
-  setPowered,
-  watchBluetooth,
-} from "@domicile-desktop/system-bluetooth/bluetooth";
-import {
-  Connectivity,
-  LinkKind,
-  type Network,
-  watchNetwork,
-} from "@domicile-desktop/system-network/network";
 import type {
+  AudioDevice,
+  AudioState,
+  BluetoothState,
+  NetworkState,
   NotificationItem,
   SwayState,
   TrayItem,
 } from "./global";
 
-const { domicile, sway, tray, notifications } = window;
-const { dbus, processes } = domicile;
+const { sway, tray, notifications, audio, bluetooth, network } = window.webbar;
 
 const targetOutput = new URLSearchParams(window.location.search).get("output");
 
@@ -33,9 +23,8 @@ const btButton = document.getElementById("bt-status") as HTMLButtonElement;
 const notifEl = document.getElementById("notif-status") as HTMLButtonElement;
 const notifClearBtn = document.getElementById("notif-clear") as HTMLButtonElement;
 
-const audio = soundServer({ processes });
 let defaultOutput: AudioDevice | undefined;
-let latestBluetooth: Bluetooth | undefined;
+let latestBluetooth: BluetoothState | undefined;
 let currentNotifications: NotificationItem[] = [];
 
 function updateClock(): void {
@@ -95,9 +84,9 @@ function renderTray(items: TrayItem[]): void {
   );
 }
 
-function renderAudio(state: Audio): void {
+function renderAudio(state: AudioState): void {
   defaultOutput = state.outputs.find((o) => o.default) ?? state.outputs[0];
-  if (!defaultOutput) {
+  if (!state.available || !defaultOutput) {
     audioButton.textContent = "Vol: --";
     audioButton.dataset.state = "unavailable";
     audioButton.title = "No audio output";
@@ -111,36 +100,43 @@ function renderAudio(state: Audio): void {
   audioButton.title = `${defaultOutput.description} (click to mute, scroll to adjust)`;
 }
 
-function renderNetwork(net: Network): void {
+function renderNetwork(net: NetworkState): void {
+  if (!net.available) {
+    networkEl.textContent = "Net: --";
+    networkEl.dataset.state = "unavailable";
+    networkEl.title = "NetworkManager unavailable";
+    return;
+  }
+
   let text = "Net: Offline";
   let state = "offline";
 
   switch (net.link.kind) {
-    case LinkKind.Wifi: {
+    case "wifi": {
       const pct = Math.round(net.link.strength * 100);
       text = `Wi-Fi: ${net.link.ssid} (${pct}%)`;
       state = "connected";
       break;
     }
-    case LinkKind.Wired:
+    case "wired":
       text = `Eth: ${net.link.name}`;
       state = "connected";
       break;
-    case LinkKind.Other:
+    case "other":
       text = `Net: ${net.link.name}`;
       state = "connected";
       break;
-    case LinkKind.None:
+    case "none":
       text = "Net: Offline";
       state = "offline";
       break;
   }
 
-  if (net.link.kind !== LinkKind.None) {
-    if (net.connectivity === Connectivity.Portal) {
+  if (net.link.kind !== "none") {
+    if (net.connectivity === "portal") {
       text += " [Portal]";
       state = "portal";
-    } else if (net.connectivity === Connectivity.Limited) {
+    } else if (net.connectivity === "limited") {
       text += " [Limited]";
       state = "limited";
     }
@@ -151,8 +147,13 @@ function renderNetwork(net: Network): void {
   networkEl.title = text;
 }
 
-function renderBluetooth(bt: Bluetooth): void {
+function renderBluetooth(bt: BluetoothState): void {
   latestBluetooth = bt;
+  if (!bt.available) {
+    btButton.textContent = "BT: --";
+    btButton.dataset.state = "unavailable";
+    return;
+  }
   const adapter = bt.adapters[0];
   if (!adapter) {
     btButton.textContent = "BT: No adapter";
@@ -171,7 +172,7 @@ function renderBluetooth(bt: Bluetooth): void {
     btButton.textContent = "BT: On";
   } else {
     const names = connected.map((d) =>
-      d.battery !== undefined ? `${d.name} (${d.battery}%)` : d.name,
+      d.battery != null ? `${d.name} (${d.battery}%)` : d.name,
     );
     btButton.textContent = `BT: ${names.join(", ")}`;
   }
@@ -210,7 +211,7 @@ audioButton.addEventListener("wheel", (event) => {
 btButton.addEventListener("click", () => {
   const adapter = latestBluetooth?.adapters[0];
   if (!adapter) return;
-  void setPowered({ dbus }, adapter.path, !adapter.powered);
+  void bluetooth.setPowered(adapter.path, !adapter.powered);
 });
 
 notifEl.addEventListener("click", () => {
@@ -224,30 +225,11 @@ notifClearBtn.addEventListener("click", () => {
   notifications.clearAll();
 });
 
-sway.onState(renderSway);
+sway.onChange(renderSway);
 tray.onChange(renderTray);
-audio.watch(renderAudio);
-
-watchNetwork({ dbus }, (result) => {
-  result.match({
-    Ok: (net) => renderNetwork(net),
-    Err: (err) => {
-      networkEl.textContent = `Net: ${err.message}`;
-      networkEl.dataset.state = "error";
-    },
-  });
-});
-
-watchBluetooth({ dbus }, (result) => {
-  result.match({
-    Ok: (bt) => renderBluetooth(bt),
-    Err: (err) => {
-      btButton.textContent = `BT: ${err.message}`;
-      btButton.dataset.state = "error";
-    },
-  });
-});
-
+audio.onChange(renderAudio);
+network.onChange(renderNetwork);
+bluetooth.onChange(renderBluetooth);
 notifications.onChange((items) => {
   currentNotifications = items;
   renderNotifications(items);

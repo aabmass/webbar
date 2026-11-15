@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useRef, useState, useSyncExternalStore } from "react";
 import type { TrayItem, TrayMenuItem } from "../global";
 import { Popover } from "./Popover";
 
@@ -77,11 +77,11 @@ function TrayButton({ item }: { item: TrayItem }) {
   const close = useCallback(() => setOpen(false), []);
 
   const label = item.title || item.icon_name || item.bus;
-  const hasMenu = Boolean(item.menu_path && window.tray?.getMenu);
+  const hasMenu = Boolean(item.menu_path);
 
   async function handleClick() {
-    if (!hasMenu || !item.menu_path || !window.tray?.getMenu) {
-      window.tray?.activate(item.bus, item.path);
+    if (!hasMenu || !item.menu_path) {
+      window.webbar.tray.activate(item.bus, item.path);
       return;
     }
 
@@ -91,13 +91,13 @@ function TrayButton({ item }: { item: TrayItem }) {
     }
 
     try {
-      const items = await window.tray.getMenu(item.bus, item.menu_path);
+      const items = await window.webbar.tray.getMenu(item.bus, item.menu_path);
       setMenuItems(items);
       setOpen(true);
     } catch {
       setMenuItems([]);
       setOpen(false);
-      window.tray?.activate(item.bus, item.path);
+      window.webbar.tray.activate(item.bus, item.path);
     }
   }
 
@@ -111,7 +111,7 @@ function TrayButton({ item }: { item: TrayItem }) {
         onClick={() => void handleClick()}
         onContextMenu={(e) => {
           e.preventDefault();
-          window.tray?.activate(item.bus, item.path);
+          window.webbar.tray.activate(item.bus, item.path);
         }}
       >
         {item.icon_url ? (
@@ -128,7 +128,7 @@ function TrayButton({ item }: { item: TrayItem }) {
               items={menuItems}
               onSelect={(itemId) => {
                 if (item.menu_path) {
-                  window.tray?.menuEvent?.(item.bus, item.menu_path, itemId);
+                  window.webbar.tray.menuEvent(item.bus, item.menu_path, itemId);
                 }
                 close();
               }}
@@ -141,12 +141,10 @@ function TrayButton({ item }: { item: TrayItem }) {
 }
 
 export function Tray() {
-  const [items, setItems] = useState<TrayItem[]>([]);
-
-  useEffect(() => {
-    if (!window.tray) return;
-    return window.tray.onChange(setItems);
-  }, []);
+  const items = useSyncExternalStore(
+    window.webbar.tray.subscribe,
+    window.webbar.tray.get,
+  );
 
   if (items.length === 0) {
     return null;
