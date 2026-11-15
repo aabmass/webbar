@@ -10,16 +10,54 @@
     let
       systems = [ "x86_64-linux" "aarch64-linux" ];
       forAllSystems = f: nixpkgs.lib.genAttrs systems (system: f nixpkgs.legacyPackages.${system});
-    in
-    {
-      packages = forAllSystems (pkgs:
+      mkSystemOutputs = pkgs:
         let
+          preloadPkg = pkgs.buildNpmPackage {
+            pname = "webbar-preload";
+            version = "0.1.0";
+            src = ./preload;
+
+            npmDepsHash = "sha256-oOTyHTzkOQl8TIzdx6o1QavKqTwWc0JsEG98jsXDiDI=";
+
+            preBuild = ''
+              mkdir -p ../src ../types
+            '';
+
+            doCheck = true;
+            checkPhase = ''
+              runHook preCheck
+              npm run typecheck
+              npm test
+              runHook postCheck
+            '';
+
+            installPhase = ''
+              runHook preInstall
+              mkdir -p $out/src $out/types
+              cp ../src/preload.js $out/src/
+              cp -r ../types/* $out/types/
+              runHook postInstall
+            '';
+          };
+
           webUi = pkgs.buildNpmPackage {
             pname = "webbar-ui";
             version = "0.1.0";
             src = ./web;
 
-            npmDepsHash = "sha256-VKOg+lKp/NDpD3B4fxS1ORxsbQpqNodb1FtBU7tjkmM=";
+            npmDepsHash = "sha256-gEUedwYGL5Ps6sIqa+CZpLKIr3XC7FuQ3MiycIpl6QE=";
+
+            preBuild = ''
+              mkdir -p ../types
+              cp -r ${./types}/* ../types/
+            '';
+
+            doCheck = true;
+            checkPhase = ''
+              runHook preCheck
+              npm run typecheck
+              runHook postCheck
+            '';
 
             installPhase = ''
               runHook preInstall
@@ -32,9 +70,58 @@
           agsBarUi = pkgs.buildNpmPackage {
             pname = "webbar-ags-bar";
             version = "0.1.0";
-            src = ./examples/ags-bar;
+            src = pkgs.lib.fileset.toSource {
+              root = ./.;
+              fileset = pkgs.lib.fileset.unions [
+                ./examples/ags-bar
+                ./types
+              ];
+            };
+            sourceRoot = "source/examples/ags-bar";
 
-            npmDepsHash = "sha256-ECu2RknM6+YVzy2geTTkWFQ2VzNIVv4ZSmkR3hLhhUg=";
+            npmDeps = pkgs.fetchNpmDeps {
+              src = ./examples/ags-bar;
+              hash = "sha256-/uT+VOYzCz6VHu5o2Dvl+48gzjrwscME8Dcq3qIjTrU=";
+            };
+
+            doCheck = true;
+            checkPhase = ''
+              runHook preCheck
+              npm run typecheck
+              runHook postCheck
+            '';
+
+            installPhase = ''
+              runHook preInstall
+              mkdir -p $out
+              cp -r dist/* $out/
+              runHook postInstall
+            '';
+          };
+
+          reactTrayUi = pkgs.buildNpmPackage {
+            pname = "webbar-react-tray";
+            version = "0.1.0";
+            src = pkgs.lib.fileset.toSource {
+              root = ./.;
+              fileset = pkgs.lib.fileset.unions [
+                ./examples/react-tray
+                ./types
+              ];
+            };
+            sourceRoot = "source/examples/react-tray";
+
+            npmDeps = pkgs.fetchNpmDeps {
+              src = ./examples/react-tray;
+              hash = "sha256-n9YrqcbW9MxJZJAGPJn1B3AT1XVGqBfLTbG1uY8FVgg=";
+            };
+
+            doCheck = true;
+            checkPhase = ''
+              runHook preCheck
+              npm run typecheck
+              runHook postCheck
+            '';
 
             installPhase = ''
               runHook preInstall
@@ -95,12 +182,32 @@
           });
         in
         {
-          default = webbarPkg;
-          ags-bar-ui = agsBarUi;
-          ags-bar = pkgs.writeShellScriptBin "webbar-ags-bar" ''
-            exec ${webbarPkg}/bin/webbar --dir ${agsBarUi} --height 86 "$@"
-          '';
-        });
+          packages = {
+            default = webbarPkg;
+            ags-bar-ui = agsBarUi;
+            ags-bar = pkgs.writeShellScriptBin "webbar-ags-bar" ''
+              exec ${webbarPkg}/bin/webbar --dir ${agsBarUi} --height 86 "$@"
+            '';
+          };
+
+          checks = {
+            rust-test = craneLib.cargoTest (commonArgs // {
+              inherit cargoArtifacts;
+            });
+            rust-clippy = craneLib.cargoClippy (commonArgs // {
+              inherit cargoArtifacts;
+              cargoClippyExtraArgs = "--all-targets";
+            });
+            preload-test = preloadPkg;
+            web-ui = webUi;
+            ags-bar-ui = agsBarUi;
+            react-tray-ui = reactTrayUi;
+          };
+        };
+    in
+    {
+      packages = forAllSystems (pkgs: (mkSystemOutputs pkgs).packages);
+      checks = forAllSystems (pkgs: (mkSystemOutputs pkgs).checks);
 
       devShells = forAllSystems (pkgs: {
         default = pkgs.mkShell {

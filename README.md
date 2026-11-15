@@ -57,6 +57,30 @@ cargo run -- --url http://localhost:5173 --height 86
 
 > **Note:** Only one daemon can own `org.freedesktop.Notifications` or `org.kde.StatusNotifierWatcher` on your session D-Bus at a time. If another bar or notification daemon (`waybar`, `mako`, `swaync`) is already running, `webbar` logs a warning and still runs, but notifications/tray items stay with the existing daemon until it is stopped.
 
+## Testing & Checks
+
+Run all Rust, preload, and frontend checks reproducibly with Nix:
+
+```bash
+nix flake check
+```
+
+Or run individual suites locally (or inside `nix develop`):
+
+```bash
+# Rust unit tests and lint
+cargo test
+cargo clippy --all-targets
+
+# Preload bridge build, typecheck, and contract tests
+cd preload && npm install && npm run build && npm run typecheck && npm test
+
+# Frontend typecheck and production builds
+(cd web && npm run typecheck && npm run build)
+(cd examples/ags-bar && npm run typecheck && npm run build)
+(cd examples/react-tray && npm run typecheck && npm run build)
+```
+
 ## Architecture & Credits
 
 - `preload/src/preload.ts` and `preload/src/index.ts` compile to `src/preload.js` and `types/{preload,index}.d.ts`, providing `{ get, subscribe, onChange }` stores compatible with React's `useSyncExternalStore` and vanilla TypeScript.
