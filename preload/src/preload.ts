@@ -125,6 +125,65 @@ export type WebbarApi = {
   exec: (argv: string[], opts?: ExecOptions) => Promise<ExecResult>;
 };
 
+function reconcile<T>(prev: T, next: T): T {
+  if (Object.is(prev, next)) {
+    return prev;
+  }
+  if (
+    prev === null ||
+    next === null ||
+    typeof prev !== "object" ||
+    typeof next !== "object"
+  ) {
+    return next;
+  }
+
+  if (Array.isArray(prev) && Array.isArray(next)) {
+    let changed = prev.length !== next.length;
+    const result: unknown[] = new Array(next.length);
+    for (let i = 0; i < next.length; i++) {
+      const nextItem: unknown = next[i];
+      if (i < prev.length) {
+        const reconciledItem = reconcile<unknown>(prev[i], nextItem);
+        result[i] = reconciledItem;
+        if (!Object.is(reconciledItem, prev[i])) {
+          changed = true;
+        }
+      } else {
+        result[i] = nextItem;
+        changed = true;
+      }
+    }
+    return changed ? (result as T) : prev;
+  }
+
+  if (Array.isArray(prev) || Array.isArray(next)) {
+    return next;
+  }
+
+  const prevObj = prev as Record<string, unknown>;
+  const nextObj = next as Record<string, unknown>;
+  const nextKeys = Object.keys(nextObj);
+  let changed = Object.keys(prevObj).length !== nextKeys.length;
+  const result: Record<string, unknown> = {};
+
+  for (const key of nextKeys) {
+    const nextVal = nextObj[key];
+    if (Object.prototype.hasOwnProperty.call(prevObj, key)) {
+      const reconciledVal = reconcile<unknown>(prevObj[key], nextVal);
+      result[key] = reconciledVal;
+      if (!Object.is(reconciledVal, prevObj[key])) {
+        changed = true;
+      }
+    } else {
+      result[key] = nextVal;
+      changed = true;
+    }
+  }
+
+  return changed ? (result as T) : prev;
+}
+
 export function createStore<T>(initial: T): InternalStore<T> {
   let current = initial;
   const subscribeListeners = new Set<() => void>();
@@ -146,9 +205,17 @@ export function createStore<T>(initial: T): InternalStore<T> {
       };
     },
     _update: (next) => {
-      current = next;
-      for (const listener of subscribeListeners) listener();
-      for (const listener of changeListeners) listener(current);
+      const reconciled = reconcile(current, next);
+      if (Object.is(reconciled, current)) {
+        return;
+      }
+      current = reconciled;
+      for (const listener of subscribeListeners) {
+        listener();
+      }
+      for (const listener of changeListeners) {
+        listener(current);
+      }
     },
   };
 }

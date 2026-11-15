@@ -371,3 +371,62 @@ test("AbortSignal cancels exec and dbus.watch, and output + notifications.invoke
   await assert.rejects(watchP, (err) => err.name === "AbortError");
   assert.deepEqual(sent[4], { type: "dbus_unwatch", id: watchId });
 });
+
+test("stores preserve unchanged slice references and skip identical updates", () => {
+  const { api, receive } = createWebbarBridge(() => {});
+
+  const makeWorkspace = (overrides = {}) => ({
+    id: 1,
+    num: 1,
+    name: "1",
+    output: "DP-1",
+    focused: true,
+    visible: true,
+    urgent: false,
+    ...overrides,
+  });
+
+  receive({
+    type: "sway_state",
+    workspaces: [makeWorkspace()],
+    focused_title: "Alacritty",
+    mode: "default",
+  });
+
+  const firstSnapshot = api.sway.get();
+  const firstWorkspaces = firstSnapshot.workspaces;
+
+  let subCalls = 0;
+  let changeCalls = 0;
+  api.sway.subscribe(() => {
+    subCalls += 1;
+  });
+  api.sway.onChange(() => {
+    changeCalls += 1;
+  });
+  // onChange fires once synchronously on registration
+  assert.equal(changeCalls, 1);
+
+  // Identical snapshot must not notify listeners or replace snapshot reference
+  receive({
+    type: "sway_state",
+    workspaces: [makeWorkspace()],
+    focused_title: "Alacritty",
+    mode: "default",
+  });
+  assert.equal(subCalls, 0);
+  assert.equal(changeCalls, 1);
+  assert.equal(Object.is(api.sway.get(), firstSnapshot), true);
+
+  // Changing only focused_title must preserve workspaces array reference
+  receive({
+    type: "sway_state",
+    workspaces: [makeWorkspace()],
+    focused_title: "Firefox",
+    mode: "default",
+  });
+  assert.equal(subCalls, 1);
+  assert.equal(changeCalls, 2);
+  assert.equal(api.sway.get().focused_title, "Firefox");
+  assert.equal(Object.is(api.sway.get().workspaces, firstWorkspaces), true);
+});
