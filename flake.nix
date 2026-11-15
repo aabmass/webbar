@@ -49,7 +49,7 @@
 
             preBuild = ''
               mkdir -p ../types
-              cp -r ${./types}/* ../types/
+              cp -r ${preloadPkg}/types/* ../types/
             '';
 
             doCheck = true;
@@ -74,7 +74,6 @@
               root = ./.;
               fileset = pkgs.lib.fileset.unions [
                 ./examples/ags-bar
-                ./types
               ];
             };
             sourceRoot = "source/examples/ags-bar";
@@ -83,6 +82,12 @@
               src = ./examples/ags-bar;
               hash = "sha256-/uT+VOYzCz6VHu5o2Dvl+48gzjrwscME8Dcq3qIjTrU=";
             };
+
+            postUnpack = ''
+              chmod u+w source
+              mkdir -p source/types
+              cp -r ${preloadPkg}/types/* source/types/
+            '';
 
             doCheck = true;
             checkPhase = ''
@@ -106,7 +111,6 @@
               root = ./.;
               fileset = pkgs.lib.fileset.unions [
                 ./examples/react-tray
-                ./types
               ];
             };
             sourceRoot = "source/examples/react-tray";
@@ -115,6 +119,12 @@
               src = ./examples/react-tray;
               hash = "sha256-n9YrqcbW9MxJZJAGPJn1B3AT1XVGqBfLTbG1uY8FVgg=";
             };
+
+            postUnpack = ''
+              chmod u+w source
+              mkdir -p source/types
+              cp -r ${preloadPkg}/types/* source/types/
+            '';
 
             doCheck = true;
             checkPhase = ''
@@ -167,6 +177,10 @@
 
           webbarPkg = craneLib.buildPackage (commonArgs // {
             inherit cargoArtifacts;
+
+            preBuild = ''
+              cp ${preloadPkg}/src/preload.js src/preload.js
+            '';
 
             postInstall = ''
               mkdir -p $out/share/webbar

@@ -45,11 +45,19 @@ export type TrayMenuItem = {
     toggle_state: number;
     children: TrayMenuItem[];
 };
+export type NotificationUrgency = "low" | "normal" | "critical";
+export type NotificationAction = {
+    key: string;
+    label: string;
+};
 export type NotificationItem = {
     id: number;
     app_name: string;
+    icon: string;
     summary: string;
     body: string;
+    urgency: NotificationUrgency;
+    actions: NotificationAction[];
 };
 export type AudioDevice = {
     id: number;
@@ -122,6 +130,7 @@ export type DbusWatchOptions = {
     path?: string;
     interface?: string;
     member?: string;
+    signal?: AbortSignal;
 };
 export type DbusSignalEvent = {
     sender: string;
@@ -134,6 +143,7 @@ export type DbusSignalEvent = {
 export type ExecOptions = {
     cwd?: string;
     env?: Record<string, string>;
+    signal?: AbortSignal;
 };
 export type ExecResult = {
     code?: number;
@@ -142,6 +152,7 @@ export type ExecResult = {
     stderr: string;
 };
 export type WebbarApi = {
+    readonly output: string;
     sway: Store<SwayState> & {
         command: (cmd: string) => void;
     };
@@ -152,6 +163,7 @@ export type WebbarApi = {
     };
     notifications: Store<NotificationItem[]> & {
         dismiss: (id: number) => void;
+        invokeAction: (id: number, actionKey: string) => void;
         clearAll: () => void;
     };
     audio: Store<AudioState> & {
@@ -182,7 +194,7 @@ export type WebbarApi = {
     exec: (argv: string[], opts?: ExecOptions) => Promise<ExecResult>;
 };
 export declare function createStore<T>(initial: T): InternalStore<T>;
-export declare function createWebbarBridge(postMessage: (json: string) => void): {
+export declare function createWebbarBridge(postMessage: (json: string) => void, output?: string): {
     api: WebbarApi;
     receive: (event: Record<string, unknown>) => void;
 };

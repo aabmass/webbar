@@ -52,11 +52,21 @@ export type TrayMenuItem = {
   children: TrayMenuItem[];
 };
 
+export type NotificationUrgency = "low" | "normal" | "critical";
+
+export type NotificationAction = {
+  key: string;
+  label: string;
+};
+
 export type NotificationItem = {
   id: number;
   app_name: string;
+  icon: string;
   summary: string;
   body: string;
+  urgency: NotificationUrgency;
+  actions: NotificationAction[];
 };
 
 export type AudioDevice = {
@@ -131,6 +141,7 @@ export type DbusWatchOptions = {
   path?: string;
   interface?: string;
   member?: string;
+  signal?: AbortSignal;
 };
 
 export type DbusSignalEvent = {
@@ -145,6 +156,7 @@ export type DbusSignalEvent = {
 export type ExecOptions = {
   cwd?: string;
   env?: Record<string, string>;
+  signal?: AbortSignal;
 };
 
 export type ExecResult = {
@@ -155,6 +167,7 @@ export type ExecResult = {
 };
 
 export type WebbarApi = {
+  readonly output: string;
   sway: Store<SwayState> & {
     command: (cmd: string) => void;
   };
@@ -165,6 +178,7 @@ export type WebbarApi = {
   };
   notifications: Store<NotificationItem[]> & {
     dismiss: (id: number) => void;
+    invokeAction: (id: number, actionKey: string) => void;
     clearAll: () => void;
   };
   audio: Store<AudioState> & {
@@ -236,7 +250,10 @@ function decodeBase64Bytes(b64: string): Uint8Array {
   return bytes;
 }
 
-export function createWebbarBridge(postMessage: (json: string) => void): {
+export function createWebbarBridge(
+  postMessage: (json: string) => void,
+  output = "",
+): {
   api: WebbarApi;
   receive: (event: Record<string, unknown>) => void;
 } {
@@ -258,6 +275,7 @@ export function createWebbarBridge(postMessage: (json: string) => void): {
       resolveStart?: (val: { stop: () => void }) => void;
       rejectStart?: (err: Error) => void;
       onSignal: (sig: DbusSignalEvent) => void;
+      cleanup?: () => void;
     }
   >();
   const execPending = new Map<
@@ -267,6 +285,7 @@ export function createWebbarBridge(postMessage: (json: string) => void): {
       reject: (err: Error) => void;
       stdout: Uint8Array[];
       stderr: Uint8Array[];
+      cleanup?: () => void;
     }
   >();
 
@@ -421,6 +440,7 @@ export function createWebbarBridge(postMessage: (json: string) => void): {
         const watch = dbusWatches.get(id);
         if (!watch) return;
         if (!event.ok) {
+          watch.cleanup?.();
           dbusWatches.delete(id);
           watch.rejectStart?.(
             new Error(
@@ -431,6 +451,7 @@ export function createWebbarBridge(postMessage: (json: string) => void): {
         }
         watch.resolveStart?.({
           stop: () => {
+            watch.cleanup?.();
             dbusWatches.delete(id);
             send({ type: "dbus_unwatch", id });
           },
@@ -451,7 +472,10 @@ export function createWebbarBridge(postMessage: (json: string) => void): {
         break;
       }
       case "dbus_match_ended": {
-        dbusWatches.delete(event.id as number);
+        const id = event.id as number;
+        const watch = dbusWatches.get(id);
+        watch?.cleanup?.();
+        dbusWatches.delete(id);
         break;
       }
       case "process_started": {
@@ -459,6 +483,7 @@ export function createWebbarBridge(postMessage: (json: string) => void): {
         const pending = execPending.get(id);
         if (!pending) return;
         if (!event.ok) {
+          pending.cleanup?.();
           execPending.delete(id);
           pending.reject(
             new Error(
@@ -483,6 +508,7 @@ export function createWebbarBridge(postMessage: (json: string) => void): {
         const id = event.id as number;
         const pending = execPending.get(id);
         if (!pending) return;
+        pending.cleanup?.();
         execPending.delete(id);
         const decoder = new TextDecoder();
         const joinText = (chunks: Uint8Array[]) =>
@@ -500,6 +526,7 @@ export function createWebbarBridge(postMessage: (json: string) => void): {
   }
 
   const api: WebbarApi = {
+    output,
     sway: {
       get: swayStore.get,
       subscribe: swayStore.subscribe,
@@ -535,6 +562,12 @@ export function createWebbarBridge(postMessage: (json: string) => void): {
       subscribe: notificationsStore.subscribe,
       onChange: notificationsStore.onChange,
       dismiss: (id: number) => send({ type: "dismiss_notification", id }),
+      invokeAction: (id: number, actionKey: string) =>
+        send({
+          type: "invoke_notification_action",
+          id,
+          action_key: actionKey,
+        }),
       clearAll: () => send({ type: "clear_notifications" }),
     },
     audio: {
@@ -605,12 +638,27 @@ export function createWebbarBridge(postMessage: (json: string) => void): {
         opts: DbusWatchOptions,
         onSignal: (signal: DbusSignalEvent) => void,
       ) => {
+        if (opts.signal?.aborted) {
+          return Promise.reject(new DOMException("Aborted", "AbortError"));
+        }
         const id = nextId++;
         return new Promise((resolve, reject) => {
+          const onAbort = () => {
+            const watch = dbusWatches.get(id);
+            watch?.cleanup?.();
+            dbusWatches.delete(id);
+            send({ type: "dbus_unwatch", id });
+            reject(new DOMException("Aborted", "AbortError"));
+          };
+          const cleanup = () => {
+            opts.signal?.removeEventListener("abort", onAbort);
+          };
+          opts.signal?.addEventListener("abort", onAbort, { once: true });
           dbusWatches.set(id, {
             resolveStart: resolve,
             rejectStart: reject,
             onSignal,
+            cleanup,
           });
           send({
             type: "dbus_match",
@@ -625,13 +673,28 @@ export function createWebbarBridge(postMessage: (json: string) => void): {
       },
     },
     exec: (argv: string[], opts?: ExecOptions) => {
+      if (opts?.signal?.aborted) {
+        return Promise.reject(new DOMException("Aborted", "AbortError"));
+      }
       const id = nextId++;
       return new Promise((resolve, reject) => {
+        const onAbort = () => {
+          const pending = execPending.get(id);
+          pending?.cleanup?.();
+          execPending.delete(id);
+          send({ type: "process_kill", id, signal: 15 });
+          reject(new DOMException("Aborted", "AbortError"));
+        };
+        const cleanup = () => {
+          opts?.signal?.removeEventListener("abort", onAbort);
+        };
+        opts?.signal?.addEventListener("abort", onAbort, { once: true });
         execPending.set(id, {
           resolve,
           reject,
           stdout: [],
           stderr: [],
+          cleanup,
         });
         send({
           type: "process_spawn",

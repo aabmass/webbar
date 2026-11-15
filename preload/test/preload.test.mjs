@@ -339,3 +339,47 @@ test("dbus and exec escape hatches follow Promise + Error contract", async () =>
     stderr: "warn\n",
   });
 });
+
+test("AbortSignal cancels exec and dbus.watch, and output + notifications.invokeAction work", async () => {
+  const sent = [];
+  const { api } = createWebbarBridge((json) => {
+    sent.push(JSON.parse(json));
+  }, "DP-2");
+
+  assert.equal(api.output, "DP-2");
+
+  api.notifications.invokeAction(9, "open");
+  assert.deepEqual(sent[0], {
+    type: "invoke_notification_action",
+    id: 9,
+    action_key: "open",
+  });
+
+  // Pre-aborted signal rejects immediately without posting
+  const preAborted = new AbortController();
+  preAborted.abort();
+  await assert.rejects(
+    api.exec(["sleep", "10"], { signal: preAborted.signal }),
+    (err) => err.name === "AbortError",
+  );
+  assert.equal(sent.length, 1);
+
+  // In-flight exec abort sends process_kill(SIGTERM)
+  const execCtrl = new AbortController();
+  const execP = api.exec(["sleep", "10"], { signal: execCtrl.signal });
+  const spawnId = sent[1].id;
+  execCtrl.abort();
+  await assert.rejects(execP, (err) => err.name === "AbortError");
+  assert.deepEqual(sent[2], { type: "process_kill", id: spawnId, signal: 15 });
+
+  // In-flight dbus.watch abort sends dbus_unwatch
+  const watchCtrl = new AbortController();
+  const watchP = api.dbus.watch(
+    { bus: "session", interface: "org.example.Test", signal: watchCtrl.signal },
+    () => {},
+  );
+  const watchId = sent[3].id;
+  watchCtrl.abort();
+  await assert.rejects(watchP, (err) => err.name === "AbortError");
+  assert.deepEqual(sent[4], { type: "dbus_unwatch", id: watchId });
+});

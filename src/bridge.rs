@@ -43,6 +43,10 @@ pub enum BridgeRequest {
     DismissNotification {
         id: u32,
     },
+    InvokeNotificationAction {
+        id: u32,
+        action_key: String,
+    },
     ClearNotifications,
     AudioSetVolume {
         id: u32,

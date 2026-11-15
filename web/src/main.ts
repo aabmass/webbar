@@ -10,7 +10,7 @@ import type {
 
 const { sway, tray, notifications, audio, bluetooth, network } = window.webbar;
 
-const targetOutput = new URLSearchParams(window.location.search).get("output");
+const targetOutput = window.webbar.output || null;
 
 const workspacesEl = document.getElementById("workspaces")!;
 const modeEl = document.getElementById("sway-mode")!;

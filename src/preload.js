@@ -39,7 +39,7 @@
     }
     return bytes;
   }
-  function createWebbarBridge(postMessage) {
+  function createWebbarBridge(postMessage, output = "") {
     let nextId = 1;
     const actionPending = /* @__PURE__ */ new Map();
     const dbusCallPending = /* @__PURE__ */ new Map();
@@ -189,6 +189,7 @@
           const watch = dbusWatches.get(id);
           if (!watch) return;
           if (!event.ok) {
+            watch.cleanup?.();
             dbusWatches.delete(id);
             watch.rejectStart?.(
               new Error(
@@ -199,6 +200,7 @@
           }
           watch.resolveStart?.({
             stop: () => {
+              watch.cleanup?.();
               dbusWatches.delete(id);
               send({ type: "dbus_unwatch", id });
             }
@@ -219,7 +221,10 @@
           break;
         }
         case "dbus_match_ended": {
-          dbusWatches.delete(event.id);
+          const id = event.id;
+          const watch = dbusWatches.get(id);
+          watch?.cleanup?.();
+          dbusWatches.delete(id);
           break;
         }
         case "process_started": {
@@ -227,6 +232,7 @@
           const pending = execPending.get(id);
           if (!pending) return;
           if (!event.ok) {
+            pending.cleanup?.();
             execPending.delete(id);
             pending.reject(
               new Error(
@@ -251,6 +257,7 @@
           const id = event.id;
           const pending = execPending.get(id);
           if (!pending) return;
+          pending.cleanup?.();
           execPending.delete(id);
           const decoder = new TextDecoder();
           const joinText = (chunks) => chunks.map((c) => decoder.decode(c, { stream: true })).join("") + decoder.decode();
@@ -265,6 +272,7 @@
       }
     }
     const api2 = {
+      output,
       sway: {
         get: swayStore.get,
         subscribe: swayStore.subscribe,
@@ -298,6 +306,11 @@
         subscribe: notificationsStore.subscribe,
         onChange: notificationsStore.onChange,
         dismiss: (id) => send({ type: "dismiss_notification", id }),
+        invokeAction: (id, actionKey) => send({
+          type: "invoke_notification_action",
+          id,
+          action_key: actionKey
+        }),
         clearAll: () => send({ type: "clear_notifications" })
       },
       audio: {
@@ -358,12 +371,27 @@
           });
         },
         watch: (opts, onSignal) => {
+          if (opts.signal?.aborted) {
+            return Promise.reject(new DOMException("Aborted", "AbortError"));
+          }
           const id = nextId++;
           return new Promise((resolve, reject) => {
+            const onAbort = () => {
+              const watch = dbusWatches.get(id);
+              watch?.cleanup?.();
+              dbusWatches.delete(id);
+              send({ type: "dbus_unwatch", id });
+              reject(new DOMException("Aborted", "AbortError"));
+            };
+            const cleanup = () => {
+              opts.signal?.removeEventListener("abort", onAbort);
+            };
+            opts.signal?.addEventListener("abort", onAbort, { once: true });
             dbusWatches.set(id, {
               resolveStart: resolve,
               rejectStart: reject,
-              onSignal
+              onSignal,
+              cleanup
             });
             send({
               type: "dbus_match",
@@ -378,13 +406,28 @@
         }
       },
       exec: (argv, opts) => {
+        if (opts?.signal?.aborted) {
+          return Promise.reject(new DOMException("Aborted", "AbortError"));
+        }
         const id = nextId++;
         return new Promise((resolve, reject) => {
+          const onAbort = () => {
+            const pending = execPending.get(id);
+            pending?.cleanup?.();
+            execPending.delete(id);
+            send({ type: "process_kill", id, signal: 15 });
+            reject(new DOMException("Aborted", "AbortError"));
+          };
+          const cleanup = () => {
+            opts?.signal?.removeEventListener("abort", onAbort);
+          };
+          opts?.signal?.addEventListener("abort", onAbort, { once: true });
           execPending.set(id, {
             resolve,
             reject,
             stdout: [],
-            stderr: []
+            stderr: [],
+            cleanup
           });
           send({
             type: "process_spawn",
@@ -401,6 +444,7 @@
   }
 
   // src/index.ts
+  var initialOutput = window.__webbarOutput || new URLSearchParams(window.location.search).get("output") || "";
   var { api, receive } = createWebbarBridge((json) => {
     const handler = window.webkit?.messageHandlers?.bridge;
     if (!handler) {
@@ -408,7 +452,7 @@
       return;
     }
     handler.postMessage(json);
-  });
+  }, initialOutput);
   window.webbar = api;
   window.__webbarReceive = receive;
   var overlayActive = false;

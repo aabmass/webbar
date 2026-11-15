@@ -358,8 +358,21 @@ fn create_bar_window(
     });
     window.set_keyboard_mode(KeyboardMode::None);
 
+    let connector = monitor
+        .connector()
+        .map(|s| s.to_string())
+        .unwrap_or_default();
+    let output_json = serde_json::to_string(&connector).unwrap_or_else(|_| "\"\"".to_string());
+
     let ucm = UserContentManager::new();
     ucm.register_script_message_handler("bridge", None);
+    ucm.add_script(&UserScript::new(
+        &format!("window.__webbarOutput = {output_json};"),
+        UserContentInjectedFrames::TopFrame,
+        UserScriptInjectionTime::Start,
+        &[],
+        &[],
+    ));
     ucm.add_script(&UserScript::new(
         PRELOAD_JS,
         UserContentInjectedFrames::TopFrame,
@@ -436,6 +449,9 @@ fn create_bar_window(
             BridgeRequest::DbusUnwatch { id } => services.dbus.unwatch(id),
             BridgeRequest::DismissNotification { id } => {
                 services.notifications.dismiss(id);
+            }
+            BridgeRequest::InvokeNotificationAction { id, action_key } => {
+                services.notifications.invoke_action(id, &action_key);
             }
             BridgeRequest::ClearNotifications => {
                 services.notifications.clear_all();
@@ -544,10 +560,6 @@ fn create_bar_window(
         }
     });
 
-    let connector = monitor
-        .connector()
-        .map(|s| s.to_string())
-        .unwrap_or_default();
     let uri = match &config.source {
         Source::Url(url) => {
             let sep = if url.contains('?') { '&' } else { '?' };

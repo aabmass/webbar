@@ -3,6 +3,7 @@ import { createWebbarBridge, type WebbarApi } from "./preload";
 declare global {
   interface Window {
     webbar: WebbarApi;
+    __webbarOutput?: string;
     __webbarReceive?: (event: Record<string, unknown>) => void;
     webkit?: {
       messageHandlers?: {
@@ -14,6 +15,11 @@ declare global {
   }
 }
 
+const initialOutput =
+  window.__webbarOutput ||
+  new URLSearchParams(window.location.search).get("output") ||
+  "";
+
 const { api, receive } = createWebbarBridge((json) => {
   const handler = window.webkit?.messageHandlers?.bridge;
   if (!handler) {
@@ -21,7 +27,7 @@ const { api, receive } = createWebbarBridge((json) => {
     return;
   }
   handler.postMessage(json);
-});
+}, initialOutput);
 
 window.webbar = api;
 window.__webbarReceive = receive;
