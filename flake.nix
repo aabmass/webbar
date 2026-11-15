@@ -20,7 +20,7 @@
             npmDepsHash = "sha256-oOTyHTzkOQl8TIzdx6o1QavKqTwWc0JsEG98jsXDiDI=";
 
             preBuild = ''
-              mkdir -p ../src ../types
+              mkdir -p ../generated/types
             '';
 
             doCheck = true;
@@ -33,9 +33,9 @@
 
             installPhase = ''
               runHook preInstall
-              mkdir -p $out/src $out/types
-              cp ../src/preload.js $out/src/
-              cp -r ../types/* $out/types/
+              mkdir -p $out/generated/types
+              cp ../generated/preload.js $out/generated/
+              cp -r ../generated/types/* $out/generated/types/
               runHook postInstall
             '';
           };
@@ -48,8 +48,8 @@
             npmDepsHash = "sha256-gEUedwYGL5Ps6sIqa+CZpLKIr3XC7FuQ3MiycIpl6QE=";
 
             preBuild = ''
-              mkdir -p ../types
-              cp -r ${preloadPkg}/types/* ../types/
+              mkdir -p ../generated/types
+              cp -r ${preloadPkg}/generated/types/* ../generated/types/
             '';
 
             doCheck = true;
@@ -85,8 +85,8 @@
 
             postUnpack = ''
               chmod u+w source
-              mkdir -p source/types
-              cp -r ${preloadPkg}/types/* source/types/
+              mkdir -p source/generated/types
+              cp -r ${preloadPkg}/generated/types/* source/generated/types/
             '';
 
             doCheck = true;
@@ -122,8 +122,8 @@
 
             postUnpack = ''
               chmod u+w source
-              mkdir -p source/types
-              cp -r ${preloadPkg}/types/* source/types/
+              mkdir -p source/generated/types
+              cp -r ${preloadPkg}/generated/types/* source/generated/types/
             '';
 
             doCheck = true;
@@ -149,6 +149,7 @@
               ./Cargo.toml
               ./Cargo.lock
               ./src
+              ./generated/preload.js
             ];
           };
 
@@ -179,7 +180,8 @@
             inherit cargoArtifacts;
 
             preBuild = ''
-              cp ${preloadPkg}/src/preload.js src/preload.js
+              mkdir -p generated
+              cp ${preloadPkg}/generated/preload.js generated/preload.js
             '';
 
             postInstall = ''

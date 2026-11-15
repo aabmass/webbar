@@ -7,8 +7,8 @@
     "skipLibCheck": true,
     "noEmit": true,
     "paths": {
-      "@webbar/types": ["../types/preload.d.ts"]
+      "@webbar/types": ["../generated/types/preload.d.ts"]
     }
   },
-  "include": ["src", "../types/index.d.ts"]
+  "include": ["src", "../generated/types/index.d.ts"]
 }

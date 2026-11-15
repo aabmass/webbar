@@ -15,7 +15,7 @@ Let users build a Sway status bar in plain HTML, CSS, and TypeScript/React—wit
 └─────────────────────────────────▲────────────────────────────────────┘
                                   │ injected at DocumentStart
 ┌─────────────────────────────────┴────────────────────────────────────┐
-│  Preload Bridge (preload/src/ -> src/preload.js + types/*.d.ts)      │
+│  Preload Bridge (preload/src/ -> generated/preload.js + generated/types/*.d.ts) │
 │  Exposes reactive { get, subscribe, onChange } stores + Promise      │
 │  actions over WebKitGTK UserContentManager                           │
 └─────────────────────────────────▲────────────────────────────────────┘
@@ -36,7 +36,7 @@ Let users build a Sway status bar in plain HTML, CSS, and TypeScript/React—wit
 
 1. **WebKitGTK `UserScript` injection with a TypeScript preload**
    - WebKitGTK runs each bar in a sandboxed `WebKitWebProcess` separate from the GTK4 UI process.
-   - `preload/src/preload.ts` and `preload/src/index.ts` compile to `src/preload.js` (embedded at `UserScriptInjectionTime::Start`) and `types/{preload,index}.d.ts` (shared by all TS/React frontends).
+   - `preload/src/preload.ts` and `preload/src/index.ts` compile to `generated/preload.js` (embedded at `UserScriptInjectionTime::Start`) and `generated/types/{preload,index}.d.ts` (shared by all TS/React frontends).
    - Every page immediately has `window.webbar` without per-bar bridge boilerplate.
 
 2. **System state aggregation in Rust, web-native stores in JS**

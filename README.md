@@ -98,6 +98,6 @@ cd preload && npm install && npm run build && npm run typecheck && npm test
 ## Architecture & Credits
 
 - Rust payload types use `ts-rs` to generate `preload/src/generated/*.ts` (verified in sync by `nix flake check`).
-- `preload/src/preload.ts` and `preload/src/index.ts` compile to `src/preload.js` and `types/` (`@webbar/types`), providing `{ get, subscribe, onChange }` stores compatible with React's `useSyncExternalStore` and vanilla TypeScript, `window.webbar.output` per monitor, and `AbortSignal` cancellation on `exec` and `dbus.watch`.
+- `preload/src/preload.ts` and `preload/src/index.ts` compile to `generated/preload.js` and `generated/types/` (`@webbar/types`), providing `{ get, subscribe, onChange }` stores compatible with React's `useSyncExternalStore` and vanilla TypeScript, `window.webbar.output` per monitor, and `AbortSignal` cancellation on `exec` and `dbus.watch`.
 - System state (`sway`, `tray`, `notifications`, `audio`, `bluetooth`, `network`, `backlight`) is aggregated once in the Rust host and shared across all monitor WebViews.
 - [`src/dbus_json.rs`](src/dbus_json.rs) and [`src/tray.rs`](src/tray.rs) were originally inspired by [domicile](https://github.com/cprussin/domicile) (MIT License).

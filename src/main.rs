@@ -39,7 +39,7 @@ use crate::notifications::NotificationStore;
 use crate::process_bridge::ProcessBridge;
 
 const DEFAULT_BAR_HEIGHT: i32 = 34;
-const PRELOAD_JS: &str = include_str!("preload.js");
+const PRELOAD_JS: &str = include_str!("../generated/preload.js");
 
 thread_local! {
     static WEB_VIEWS: RefCell<Vec<glib::WeakRef<WebView>>> = const { RefCell::new(Vec::new()) };

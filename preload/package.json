@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "esbuild src/index.ts --bundle --format=iife --outfile=../src/preload.js && tsc --emitDeclarationOnly",
+    "build": "esbuild src/index.ts --bundle --format=iife --outfile=../generated/preload.js && tsc --emitDeclarationOnly",
     "typecheck": "tsc --noEmit",
     "test": "esbuild src/preload.ts --bundle --format=esm --outfile=dist/preload.mjs && node --test test/preload.test.mjs"
   },
