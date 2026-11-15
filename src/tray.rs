@@ -391,12 +391,7 @@ fn parse_menu_node(node: RawMenuNode) -> TrayMenuItem {
 pub fn get_menu(id: u32, bus: String, menu_path: String, send: SendEvent) {
     thread::spawn(move || {
         let send_err = |msg: String| {
-            send(BridgeEvent::TrayMenuReply {
-                id,
-                ok: false,
-                items: Vec::new(),
-                error: Some(msg),
-            });
+            crate::bridge::reply_err(&send, id, msg);
         };
 
         let conn = match Connection::session() {
@@ -431,12 +426,7 @@ pub fn get_menu(id: u32, bus: String, menu_path: String, send: SendEvent) {
         };
 
         let parsed_root = parse_menu_node(root);
-        send(BridgeEvent::TrayMenuReply {
-            id,
-            ok: true,
-            items: parsed_root.children,
-            error: None,
-        });
+        crate::bridge::reply_data(&send, id, parsed_root.children);
     });
 }
 

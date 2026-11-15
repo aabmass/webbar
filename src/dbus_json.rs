@@ -51,9 +51,14 @@ pub fn read(signature: &str, body: &str) -> Result<Vec<Value<'static>>, NotABody
         .collect()
 }
 
+/// `values` as a JSON array value.
+pub fn written_value(values: &[Value<'_>]) -> Json {
+    Json::Array(values.iter().map(json).collect())
+}
+
 /// `values` as a body's JSON text.
 pub fn written(values: &[Value<'_>]) -> String {
-    Json::Array(values.iter().map(json).collect()).to_string()
+    written_value(values).to_string()
 }
 
 /// The complete types in `signature`, in order.

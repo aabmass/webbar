@@ -22,164 +22,126 @@
       },
       _update: (next) => {
         current = next;
-        for (const listener of subscribeListeners) {
-          listener();
-        }
-        for (const listener of changeListeners) {
-          listener(current);
-        }
+        for (const listener of subscribeListeners) listener();
+        for (const listener of changeListeners) listener(current);
       }
     };
   }
-  function decodeBase64Bytes(b64) {
-    const bin = atob(b64);
-    const bytes = new Uint8Array(bin.length);
-    for (let i = 0; i < bin.length; i++) {
-      bytes[i] = bin.charCodeAt(i);
-    }
-    return bytes;
+  function storeView(store, extra) {
+    return {
+      get: store.get,
+      subscribe: store.subscribe,
+      onChange: store.onChange,
+      ...extra
+    };
   }
   function createWebbarBridge(postMessage, output = "") {
     let nextId = 1;
-    const actionPending = /* @__PURE__ */ new Map();
-    const dbusCallPending = /* @__PURE__ */ new Map();
+    const pending = /* @__PURE__ */ new Map();
     const dbusWatches = /* @__PURE__ */ new Map();
-    const execPending = /* @__PURE__ */ new Map();
     function send(payload) {
       postMessage(JSON.stringify(payload));
     }
-    function invokeAction(type, payload = {}) {
+    function rpc(type, payload = {}, abort) {
+      if (abort?.signal?.aborted) {
+        return Promise.reject(new DOMException("Aborted", "AbortError"));
+      }
       const id = nextId++;
       return new Promise((resolve, reject) => {
-        actionPending.set(id, {
-          resolve: () => resolve(),
-          reject
+        const onAbort = () => {
+          const entry = pending.get(id);
+          entry?.cleanup?.();
+          pending.delete(id);
+          abort?.onAbort?.(id);
+          reject(new DOMException("Aborted", "AbortError"));
+        };
+        const cleanup = abort?.signal ? () => abort.signal?.removeEventListener("abort", onAbort) : void 0;
+        abort?.signal?.addEventListener("abort", onAbort, { once: true });
+        pending.set(id, {
+          resolve,
+          reject,
+          cleanup
         });
         send({ type, id, ...payload });
       });
     }
-    const swayStore = createStore({
-      workspaces: [],
-      focused_title: "",
-      mode: "default"
-    });
-    const trayStore = createStore([]);
-    const notificationsStore = createStore([]);
-    const audioStore = createStore({
-      available: false,
-      outputs: [],
-      inputs: []
-    });
-    const bluetoothStore = createStore({
-      available: false,
-      adapters: [],
-      devices: []
-    });
-    const networkStore = createStore({
-      available: false,
-      connectivity: "unknown",
-      link: { kind: "none" }
-    });
-    const backlightStore = createStore({
-      available: false,
-      brightness: null,
-      error: null
-    });
+    const stores = {
+      sway: createStore({
+        workspaces: [],
+        focused_title: "",
+        mode: "default"
+      }),
+      tray: createStore([]),
+      notifications: createStore([]),
+      audio: createStore({
+        available: false,
+        outputs: [],
+        inputs: []
+      }),
+      bluetooth: createStore({
+        available: false,
+        adapters: [],
+        devices: []
+      }),
+      network: createStore({
+        available: false,
+        connectivity: "unknown",
+        link: { kind: "none" }
+      }),
+      backlight: createStore({
+        available: false,
+        brightness: null,
+        error: null
+      })
+    };
+    const stateHandlers = {
+      sway_state: (e) => stores.sway._update({
+        workspaces: e.workspaces ?? [],
+        focused_title: e.focused_title ?? "",
+        mode: e.mode ?? "default"
+      }),
+      tray: (e) => stores.tray._update(e.items ?? []),
+      notifications: (e) => stores.notifications._update(e.items ?? []),
+      audio_state: (e) => stores.audio._update({
+        available: Boolean(e.available),
+        outputs: e.outputs ?? [],
+        inputs: e.inputs ?? []
+      }),
+      bluetooth_state: (e) => stores.bluetooth._update({
+        available: Boolean(e.available),
+        adapters: e.adapters ?? [],
+        devices: e.devices ?? []
+      }),
+      network_state: (e) => stores.network._update({
+        available: Boolean(e.available),
+        connectivity: e.connectivity ?? "unknown",
+        link: e.link ?? { kind: "none" }
+      }),
+      backlight_state: (e) => stores.backlight._update({
+        available: Boolean(e.available),
+        brightness: typeof e.brightness === "number" ? e.brightness : null,
+        error: typeof e.error === "string" ? e.error : null
+      })
+    };
     function receive2(event) {
-      switch (event.type) {
-        case "action_reply": {
+      const type = event.type;
+      const stateHandler = stateHandlers[type];
+      if (stateHandler) {
+        stateHandler(event);
+        return;
+      }
+      switch (type) {
+        case "rpc_reply": {
           const id = event.id;
-          const pending = actionPending.get(id);
-          if (!pending) return;
-          actionPending.delete(id);
+          const entry = pending.get(id);
+          if (!entry) return;
+          entry.cleanup?.();
+          pending.delete(id);
           if (event.ok) {
-            pending.resolve(void 0);
+            entry.resolve(event.data);
           } else {
-            pending.reject(
-              new Error(event.error ?? "Action failed")
-            );
-          }
-          break;
-        }
-        case "tray_menu_reply": {
-          const id = event.id;
-          const pending = actionPending.get(id);
-          if (!pending) return;
-          actionPending.delete(id);
-          if (event.ok) {
-            pending.resolve(event.items);
-          } else {
-            pending.reject(
-              new Error(
-                event.error ?? "Failed to fetch tray menu"
-              )
-            );
-          }
-          break;
-        }
-        case "sway_state": {
-          swayStore._update({
-            workspaces: event.workspaces ?? [],
-            focused_title: event.focused_title ?? "",
-            mode: event.mode ?? "default"
-          });
-          break;
-        }
-        case "tray": {
-          trayStore._update(event.items ?? []);
-          break;
-        }
-        case "notifications": {
-          notificationsStore._update(event.items ?? []);
-          break;
-        }
-        case "audio_state": {
-          audioStore._update({
-            available: Boolean(event.available),
-            outputs: event.outputs ?? [],
-            inputs: event.inputs ?? []
-          });
-          break;
-        }
-        case "bluetooth_state": {
-          bluetoothStore._update({
-            available: Boolean(event.available),
-            adapters: event.adapters ?? [],
-            devices: event.devices ?? []
-          });
-          break;
-        }
-        case "network_state": {
-          networkStore._update({
-            available: Boolean(event.available),
-            connectivity: event.connectivity ?? "unknown",
-            link: event.link ?? { kind: "none" }
-          });
-          break;
-        }
-        case "backlight_state": {
-          backlightStore._update({
-            available: Boolean(event.available),
-            brightness: typeof event.brightness === "number" ? event.brightness : null,
-            error: typeof event.error === "string" ? event.error : null
-          });
-          break;
-        }
-        case "dbus_call_reply": {
-          const id = event.id;
-          const pending = dbusCallPending.get(id);
-          if (!pending) return;
-          dbusCallPending.delete(id);
-          if (event.ok) {
-            pending.resolve({
-              signature: event.signature ?? "",
-              body: JSON.parse(event.body ?? "[]")
-            });
-          } else {
-            pending.reject(
-              new Error(
-                event.error ?? "D-Bus call failed"
-              )
+            entry.reject(
+              new Error(event.error ?? "Request failed")
             );
           }
           break;
@@ -216,7 +178,7 @@
             interface: event.interface,
             member: event.member,
             signature: event.signature,
-            body: JSON.parse(event.body ?? "[]")
+            body: event.body ?? []
           });
           break;
         }
@@ -227,84 +189,24 @@
           dbusWatches.delete(id);
           break;
         }
-        case "process_started": {
-          const id = event.id;
-          const pending = execPending.get(id);
-          if (!pending) return;
-          if (!event.ok) {
-            pending.cleanup?.();
-            execPending.delete(id);
-            pending.reject(
-              new Error(
-                event.error ?? "Process spawn failed"
-              )
-            );
-          }
-          break;
-        }
-        case "process_output": {
-          const pending = execPending.get(event.id);
-          if (!pending) return;
-          const chunk = decodeBase64Bytes(event.data_b64);
-          if (event.stream === "stdout") {
-            pending.stdout.push(chunk);
-          } else if (event.stream === "stderr") {
-            pending.stderr.push(chunk);
-          }
-          break;
-        }
-        case "process_exited": {
-          const id = event.id;
-          const pending = execPending.get(id);
-          if (!pending) return;
-          pending.cleanup?.();
-          execPending.delete(id);
-          const decoder = new TextDecoder();
-          const joinText = (chunks) => chunks.map((c) => decoder.decode(c, { stream: true })).join("") + decoder.decode();
-          pending.resolve({
-            code: typeof event.code === "number" ? event.code : void 0,
-            signal: typeof event.signal === "number" ? event.signal : void 0,
-            stdout: joinText(pending.stdout),
-            stderr: joinText(pending.stderr)
-          });
-          break;
-        }
       }
     }
     const api2 = {
       output,
-      sway: {
-        get: swayStore.get,
-        subscribe: swayStore.subscribe,
-        onChange: swayStore.onChange,
+      sway: storeView(stores.sway, {
         command: (command) => send({ type: "sway_command", command })
-      },
-      tray: {
-        get: trayStore.get,
-        subscribe: trayStore.subscribe,
-        onChange: trayStore.onChange,
+      }),
+      tray: storeView(stores.tray, {
         activate: (bus, path) => send({ type: "tray_activate", bus, path }),
-        getMenu: (bus, menuPath) => {
-          const id = nextId++;
-          return new Promise((resolve, reject) => {
-            actionPending.set(id, {
-              resolve: (val) => resolve(val),
-              reject
-            });
-            send({ type: "tray_get_menu", id, bus, menu_path: menuPath });
-          });
-        },
+        getMenu: (bus, menuPath) => rpc("tray_get_menu", { bus, menu_path: menuPath }),
         menuEvent: (bus, menuPath, itemId) => send({
           type: "tray_menu_event",
           bus,
           menu_path: menuPath,
           item_id: itemId
         })
-      },
-      notifications: {
-        get: notificationsStore.get,
-        subscribe: notificationsStore.subscribe,
-        onChange: notificationsStore.onChange,
+      }),
+      notifications: storeView(stores.notifications, {
         dismiss: (id) => send({ type: "dismiss_notification", id }),
         invokeAction: (id, actionKey) => send({
           type: "invoke_notification_action",
@@ -312,64 +214,33 @@
           action_key: actionKey
         }),
         clearAll: () => send({ type: "clear_notifications" })
-      },
-      audio: {
-        get: audioStore.get,
-        subscribe: audioStore.subscribe,
-        onChange: audioStore.onChange,
-        setVolume: (deviceId, volume) => invokeAction("audio_set_volume", { device_id: deviceId, volume }),
-        setMuted: (deviceId, muted) => invokeAction("audio_set_muted", { device_id: deviceId, muted }),
-        setDefault: (deviceId) => invokeAction("audio_set_default", { device_id: deviceId })
-      },
-      bluetooth: {
-        get: bluetoothStore.get,
-        subscribe: bluetoothStore.subscribe,
-        onChange: bluetoothStore.onChange,
-        setPowered: (path, powered) => invokeAction("bluetooth_set_powered", { path, powered }),
-        connect: (path) => invokeAction("bluetooth_connect", { path }),
-        disconnect: (path) => invokeAction("bluetooth_disconnect", { path })
-      },
-      network: {
-        get: networkStore.get,
-        subscribe: networkStore.subscribe,
-        onChange: networkStore.onChange
-      },
-      backlight: {
-        get: backlightStore.get,
-        subscribe: backlightStore.subscribe,
-        onChange: backlightStore.onChange,
-        set: (percent) => invokeAction("backlight_set", {
-          percent: Math.max(0, Math.min(100, Math.round(percent)))
-        })
-      },
-      setInputRegion: (rects) => send({
-        type: "set_input_region",
-        rects: rects.map((r) => ({
-          x: Math.round(r.x),
-          y: Math.round(r.y),
-          width: Math.round(r.width),
-          height: Math.round(r.height)
-        }))
       }),
+      audio: storeView(stores.audio, {
+        setVolume: (deviceId, volume) => rpc("audio_set_volume", { device_id: deviceId, volume }),
+        setMuted: (deviceId, muted) => rpc("audio_set_muted", { device_id: deviceId, muted }),
+        setDefault: (deviceId) => rpc("audio_set_default", { device_id: deviceId })
+      }),
+      bluetooth: storeView(stores.bluetooth, {
+        setPowered: (path, powered) => rpc("bluetooth_set_powered", { path, powered }),
+        connect: (path) => rpc("bluetooth_connect", { path }),
+        disconnect: (path) => rpc("bluetooth_disconnect", { path })
+      }),
+      network: storeView(stores.network, {}),
+      backlight: storeView(stores.backlight, {
+        set: (percent) => rpc("backlight_set", { percent })
+      }),
+      setInputRegion: (rects) => send({ type: "set_input_region", rects }),
       resetInputRegion: () => send({ type: "set_input_region", rects: [] }),
       dbus: {
-        call: (opts) => {
-          const id = nextId++;
-          return new Promise((resolve, reject) => {
-            dbusCallPending.set(id, { resolve, reject });
-            send({
-              type: "dbus_call",
-              id,
-              bus: opts.bus ?? "session",
-              destination: opts.destination,
-              path: opts.path,
-              interface: opts.interface,
-              member: opts.member,
-              signature: opts.signature ?? "",
-              body: JSON.stringify(opts.body ?? [])
-            });
-          });
-        },
+        call: (opts) => rpc("dbus_call", {
+          bus: opts.bus ?? "session",
+          destination: opts.destination,
+          path: opts.path,
+          interface: opts.interface,
+          member: opts.member,
+          signature: opts.signature ?? "",
+          body: opts.body ?? []
+        }),
         watch: (opts, onSignal) => {
           if (opts.signal?.aborted) {
             return Promise.reject(new DOMException("Aborted", "AbortError"));
@@ -405,40 +276,18 @@
           });
         }
       },
-      exec: (argv, opts) => {
-        if (opts?.signal?.aborted) {
-          return Promise.reject(new DOMException("Aborted", "AbortError"));
+      exec: (argv, opts) => rpc(
+        "process_spawn",
+        {
+          argv: [...argv],
+          cwd: opts?.cwd ?? null,
+          env: opts?.env ?? {}
+        },
+        {
+          signal: opts?.signal,
+          onAbort: (id) => send({ type: "process_kill", id, signal: 15 })
         }
-        const id = nextId++;
-        return new Promise((resolve, reject) => {
-          const onAbort = () => {
-            const pending = execPending.get(id);
-            pending?.cleanup?.();
-            execPending.delete(id);
-            send({ type: "process_kill", id, signal: 15 });
-            reject(new DOMException("Aborted", "AbortError"));
-          };
-          const cleanup = () => {
-            opts?.signal?.removeEventListener("abort", onAbort);
-          };
-          opts?.signal?.addEventListener("abort", onAbort, { once: true });
-          execPending.set(id, {
-            resolve,
-            reject,
-            stdout: [],
-            stderr: [],
-            cleanup
-          });
-          send({
-            type: "process_spawn",
-            id,
-            argv: [...argv],
-            cwd: opts?.cwd ?? null,
-            env: opts?.env ?? {},
-            stdin: false
-          });
-        });
-      }
+      )
     };
     return { api: api2, receive: receive2 };
   }

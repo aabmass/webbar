@@ -12,7 +12,7 @@ use zbus::blocking::Connection as BlockingConnection;
 use zbus::zvariant::{Signature, Structure, StructureBuilder};
 use zbus::{Connection as AsyncConnection, MessageStream};
 
-use crate::bridge::{BridgeEvent, Bus, SendEvent};
+use crate::bridge::{reply_data, reply_err, BridgeEvent, Bus, SendEvent};
 use crate::dbus_json;
 
 pub struct DbusBridge {
@@ -39,13 +39,14 @@ impl DbusBridge {
         interface: String,
         member: String,
         signature: String,
-        body: String,
+        body: serde_json::Value,
     ) {
         let buses = self.buses.clone();
         let send = self.send.clone();
         thread::spawn(move || {
-            let result = (|| -> Result<(String, String), String> {
-                let values = dbus_json::read(&signature, &body).map_err(|e| e.to_string())?;
+            let result = (|| -> Result<(String, serde_json::Value), String> {
+                let body_str = body.to_string();
+                let values = dbus_json::read(&signature, &body_str).map_err(|e| e.to_string())?;
                 let conn = shared_connection(&buses, bus).map_err(|e| e.to_string())?;
                 let returned = if values.is_empty() {
                     conn.call_method(
@@ -74,20 +75,12 @@ impl DbusBridge {
             })();
 
             match result {
-                Ok((sig, body_json)) => send(BridgeEvent::DbusCallReply {
+                Ok((sig, body_val)) => reply_data(
+                    &send,
                     id,
-                    ok: true,
-                    signature: Some(sig),
-                    body: Some(body_json),
-                    error: None,
-                }),
-                Err(err) => send(BridgeEvent::DbusCallReply {
-                    id,
-                    ok: false,
-                    signature: None,
-                    body: None,
-                    error: Some(err),
-                }),
+                    serde_json::json!({ "signature": sig, "body": body_val }),
+                ),
+                Err(err) => reply_err(&send, id, err),
             }
         });
     }
@@ -242,12 +235,12 @@ fn shared_connection(
     Ok(conn)
 }
 
-fn body_of(message: &zbus::Message) -> zbus::Result<(String, String)> {
+fn body_of(message: &zbus::Message) -> zbus::Result<(String, serde_json::Value)> {
     let body = message.body();
     let signature = body.signature();
     let values = match signature {
         Signature::Unit => Vec::new(),
         _ => body.deserialize::<Structure>()?.into_fields(),
     };
-    Ok((signature.to_string_no_parens(), dbus_json::written(&values)))
+    Ok((signature.to_string_no_parens(), dbus_json::written_value(&values)))
 }

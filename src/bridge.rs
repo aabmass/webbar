@@ -4,6 +4,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use serde::{Deserialize, Serialize};
+use ts_rs::TS;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -12,12 +13,62 @@ pub enum Bus {
     System,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, TS)]
+#[ts(export, export_to = "../preload/src/generated/")]
 pub struct InputRect {
-    pub x: i32,
-    pub y: i32,
-    pub width: i32,
-    pub height: i32,
+    pub x: f64,
+    pub y: f64,
+    pub width: f64,
+    pub height: f64,
+}
+
+#[derive(Debug, Clone, Serialize, TS)]
+#[ts(export, export_to = "../preload/src/generated/")]
+pub struct SwayState {
+    pub workspaces: Vec<crate::sway_ipc::SwayWorkspace>,
+    pub focused_title: String,
+    pub mode: String,
+}
+
+#[derive(Debug, Clone, Serialize, TS)]
+#[ts(export, export_to = "../preload/src/generated/")]
+pub struct AudioState {
+    pub available: bool,
+    pub outputs: Vec<crate::audio::AudioDevice>,
+    pub inputs: Vec<crate::audio::AudioDevice>,
+}
+
+#[derive(Debug, Clone, Serialize, TS)]
+#[ts(export, export_to = "../preload/src/generated/")]
+pub struct BluetoothState {
+    pub available: bool,
+    pub adapters: Vec<crate::bluetooth::BluetoothAdapter>,
+    pub devices: Vec<crate::bluetooth::BluetoothDevice>,
+}
+
+#[derive(Debug, Clone, Serialize, TS)]
+#[ts(export, export_to = "../preload/src/generated/")]
+pub struct NetworkState {
+    pub available: bool,
+    pub connectivity: crate::network::Connectivity,
+    pub link: crate::network::NetworkLink,
+}
+
+#[derive(Debug, Clone, Serialize, TS)]
+#[ts(export, export_to = "../preload/src/generated/")]
+pub struct BacklightState {
+    pub available: bool,
+    pub brightness: Option<u8>,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, TS)]
+#[ts(export, export_to = "../preload/src/generated/")]
+pub struct ExecResult {
+    pub code: Option<i32>,
+    pub signal: Option<i32>,
+    pub stdout: String,
+    pub stderr: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -77,7 +128,7 @@ pub enum BridgeRequest {
     },
     BacklightSet {
         id: u32,
-        percent: u8,
+        percent: f64,
     },
     SetInputRegion {
         rects: Vec<InputRect>,
@@ -96,7 +147,7 @@ pub enum BridgeRequest {
         #[serde(default)]
         signature: String,
         #[serde(default = "empty_array_json")]
-        body: String,
+        body: serde_json::Value,
     },
     DbusMatch {
         id: u32,
@@ -115,15 +166,6 @@ pub enum BridgeRequest {
         cwd: Option<String>,
         #[serde(default)]
         env: HashMap<String, String>,
-        #[serde(default)]
-        stdin: bool,
-    },
-    ProcessWrite {
-        id: u32,
-        data_b64: String,
-    },
-    ProcessCloseStdin {
-        id: u32,
     },
     ProcessKill {
         id: u32,
@@ -131,16 +173,19 @@ pub enum BridgeRequest {
     },
 }
 
-fn empty_array_json() -> String {
-    "[]".to_string()
+fn empty_array_json() -> serde_json::Value {
+    serde_json::Value::Array(Vec::new())
 }
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum BridgeEvent {
-    ActionReply {
+    RpcReply {
         id: u32,
         ok: bool,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        data: Option<serde_json::Value>,
+        #[serde(skip_serializing_if = "Option::is_none")]
         error: Option<String>,
     },
     SwayState {
@@ -150,12 +195,6 @@ pub enum BridgeEvent {
     },
     Tray {
         items: Vec<crate::tray::TrayItem>,
-    },
-    TrayMenuReply {
-        id: u32,
-        ok: bool,
-        items: Vec<crate::tray::TrayMenuItem>,
-        error: Option<String>,
     },
     Notifications {
         items: Vec<crate::notifications::NotificationItem>,
@@ -181,13 +220,6 @@ pub enum BridgeEvent {
         error: Option<String>,
     },
     // Escape-hatch events
-    DbusCallReply {
-        id: u32,
-        ok: bool,
-        signature: Option<String>,
-        body: Option<String>,
-        error: Option<String>,
-    },
     DbusMatchStarted {
         id: u32,
         ok: bool,
@@ -200,26 +232,11 @@ pub enum BridgeEvent {
         interface: String,
         member: String,
         signature: String,
-        body: String,
+        body: serde_json::Value,
     },
     DbusMatchEnded {
         id: u32,
         error: Option<String>,
-    },
-    ProcessStarted {
-        id: u32,
-        ok: bool,
-        error: Option<String>,
-    },
-    ProcessOutput {
-        id: u32,
-        stream: String,
-        data_b64: String,
-    },
-    ProcessExited {
-        id: u32,
-        code: Option<i32>,
-        signal: Option<i32>,
     },
 }
 
@@ -290,17 +307,31 @@ impl SnapshotCache {
 }
 
 pub fn reply_ok(send: &SendEvent, id: u32) {
-    send(BridgeEvent::ActionReply {
+    send(BridgeEvent::RpcReply {
         id,
         ok: true,
+        data: None,
         error: None,
     });
 }
 
+pub fn reply_data(send: &SendEvent, id: u32, data: impl Serialize) {
+    match serde_json::to_value(data) {
+        Ok(val) => send(BridgeEvent::RpcReply {
+            id,
+            ok: true,
+            data: Some(val),
+            error: None,
+        }),
+        Err(err) => reply_err(send, id, err),
+    }
+}
+
 pub fn reply_err(send: &SendEvent, id: u32, err: impl ToString) {
-    send(BridgeEvent::ActionReply {
+    send(BridgeEvent::RpcReply {
         id,
         ok: false,
+        data: None,
         error: Some(err.to_string()),
     });
 }
@@ -326,13 +357,14 @@ mod tests {
             other => panic!("unexpected variant: {other:?}"),
         }
 
-        let ev = BridgeEvent::ActionReply {
+        let ev = BridgeEvent::RpcReply {
             id: 42,
             ok: true,
+            data: None,
             error: None,
         };
         let json = serde_json::to_value(&ev).unwrap();
-        assert_eq!(json["type"], "action_reply");
+        assert_eq!(json["type"], "rpc_reply");
         assert_eq!(json["id"], 42);
         assert_eq!(json["ok"], true);
     }
@@ -355,9 +387,10 @@ mod tests {
             focused_title: "term".into(),
             mode: "default".into(),
         });
-        cache.record(&BridgeEvent::ActionReply {
+        cache.record(&BridgeEvent::RpcReply {
             id: 1,
             ok: true,
+            data: None,
             error: None,
         });
 

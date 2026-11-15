@@ -232,12 +232,12 @@ test("Promise actions resolve and reject with standard Error instances", async (
   const p1 = api.audio.setVolume(3, 0.65);
   assert.ok(p1 instanceof Promise);
   assert.equal(sent[0].type, "audio_set_volume");
-  receive({ type: "action_reply", id: sent[0].id, ok: true, error: null });
+  receive({ type: "rpc_reply", id: sent[0].id, ok: true });
   await p1;
 
   const p2 = api.bluetooth.connect("/org/bluez/hci0/dev_1");
   receive({
-    type: "action_reply",
+    type: "rpc_reply",
     id: sent[1].id,
     ok: false,
     error: "Device not ready",
@@ -250,11 +250,10 @@ test("Promise actions resolve and reject with standard Error instances", async (
 
   const pMenu = api.tray.getMenu(":1.42", "/MenuBar");
   receive({
-    type: "tray_menu_reply",
+    type: "rpc_reply",
     id: sent[2].id,
     ok: true,
-    items: [{ id: 1, label: "Quit", enabled: true, visible: true, item_type: "standard", toggle_type: "", toggle_state: 0, children: [] }],
-    error: null,
+    data: [{ id: 1, label: "Quit", enabled: true, visible: true, item_type: "standard", toggle_type: "", toggle_state: 0, children: [] }],
   });
   const menu = await pMenu;
   assert.equal(menu[0].label, "Quit");
@@ -275,12 +274,10 @@ test("dbus and exec escape hatches follow Promise + Error contract", async () =>
     member: "Ping",
   });
   receive({
-    type: "dbus_call_reply",
+    type: "rpc_reply",
     id: sent[0].id,
     ok: true,
-    signature: "s",
-    body: JSON.stringify(["pong"]),
-    error: null,
+    data: { signature: "s", body: ["pong"] },
   });
   const res = await callP;
   assert.deepEqual(res, { signature: "s", body: ["pong"] });
@@ -301,7 +298,7 @@ test("dbus and exec escape hatches follow Promise + Error contract", async () =>
     interface: "org.example.Test",
     member: "Changed",
     signature: "u",
-    body: "[42]",
+    body: [42],
   });
   assert.equal(signals.length, 1);
   assert.deepEqual(signals[0].body, [42]);
@@ -309,32 +306,23 @@ test("dbus and exec escape hatches follow Promise + Error contract", async () =>
   assert.equal(sent[2].type, "dbus_unwatch");
   assert.equal(sent[2].id, sent[1].id);
 
-  // exec with base64 stdout/stderr
+  // exec
   const execP = api.exec(["echo", "hi"]);
-  receive({ type: "process_started", id: sent[3].id, ok: true, error: null });
   receive({
-    type: "process_output",
+    type: "rpc_reply",
     id: sent[3].id,
-    stream: "stdout",
-    data_b64: Buffer.from("hello ").toString("base64"),
+    ok: true,
+    data: {
+      code: 0,
+      signal: null,
+      stdout: "hello world\n",
+      stderr: "warn\n",
+    },
   });
-  receive({
-    type: "process_output",
-    id: sent[3].id,
-    stream: "stdout",
-    data_b64: Buffer.from("world\n").toString("base64"),
-  });
-  receive({
-    type: "process_output",
-    id: sent[3].id,
-    stream: "stderr",
-    data_b64: Buffer.from("warn\n").toString("base64"),
-  });
-  receive({ type: "process_exited", id: sent[3].id, code: 0, signal: null });
   const execRes = await execP;
   assert.deepEqual(execRes, {
     code: 0,
-    signal: undefined,
+    signal: null,
     stdout: "hello world\n",
     stderr: "warn\n",
   });

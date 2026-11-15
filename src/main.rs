@@ -456,18 +456,8 @@ fn create_bar_window(
             BridgeRequest::ClearNotifications => {
                 services.notifications.clear_all();
             }
-            BridgeRequest::ProcessSpawn {
-                id,
-                argv,
-                cwd,
-                env,
-                stdin,
-            } => services.processes.spawn(id, argv, cwd, env, stdin),
-            BridgeRequest::ProcessWrite { id, data_b64 } => {
-                services.processes.write_stdin(id, data_b64);
-            }
-            BridgeRequest::ProcessCloseStdin { id } => {
-                services.processes.close_stdin(id);
+            BridgeRequest::ProcessSpawn { id, argv, cwd, env } => {
+                services.processes.spawn(id, argv, cwd, env);
             }
             BridgeRequest::ProcessKill { id, signal } => {
                 services.processes.kill(id, signal);
@@ -532,8 +522,16 @@ fn create_bar_window(
                         } else {
                             let cairo_rects: Vec<cairo::RectangleInt> = rects
                                 .into_iter()
-                                .filter(|r| r.width > 0 && r.height > 0)
-                                .map(|r| cairo::RectangleInt::new(r.x, r.y, r.width, r.height))
+                                .map(|r| {
+                                    (
+                                        r.x.round() as i32,
+                                        r.y.round() as i32,
+                                        r.width.round() as i32,
+                                        r.height.round() as i32,
+                                    )
+                                })
+                                .filter(|&(_, _, w, h)| w > 0 && h > 0)
+                                .map(|(x, y, w, h)| cairo::RectangleInt::new(x, y, w, h))
                                 .collect();
                             let region = cairo::Region::create_rectangles(&cairo_rects);
                             surface.set_input_region(&region);

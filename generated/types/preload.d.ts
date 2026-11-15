@@ -1,15 +1,22 @@
 import type { AudioDevice } from "./generated/AudioDevice";
+import type { AudioState } from "./generated/AudioState";
+import type { BacklightState } from "./generated/BacklightState";
 import type { BluetoothAdapter } from "./generated/BluetoothAdapter";
 import type { BluetoothDevice } from "./generated/BluetoothDevice";
+import type { BluetoothState } from "./generated/BluetoothState";
 import type { Connectivity } from "./generated/Connectivity";
+import type { ExecResult } from "./generated/ExecResult";
+import type { InputRect } from "./generated/InputRect";
 import type { NetworkLink } from "./generated/NetworkLink";
+import type { NetworkState } from "./generated/NetworkState";
 import type { NotificationAction } from "./generated/NotificationAction";
 import type { NotificationItem } from "./generated/NotificationItem";
 import type { NotificationUrgency } from "./generated/NotificationUrgency";
+import type { SwayState } from "./generated/SwayState";
 import type { SwayWorkspace } from "./generated/SwayWorkspace";
 import type { TrayItem } from "./generated/TrayItem";
 import type { TrayMenuItem } from "./generated/TrayMenuItem";
-export type { AudioDevice, BluetoothAdapter, BluetoothDevice, Connectivity, NetworkLink, NotificationAction, NotificationItem, NotificationUrgency, SwayWorkspace, TrayItem, TrayMenuItem, };
+export type { AudioDevice, AudioState, BacklightState, BluetoothAdapter, BluetoothDevice, BluetoothState, Connectivity, ExecResult, InputRect, NetworkLink, NetworkState, NotificationAction, NotificationItem, NotificationUrgency, SwayState, SwayWorkspace, TrayItem, TrayMenuItem, };
 export type Store<T> = {
     get: () => T;
     subscribe: (listener: () => void) => () => void;
@@ -17,37 +24,6 @@ export type Store<T> = {
 };
 export type InternalStore<T> = Store<T> & {
     _update: (next: T) => void;
-};
-export type InputRect = {
-    x: number;
-    y: number;
-    width: number;
-    height: number;
-};
-export type SwayState = {
-    workspaces: SwayWorkspace[];
-    focused_title: string;
-    mode: string;
-};
-export type AudioState = {
-    available: boolean;
-    outputs: AudioDevice[];
-    inputs: AudioDevice[];
-};
-export type BluetoothState = {
-    available: boolean;
-    adapters: BluetoothAdapter[];
-    devices: BluetoothDevice[];
-};
-export type NetworkState = {
-    available: boolean;
-    connectivity: Connectivity;
-    link: NetworkLink;
-};
-export type BacklightState = {
-    available: boolean;
-    brightness: number | null;
-    error: string | null;
 };
 export type DbusCallOptions = {
     bus?: "session" | "system";
@@ -78,12 +54,6 @@ export type ExecOptions = {
     cwd?: string;
     env?: Record<string, string>;
     signal?: AbortSignal;
-};
-export type ExecResult = {
-    code?: number;
-    signal?: number;
-    stdout: string;
-    stderr: string;
 };
 export type WebbarApi = {
     readonly output: string;

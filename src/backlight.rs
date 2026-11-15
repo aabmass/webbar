@@ -228,8 +228,13 @@ pub fn spawn(send: SendEvent) -> BacklightController {
 }
 
 impl BacklightController {
-    pub fn set_brightness(&self, req_id: u32, percent: u8) {
-        let _ = self.tx.send((req_id, percent));
+    pub fn set_brightness(&self, req_id: u32, percent: f64) {
+        let clamped = if percent.is_nan() {
+            0
+        } else {
+            percent.round().clamp(0.0, 100.0) as u8
+        };
+        let _ = self.tx.send((req_id, clamped));
     }
 }
 
