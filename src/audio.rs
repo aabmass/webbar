@@ -19,7 +19,8 @@ use serde::Serialize;
 
 use crate::bridge::{reply_err, reply_ok, BridgeEvent, SendEvent};
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, ts_rs::TS)]
+#[ts(export, export_to = "../preload/src/generated/")]
 pub struct AudioDevice {
     pub id: u32,
     pub name: String,

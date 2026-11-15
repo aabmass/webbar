@@ -25,7 +25,8 @@ use zbus::zvariant::{OwnedObjectPath, OwnedValue, Value};
 
 use crate::bridge::{BridgeEvent, SendEvent};
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, ts_rs::TS)]
+#[ts(export, export_to = "../preload/src/generated/")]
 pub struct TrayItem {
     pub bus: String,
     pub path: String,
@@ -35,7 +36,8 @@ pub struct TrayItem {
     pub menu_path: String,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, ts_rs::TS)]
+#[ts(export, export_to = "../preload/src/generated/")]
 pub struct TrayMenuItem {
     pub id: i32,
     pub label: String,

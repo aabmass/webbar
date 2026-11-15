@@ -16,7 +16,8 @@ use crate::bridge::{BridgeEvent, SendEvent};
 
 const MAX_HISTORY: usize = 50;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, ts_rs::TS)]
+#[ts(export, export_to = "../preload/src/generated/")]
 #[serde(rename_all = "lowercase")]
 pub enum NotificationUrgency {
     Low,
@@ -24,13 +25,15 @@ pub enum NotificationUrgency {
     Critical,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, ts_rs::TS)]
+#[ts(export, export_to = "../preload/src/generated/")]
 pub struct NotificationAction {
     pub key: String,
     pub label: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, ts_rs::TS)]
+#[ts(export, export_to = "../preload/src/generated/")]
 pub struct NotificationItem {
     pub id: u32,
     pub app_name: String,

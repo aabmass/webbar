@@ -21,14 +21,16 @@ const PROPS_IFACE: &str = "org.freedesktop.DBus.Properties";
 type ManagedObjects = HashMap<OwnedObjectPath, HashMap<String, HashMap<String, OwnedValue>>>;
 type ObjectMap = HashMap<String, HashMap<String, HashMap<String, OwnedValue>>>;
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, ts_rs::TS)]
+#[ts(export, export_to = "../preload/src/generated/")]
 pub struct BluetoothAdapter {
     pub path: String,
     pub name: String,
     pub powered: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, ts_rs::TS)]
+#[ts(export, export_to = "../preload/src/generated/")]
 pub struct BluetoothDevice {
     pub path: String,
     pub name: String,

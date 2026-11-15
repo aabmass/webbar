@@ -1,5 +1,5 @@
 import { useCallback, useRef, useState, useSyncExternalStore } from "react";
-import type { TrayItem, TrayMenuItem } from "../global";
+import type { TrayItem, TrayMenuItem } from "@webbar/types";
 import { Popover } from "./Popover";
 
 function trayShortLabel(item: TrayItem): string {
@@ -153,7 +153,7 @@ export function Tray() {
   return (
     <div className="tray" role="list" aria-label="System tray">
       {items.map((item) => {
-        const key = item.id || `${item.bus}${item.path}`;
+        const key = `${item.bus}${item.path}`;
         return <TrayButton key={key} item={item} />;
       })}
     </div>

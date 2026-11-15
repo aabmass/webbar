@@ -6,7 +6,7 @@ import type {
   NotificationItem,
   SwayState,
   TrayItem,
-} from "./global";
+} from "@webbar/types";
 
 const { sway, tray, notifications, audio, bluetooth, network } = window.webbar;
 

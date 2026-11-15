@@ -212,6 +212,17 @@
               inherit cargoArtifacts;
               cargoClippyExtraArgs = "--all-targets";
             });
+            rust-ts-bindings = craneLib.cargoTest (commonArgs // {
+              inherit cargoArtifacts;
+              cargoTestExtraArgs = "export_bindings_";
+              preCheck = ''
+                export TS_RS_EXPORT_DIR="$PWD/target/ts-root/dummy"
+                mkdir -p "$TS_RS_EXPORT_DIR"
+              '';
+              postCheck = ''
+                diff -ru ${./preload/src/generated} "$PWD/target/ts-root/preload/src/generated"
+              '';
+            });
             preload-test = preloadPkg;
             web-ui = webUi;
             ags-bar-ui = agsBarUi;

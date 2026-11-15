@@ -1,5 +1,5 @@
 import { useMemo, useSyncExternalStore } from "react";
-import type { SwayWorkspace } from "../global";
+import type { SwayWorkspace } from "@webbar/types";
 
 type WorkspaceSlot = {
   row: 1 | 2;

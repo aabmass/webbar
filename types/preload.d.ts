@@ -1,3 +1,15 @@
+import type { AudioDevice } from "./generated/AudioDevice";
+import type { BluetoothAdapter } from "./generated/BluetoothAdapter";
+import type { BluetoothDevice } from "./generated/BluetoothDevice";
+import type { Connectivity } from "./generated/Connectivity";
+import type { NetworkLink } from "./generated/NetworkLink";
+import type { NotificationAction } from "./generated/NotificationAction";
+import type { NotificationItem } from "./generated/NotificationItem";
+import type { NotificationUrgency } from "./generated/NotificationUrgency";
+import type { SwayWorkspace } from "./generated/SwayWorkspace";
+import type { TrayItem } from "./generated/TrayItem";
+import type { TrayMenuItem } from "./generated/TrayMenuItem";
+export type { AudioDevice, BluetoothAdapter, BluetoothDevice, Connectivity, NetworkLink, NotificationAction, NotificationItem, NotificationUrgency, SwayWorkspace, TrayItem, TrayMenuItem, };
 export type Store<T> = {
     get: () => T;
     subscribe: (listener: () => void) => () => void;
@@ -12,98 +24,20 @@ export type InputRect = {
     width: number;
     height: number;
 };
-export type SwayWorkspace = {
-    id?: number;
-    num: number;
-    name: string;
-    output: string;
-    focused: boolean;
-    visible: boolean;
-    urgent: boolean;
-};
 export type SwayState = {
     workspaces: SwayWorkspace[];
     focused_title: string;
     mode: string;
-};
-export type TrayItem = {
-    id?: string;
-    bus: string;
-    path: string;
-    title: string;
-    icon_name: string;
-    icon_url?: string;
-    menu_path?: string;
-};
-export type TrayMenuItem = {
-    id: number;
-    label: string;
-    enabled: boolean;
-    visible: boolean;
-    item_type: string;
-    toggle_type: string;
-    toggle_state: number;
-    children: TrayMenuItem[];
-};
-export type NotificationUrgency = "low" | "normal" | "critical";
-export type NotificationAction = {
-    key: string;
-    label: string;
-};
-export type NotificationItem = {
-    id: number;
-    app_name: string;
-    icon: string;
-    summary: string;
-    body: string;
-    urgency: NotificationUrgency;
-    actions: NotificationAction[];
-};
-export type AudioDevice = {
-    id: number;
-    name: string;
-    description: string;
-    volume: number;
-    muted: boolean;
-    default: boolean;
 };
 export type AudioState = {
     available: boolean;
     outputs: AudioDevice[];
     inputs: AudioDevice[];
 };
-export type BluetoothAdapter = {
-    path: string;
-    name: string;
-    powered: boolean;
-};
-export type BluetoothDevice = {
-    path: string;
-    name: string;
-    address: string;
-    paired: boolean;
-    connected: boolean;
-    battery?: number | null;
-};
 export type BluetoothState = {
     available: boolean;
     adapters: BluetoothAdapter[];
     devices: BluetoothDevice[];
-};
-export type Connectivity = "unknown" | "none" | "portal" | "limited" | "full";
-export type NetworkLink = {
-    kind: "wifi";
-    name: string;
-    ssid: string;
-    strength: number;
-} | {
-    kind: "wired";
-    name: string;
-} | {
-    kind: "other";
-    name: string;
-} | {
-    kind: "none";
 };
 export type NetworkState = {
     available: boolean;

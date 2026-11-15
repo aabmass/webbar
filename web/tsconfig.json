@@ -5,7 +5,10 @@
     "moduleResolution": "bundler",
     "strict": true,
     "skipLibCheck": true,
-    "noEmit": true
+    "noEmit": true,
+    "paths": {
+      "@webbar/types": ["../types/preload.d.ts"]
+    }
   },
-  "include": ["src"]
+  "include": ["src", "../types/index.d.ts"]
 }

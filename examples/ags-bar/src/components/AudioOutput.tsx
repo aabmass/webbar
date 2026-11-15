@@ -1,5 +1,5 @@
 import { useCallback, useRef, useState, useSyncExternalStore } from "react";
-import type { AudioDevice } from "../global";
+import type { AudioDevice } from "@webbar/types";
 import { SpeakerIcon } from "./Icons";
 import { Popover } from "./Popover";
 

@@ -16,7 +16,7 @@ export function App() {
           <span className="empty">No tray items</span>
         ) : (
           trayItems.map((item) => {
-            const key = item.id || `${item.bus}${item.path}`;
+            const key = `${item.bus}${item.path}`;
             return (
               <button
                 key={key}

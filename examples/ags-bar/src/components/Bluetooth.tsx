@@ -1,5 +1,5 @@
 import { useCallback, useRef, useState, useSyncExternalStore } from "react";
-import type { BluetoothDevice } from "../global";
+import type { BluetoothDevice } from "@webbar/types";
 import { BluetoothIcon } from "./Icons";
 import { Popover } from "./Popover";
 

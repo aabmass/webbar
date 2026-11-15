@@ -17,7 +17,8 @@ const ACTIVE_CONN_IFACE: &str = "org.freedesktop.NetworkManager.Connection.Activ
 const AP_IFACE: &str = "org.freedesktop.NetworkManager.AccessPoint";
 const PROPS_IFACE: &str = "org.freedesktop.DBus.Properties";
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, ts_rs::TS)]
+#[ts(export, export_to = "../preload/src/generated/")]
 #[serde(rename_all = "lowercase")]
 pub enum Connectivity {
     Unknown,
@@ -27,7 +28,8 @@ pub enum Connectivity {
     Full,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, ts_rs::TS)]
+#[ts(export, export_to = "../preload/src/generated/")]
 #[serde(tag = "kind", rename_all = "lowercase")]
 pub enum NetworkLink {
     Wifi {

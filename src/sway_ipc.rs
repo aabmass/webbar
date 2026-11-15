@@ -21,9 +21,11 @@ const EVENT_WORKSPACE: u32 = 0x8000_0000;
 const EVENT_MODE: u32 = 0x8000_0002;
 const EVENT_WINDOW: u32 = 0x8000_0003;
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
+#[ts(export, export_to = "../preload/src/generated/")]
 pub struct SwayWorkspace {
     #[serde(default)]
+    #[ts(type = "number")]
     pub id: i64,
     #[serde(default)]
     pub num: i32,
