@@ -48,6 +48,7 @@ struct Config {
     source: Source,
     height: i32,
     overlay_height: Option<i32>,
+    replace: bool,
 }
 
 impl Config {
@@ -56,6 +57,7 @@ impl Config {
         let mut url: Option<String> = None;
         let mut height: i32 = DEFAULT_BAR_HEIGHT;
         let mut overlay_height: Option<i32> = None;
+        let mut replace = false;
         let mut args = std::env::args().skip(1);
         while let Some(arg) = args.next() {
             match arg.as_str() {
@@ -84,6 +86,7 @@ impl Config {
                         .ok_or("invalid --overlay-height (must be a positive integer)")?;
                     overlay_height = Some(parsed);
                 }
+                "--replace" => replace = true,
                 other => return Err(format!("unknown argument: {other}")),
             }
         }
@@ -96,6 +99,7 @@ impl Config {
             source,
             height,
             overlay_height,
+            replace,
         })
     }
 }
@@ -111,13 +115,19 @@ fn main() {
     let config = match Config::from_args() {
         Ok(c) => c,
         Err(err) => {
-            eprintln!("webbar: {err}\nUsage: webbar (--dir <path> | --url <url>) [--height <px>]");
+            eprintln!("webbar: {err}\nUsage: webbar (--dir <path> | --url <url>) [--height <px>] [--overlay-height <px>] [--replace]");
             std::process::exit(1);
         }
     };
 
+    let mut flags = gio::ApplicationFlags::ALLOW_REPLACEMENT;
+    if config.replace {
+        flags |= gio::ApplicationFlags::REPLACE;
+    }
+
     let app = Application::builder()
         .application_id("dev.local.webbar")
+        .flags(flags)
         .build();
 
     app.connect_activate(move |app| activate(app, &config));
