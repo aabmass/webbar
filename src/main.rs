@@ -57,6 +57,7 @@ struct Config {
     height: i32,
     overlay_height: Option<i32>,
     replace: bool,
+    devtools: bool,
 }
 
 impl Config {
@@ -70,6 +71,7 @@ impl Config {
         let mut height: i32 = DEFAULT_BAR_HEIGHT;
         let mut overlay_height: Option<i32> = None;
         let mut replace = false;
+        let mut devtools = false;
         let mut args = args.into_iter();
         while let Some(arg) = args.next() {
             match arg.as_str() {
@@ -99,6 +101,7 @@ impl Config {
                     overlay_height = Some(parsed);
                 }
                 "--replace" => replace = true,
+                "--devtools" => devtools = true,
                 other => return Err(format!("unknown argument: {other}")),
             }
         }
@@ -112,6 +115,7 @@ impl Config {
             height,
             overlay_height,
             replace,
+            devtools,
         })
     }
 
@@ -139,7 +143,7 @@ fn main() {
     let config = match Config::from_args() {
         Ok(c) => c,
         Err(err) => {
-            eprintln!("webbar: {err}\nUsage: webbar (--dir <path> | --url <url>) [--height <px>] [--overlay-height <px>] [--replace]");
+            eprintln!("webbar: {err}\nUsage: webbar (--dir <path> | --url <url>) [--height <px>] [--overlay-height <px>] [--replace] [--devtools]");
             std::process::exit(1);
         }
     };
@@ -274,6 +278,29 @@ fn activate(app: &Application, config: &Config) {
     monitors.connect_items_changed(move |_, _, _, _| {
         sync_monitors();
     });
+
+    let devtools_action = gio::SimpleAction::new("devtools", None);
+    devtools_action.connect_activate(|_, _| {
+        open_devtools_first();
+    });
+    app.add_action(&devtools_action);
+}
+
+fn open_devtools(web_view: &WebView) {
+    if let Some(inspector) = web_view.inspector() {
+        inspector.show();
+        inspector.detach();
+    }
+}
+
+fn open_devtools_first() {
+    WEB_VIEWS.with(|cell| {
+        let mut views = cell.borrow_mut();
+        views.retain(|weak| weak.upgrade().is_some());
+        if let Some(view) = views.first().and_then(|weak| weak.upgrade()) {
+            open_devtools(&view);
+        }
+    });
 }
 
 fn register_webbar_scheme(dir: PathBuf) {
@@ -382,9 +409,37 @@ fn create_bar_window(
     ));
 
     let web_view = WebView::builder().user_content_manager(&ucm).build();
+    if let Some(settings) = WebViewExt::settings(&web_view) {
+        settings.set_enable_developer_extras(true);
+    }
+    if let Some(inspector) = web_view.inspector() {
+        inspector.connect_attach(|inspector| {
+            let inspector = inspector.clone();
+            glib::idle_add_local_once(move || {
+                inspector.detach();
+            });
+            false
+        });
+    }
     web_view.set_background_color(&RGBA::new(0.0, 0.0, 0.0, 0.0));
     web_view.set_vexpand(true);
     web_view.set_hexpand(true);
+
+    let key_controller = gtk4::EventControllerKey::new();
+    let web_view_weak = web_view.downgrade();
+    key_controller.connect_key_pressed(move |_, key, _, mods| {
+        let is_f12 = key == gdk::Key::F12;
+        let is_ctrl_shift_i = (key == gdk::Key::I || key == gdk::Key::i)
+            && mods.contains(gdk::ModifierType::CONTROL_MASK | gdk::ModifierType::SHIFT_MASK);
+        if is_f12 || is_ctrl_shift_i {
+            if let Some(view) = web_view_weak.upgrade() {
+                open_devtools(&view);
+            }
+            return glib::Propagation::Stop;
+        }
+        glib::Propagation::Proceed
+    });
+    web_view.add_controller(key_controller);
 
     WEB_VIEWS.with(|cell| {
         cell.borrow_mut().push(web_view.downgrade());
@@ -569,6 +624,9 @@ fn create_bar_window(
 
     window.set_child(Some(&web_view));
     window.present();
+    if config.devtools {
+        open_devtools(&web_view);
+    }
     window
 }
 
@@ -584,12 +642,19 @@ mod tests {
     fn defaults_allow_replacement_without_replace() {
         let cfg = parse(&["--dir", "/tmp/ui"]).unwrap();
         assert!(!cfg.replace);
+        assert!(!cfg.devtools);
         assert_eq!(cfg.height, DEFAULT_BAR_HEIGHT);
         assert_eq!(cfg.overlay_height, None);
         assert_eq!(
             cfg.application_flags(),
             gio::ApplicationFlags::ALLOW_REPLACEMENT
         );
+    }
+
+    #[test]
+    fn devtools_flag_enables_devtools() {
+        let cfg = parse(&["--dir", "/tmp/ui", "--devtools"]).unwrap();
+        assert!(cfg.devtools);
     }
 
     #[test]

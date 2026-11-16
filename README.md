@@ -69,6 +69,17 @@ nix run . -- --url http://localhost:5173 --height 86 --replace
 
 Edits to `examples/ags-bar/src/` will hot-reload in the bar, and `webbar` automatically replays the latest system snapshots on reload.
 
+### DevTools (WebKit Web Inspector)
+
+WebKitGTK includes a built-in Web Inspector (DOM, Console, Sources, Network, Storage). You can open it in a detached window in any of these ways:
+
+- **Sway keybinding** (works even when the bar does not have keyboard focus):
+  ```sway
+  bindsym $mod+Shift+i exec gapplication action dev.local.webbar devtools
+  ```
+- **On startup:** pass `--devtools` to `webbar`.
+- **When the bar has keyboard focus** (e.g. while an overlay is open): press `F12` or `Ctrl+Shift+I`, or right-click the bar and choose **Inspect Element**.
+
 > **Note:** Only one daemon can own `org.freedesktop.Notifications` or `org.kde.StatusNotifierWatcher` on your session D-Bus at a time. If another bar or notification daemon (`waybar`, `mako`, `swaync`) is already running, `webbar` logs a warning and still runs, but notifications/tray items stay with the existing daemon until it is stopped.
 
 ## Testing & Checks
