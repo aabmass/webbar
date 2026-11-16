@@ -15,6 +15,7 @@ const DDC_PATH: &str = "/com/ddcutil/DdcutilObject";
 const DDC_IFACE: &str = "com.ddcutil.DdcutilInterface";
 const VCP_BRIGHTNESS: u8 = 0x10;
 const DISPLAY_NUMBER: i32 = 1;
+const DDC_FLAG_NO_VERIFY: u32 = 4;
 
 #[derive(Clone)]
 pub struct BacklightController {
@@ -117,8 +118,8 @@ pub fn spawn(send: SendEvent) -> BacklightController {
                 };
 
                 while let Some(Ok(msg)) = stream.next().await {
-                    if let Ok((_disp, _edid, vcp_code, new_val, _s1, _s2)) =
-                        msg.body().deserialize::<(i32, String, u8, u16, String, String)>()
+                    if let Ok((_disp, _edid, vcp_code, new_val, _s1, _s2, _flags)) =
+                        msg.body().deserialize::<(i32, String, u8, u16, String, String, u32)>()
                     {
                         if vcp_code == VCP_BRIGHTNESS {
                             let max = *max_vcp.lock().unwrap();
@@ -179,7 +180,7 @@ pub fn spawn(send: SendEvent) -> BacklightController {
                     DDC_PATH,
                     Some(DDC_IFACE),
                     "SetVcp",
-                    &(DISPLAY_NUMBER, "", VCP_BRIGHTNESS, value, 0u32),
+                    &(DISPLAY_NUMBER, "", VCP_BRIGHTNESS, value, DDC_FLAG_NO_VERIFY),
                 );
 
                 match result {
