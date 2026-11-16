@@ -82,6 +82,16 @@ export type ExecOptions = {
   signal?: AbortSignal;
 };
 
+export type ExecStreamOptions = ExecOptions & {
+  onStdout?: (line: string) => void;
+  onStderr?: (line: string) => void;
+  onExit?: (result: { code: number | null; signal: number | null }) => void;
+};
+
+export type ExecStreamHandle = {
+  stop: () => void;
+};
+
 export type WebbarApi = {
   readonly output: string;
   sway: Store<SwayState> & {
@@ -124,6 +134,10 @@ export type WebbarApi = {
     ) => Promise<{ stop: () => void }>;
   };
   exec: (argv: string[], opts?: ExecOptions) => Promise<ExecResult>;
+  execStream: (
+    argv: string[],
+    opts?: ExecStreamOptions,
+  ) => Promise<ExecStreamHandle>;
 };
 
 function reconcile<T>(prev: T, next: T): T {
@@ -260,6 +274,17 @@ export function createWebbarBridge(
       resolveStart?: (val: { stop: () => void }) => void;
       rejectStart?: (err: Error) => void;
       onSignal: (sig: DbusSignalEvent) => void;
+      cleanup?: () => void;
+    }
+  >();
+  const processStreams = new Map<
+    number,
+    {
+      resolveStart?: (val: ExecStreamHandle) => void;
+      rejectStart?: (err: Error) => void;
+      onStdout?: (line: string) => void;
+      onStderr?: (line: string) => void;
+      onExit?: (result: { code: number | null; signal: number | null }) => void;
       cleanup?: () => void;
     }
   >();
@@ -460,6 +485,56 @@ export function createWebbarBridge(
         dbusWatches.delete(id);
         break;
       }
+      case "process_stream_started": {
+        const id = event.id as number;
+        const entry = processStreams.get(id);
+        if (!entry) return;
+        if (!event.ok) {
+          entry.cleanup?.();
+          processStreams.delete(id);
+          entry.rejectStart?.(
+            new Error(
+              (event.error as string | undefined) ?? "Failed to start process",
+            ),
+          );
+          return;
+        }
+        const resolveStart = entry.resolveStart;
+        entry.resolveStart = undefined;
+        entry.rejectStart = undefined;
+        resolveStart?.({
+          stop: () => {
+            if (!processStreams.has(id)) return;
+            entry.cleanup?.();
+            processStreams.delete(id);
+            send({ type: "process_kill", id, signal: 15 });
+          },
+        });
+        break;
+      }
+      case "process_stream_output": {
+        const entry = processStreams.get(event.id as number);
+        if (!entry) return;
+        const line = (event.line as string) ?? "";
+        if (event.stream === "stderr") {
+          entry.onStderr?.(line);
+        } else {
+          entry.onStdout?.(line);
+        }
+        break;
+      }
+      case "process_stream_ended": {
+        const id = event.id as number;
+        const entry = processStreams.get(id);
+        if (!entry) return;
+        entry.cleanup?.();
+        processStreams.delete(id);
+        entry.onExit?.({
+          code: typeof event.code === "number" ? event.code : null,
+          signal: typeof event.signal === "number" ? event.signal : null,
+        });
+        break;
+      }
     }
   }
 
@@ -585,6 +660,41 @@ export function createWebbarBridge(
           onAbort: (id) => send({ type: "process_kill", id, signal: 15 }),
         },
       ),
+    execStream: (argv: string[], opts?: ExecStreamOptions) => {
+      if (opts?.signal?.aborted) {
+        return Promise.reject(new DOMException("Aborted", "AbortError"));
+      }
+      const id = nextId++;
+      return new Promise((resolve, reject) => {
+        const onAbort = () => {
+          const entry = processStreams.get(id);
+          if (!entry) return;
+          entry.cleanup?.();
+          processStreams.delete(id);
+          send({ type: "process_kill", id, signal: 15 });
+          entry.rejectStart?.(new DOMException("Aborted", "AbortError"));
+        };
+        const cleanup = opts?.signal
+          ? () => opts.signal?.removeEventListener("abort", onAbort)
+          : undefined;
+        opts?.signal?.addEventListener("abort", onAbort, { once: true });
+        processStreams.set(id, {
+          resolveStart: resolve,
+          rejectStart: reject,
+          onStdout: opts?.onStdout,
+          onStderr: opts?.onStderr,
+          onExit: opts?.onExit,
+          cleanup,
+        });
+        send({
+          type: "process_stream_spawn",
+          id,
+          argv: [...argv],
+          cwd: opts?.cwd ?? null,
+          env: opts?.env ?? {},
+        });
+      });
+    },
   };
 
   return { api, receive, notifyOverlayChange: syncOverlay };

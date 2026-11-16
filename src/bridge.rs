@@ -167,10 +167,24 @@ pub enum BridgeRequest {
         #[serde(default)]
         env: HashMap<String, String>,
     },
+    ProcessStreamSpawn {
+        id: u32,
+        argv: Vec<String>,
+        cwd: Option<String>,
+        #[serde(default)]
+        env: HashMap<String, String>,
+    },
     ProcessKill {
         id: u32,
         signal: i32,
     },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ProcessOutputStream {
+    Stdout,
+    Stderr,
 }
 
 fn empty_array_json() -> serde_json::Value {
@@ -237,6 +251,21 @@ pub enum BridgeEvent {
     DbusMatchEnded {
         id: u32,
         error: Option<String>,
+    },
+    ProcessStreamStarted {
+        id: u32,
+        ok: bool,
+        error: Option<String>,
+    },
+    ProcessStreamOutput {
+        id: u32,
+        stream: ProcessOutputStream,
+        line: String,
+    },
+    ProcessStreamEnded {
+        id: u32,
+        code: Option<i32>,
+        signal: Option<i32>,
     },
 }
 

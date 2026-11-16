@@ -55,6 +55,17 @@ export type ExecOptions = {
     env?: Record<string, string>;
     signal?: AbortSignal;
 };
+export type ExecStreamOptions = ExecOptions & {
+    onStdout?: (line: string) => void;
+    onStderr?: (line: string) => void;
+    onExit?: (result: {
+        code: number | null;
+        signal: number | null;
+    }) => void;
+};
+export type ExecStreamHandle = {
+    stop: () => void;
+};
 export type WebbarApi = {
     readonly output: string;
     sway: Store<SwayState> & {
@@ -97,6 +108,7 @@ export type WebbarApi = {
         }>;
     };
     exec: (argv: string[], opts?: ExecOptions) => Promise<ExecResult>;
+    execStream: (argv: string[], opts?: ExecStreamOptions) => Promise<ExecStreamHandle>;
 };
 export declare function createStore<T>(initial: T): InternalStore<T>;
 export declare function createWebbarBridge(postMessage: (json: string) => void, output?: string, isNativeOverlayActive?: () => boolean): {

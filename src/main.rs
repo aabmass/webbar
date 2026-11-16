@@ -666,6 +666,9 @@ fn create_bar_window(
             BridgeRequest::ProcessSpawn { id, argv, cwd, env } => {
                 services.processes.spawn(id, argv, cwd, env);
             }
+            BridgeRequest::ProcessStreamSpawn { id, argv, cwd, env } => {
+                services.processes.spawn_stream(id, argv, cwd, env);
+            }
             BridgeRequest::ProcessKill { id, signal } => {
                 services.processes.kill(id, signal);
             }

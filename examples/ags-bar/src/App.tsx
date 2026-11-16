@@ -2,6 +2,7 @@ import { AudioOutput } from "./components/AudioOutput";
 import { Bluetooth } from "./components/Bluetooth";
 import { Clock } from "./components/Clock";
 import { MonitorBacklight } from "./components/MonitorBacklight";
+import { Stasis } from "./components/Stasis";
 import { Tray } from "./components/Tray";
 import { Workspaces } from "./components/Workspaces";
 
@@ -18,6 +19,7 @@ export function App() {
         </div>
 
         <div className="bar-end">
+          <Stasis />
           <AudioOutput />
           <MonitorBacklight />
           <Bluetooth />

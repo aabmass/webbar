@@ -422,3 +422,122 @@ button:focus-visible {
   padding-left: 8px;
   border-left: 1px solid #3c3c3c;
 }
+
+/* Stasis idle widget & popover */
+.stasis-btn {
+  gap: 6px;
+  padding: 0 10px;
+  font-size: 12px;
+}
+
+.stasis-btn.is-inhibited {
+  color: #f8e45c;
+}
+
+.stasis-btn.is-dimmed {
+  opacity: 0.55;
+}
+
+.stasis-label {
+  white-space: nowrap;
+}
+
+.stasis-popover {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 220px;
+}
+
+.stasis-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 2px 4px;
+}
+
+.stasis-title {
+  font-size: 13px;
+}
+
+.stasis-badge {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--surface-color);
+  color: var(--accent-green);
+}
+
+.stasis-badge.is-inhibited {
+  color: #f8e45c;
+}
+
+.stasis-badge.is-offline {
+  color: #9a9996;
+}
+
+.stasis-error {
+  font-size: 12px;
+  font-weight: 500;
+  color: #f66151;
+  background: rgba(224, 27, 36, 0.14);
+  border-radius: 6px;
+  padding: 6px 8px;
+}
+
+.stasis-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+}
+
+.stasis-action-btn {
+  height: 34px;
+  margin: 0;
+  padding: 0 10px;
+  font-size: 12px;
+}
+
+.stasis-action-btn.is-active {
+  background: #e5a50a;
+  color: #1c1c1c;
+}
+
+.stasis-action-btn:disabled,
+.stasis-profile-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.stasis-section-label {
+  font-size: 11px;
+  color: #9a9996;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 2px 4px 0;
+}
+
+.stasis-profile-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.stasis-profile-btn {
+  height: 32px;
+  margin: 0;
+  padding: 0 12px;
+  font-size: 13px;
+  justify-content: space-between;
+}
+
+.stasis-profile-btn.is-current {
+  background: var(--accent-color);
+  color: #1c1c1c;
+}
+
+.stasis-check {
+  font-size: 12px;
+}

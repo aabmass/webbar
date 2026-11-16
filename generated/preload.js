@@ -98,6 +98,7 @@
     let deactivateScheduled = false;
     const pending = /* @__PURE__ */ new Map();
     const dbusWatches = /* @__PURE__ */ new Map();
+    const processStreams = /* @__PURE__ */ new Map();
     function send(payload) {
       postMessage(JSON.stringify(payload));
     }
@@ -273,6 +274,56 @@
           dbusWatches.delete(id);
           break;
         }
+        case "process_stream_started": {
+          const id = event.id;
+          const entry = processStreams.get(id);
+          if (!entry) return;
+          if (!event.ok) {
+            entry.cleanup?.();
+            processStreams.delete(id);
+            entry.rejectStart?.(
+              new Error(
+                event.error ?? "Failed to start process"
+              )
+            );
+            return;
+          }
+          const resolveStart = entry.resolveStart;
+          entry.resolveStart = void 0;
+          entry.rejectStart = void 0;
+          resolveStart?.({
+            stop: () => {
+              if (!processStreams.has(id)) return;
+              entry.cleanup?.();
+              processStreams.delete(id);
+              send({ type: "process_kill", id, signal: 15 });
+            }
+          });
+          break;
+        }
+        case "process_stream_output": {
+          const entry = processStreams.get(event.id);
+          if (!entry) return;
+          const line = event.line ?? "";
+          if (event.stream === "stderr") {
+            entry.onStderr?.(line);
+          } else {
+            entry.onStdout?.(line);
+          }
+          break;
+        }
+        case "process_stream_ended": {
+          const id = event.id;
+          const entry = processStreams.get(id);
+          if (!entry) return;
+          entry.cleanup?.();
+          processStreams.delete(id);
+          entry.onExit?.({
+            code: typeof event.code === "number" ? event.code : null,
+            signal: typeof event.signal === "number" ? event.signal : null
+          });
+          break;
+        }
       }
     }
     const api2 = {
@@ -382,7 +433,40 @@
           signal: opts?.signal,
           onAbort: (id) => send({ type: "process_kill", id, signal: 15 })
         }
-      )
+      ),
+      execStream: (argv, opts) => {
+        if (opts?.signal?.aborted) {
+          return Promise.reject(new DOMException("Aborted", "AbortError"));
+        }
+        const id = nextId++;
+        return new Promise((resolve, reject) => {
+          const onAbort = () => {
+            const entry = processStreams.get(id);
+            if (!entry) return;
+            entry.cleanup?.();
+            processStreams.delete(id);
+            send({ type: "process_kill", id, signal: 15 });
+            entry.rejectStart?.(new DOMException("Aborted", "AbortError"));
+          };
+          const cleanup = opts?.signal ? () => opts.signal?.removeEventListener("abort", onAbort) : void 0;
+          opts?.signal?.addEventListener("abort", onAbort, { once: true });
+          processStreams.set(id, {
+            resolveStart: resolve,
+            rejectStart: reject,
+            onStdout: opts?.onStdout,
+            onStderr: opts?.onStderr,
+            onExit: opts?.onExit,
+            cleanup
+          });
+          send({
+            type: "process_stream_spawn",
+            id,
+            argv: [...argv],
+            cwd: opts?.cwd ?? null,
+            env: opts?.env ?? {}
+          });
+        });
+      }
     };
     return { api: api2, receive: receive2, notifyOverlayChange: syncOverlay };
   }

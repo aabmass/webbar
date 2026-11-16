@@ -1,17 +1,18 @@
 //! Child process bridge.
 //!
-//! NOTE: stdout/stderr are currently buffered in Rust until process exit because
-//! `WebbarApi.exec` returns a single `Promise<ExecResult>`. If streaming output
-//! is needed later, re-introduce chunked output events here.
+//! Supports both buffered one-shot execution (`spawn`) and line-delimited
+//! streaming execution (`spawn_stream`).
 
 use std::collections::HashMap;
-use std::io::Read;
+use std::io::{BufRead, BufReader, Read};
 use std::os::unix::process::ExitStatusExt;
 use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::thread;
 
-use crate::bridge::{reply_data, reply_err, ExecResult, SendEvent};
+use crate::bridge::{
+    reply_data, reply_err, BridgeEvent, ExecResult, ProcessOutputStream, SendEvent,
+};
 
 pub struct ProcessBridge {
     pids: Arc<Mutex<HashMap<u32, u32>>>,
@@ -41,18 +42,7 @@ impl ProcessBridge {
         let pids = self.pids.clone();
         let send = self.send.clone();
         thread::spawn(move || {
-            let mut cmd = Command::new(&argv[0]);
-            cmd.args(&argv[1..])
-                .stdout(Stdio::piped())
-                .stderr(Stdio::piped())
-                .stdin(Stdio::null());
-
-            if let Some(dir) = cwd {
-                cmd.current_dir(dir);
-            }
-            if !env.is_empty() {
-                cmd.envs(env);
-            }
+            let mut cmd = build_command(&argv, cwd, env);
 
             let mut child = match cmd.spawn() {
                 Ok(child) => child,
@@ -93,6 +83,72 @@ impl ProcessBridge {
         });
     }
 
+    pub fn spawn_stream(
+        &self,
+        id: u32,
+        argv: Vec<String>,
+        cwd: Option<String>,
+        env: HashMap<String, String>,
+    ) {
+        if argv.is_empty() {
+            (self.send)(BridgeEvent::ProcessStreamStarted {
+                id,
+                ok: false,
+                error: Some("argv must not be empty".to_string()),
+            });
+            return;
+        }
+
+        let pids = self.pids.clone();
+        let send = self.send.clone();
+        thread::spawn(move || {
+            let mut cmd = build_command(&argv, cwd, env);
+
+            let mut child = match cmd.spawn() {
+                Ok(child) => child,
+                Err(err) => {
+                    send(BridgeEvent::ProcessStreamStarted {
+                        id,
+                        ok: false,
+                        error: Some(err.to_string()),
+                    });
+                    return;
+                }
+            };
+
+            pids.lock().unwrap().insert(id, child.id());
+            send(BridgeEvent::ProcessStreamStarted {
+                id,
+                ok: true,
+                error: None,
+            });
+
+            let stdout_handle = child.stdout.take().map(|out| {
+                let send = send.clone();
+                thread::spawn(move || stream_lines(out, id, ProcessOutputStream::Stdout, &send))
+            });
+            let stderr_handle = child.stderr.take().map(|err| {
+                let send = send.clone();
+                thread::spawn(move || stream_lines(err, id, ProcessOutputStream::Stderr, &send))
+            });
+
+            if let Some(h) = stdout_handle {
+                let _ = h.join();
+            }
+            if let Some(h) = stderr_handle {
+                let _ = h.join();
+            }
+
+            let (code, signal) = match child.wait() {
+                Ok(status) => (status.code(), status.signal()),
+                Err(_) => (None, None),
+            };
+
+            pids.lock().unwrap().remove(&id);
+            send(BridgeEvent::ProcessStreamEnded { id, code, signal });
+        });
+    }
+
     pub fn kill(&self, id: u32, signal: i32) {
         let pid = self.pids.lock().unwrap().get(&id).copied();
         if let Some(pid) = pid {
@@ -102,6 +158,45 @@ impl ProcessBridge {
                 .stdout(Stdio::null())
                 .stderr(Stdio::null())
                 .status();
+        }
+    }
+}
+
+fn build_command(argv: &[String], cwd: Option<String>, env: HashMap<String, String>) -> Command {
+    let mut cmd = Command::new(&argv[0]);
+    cmd.args(&argv[1..])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .stdin(Stdio::null());
+
+    if let Some(dir) = cwd {
+        cmd.current_dir(dir);
+    }
+    if !env.is_empty() {
+        cmd.envs(env);
+    }
+    cmd
+}
+
+fn stream_lines<R: Read>(
+    reader: R,
+    id: u32,
+    stream: ProcessOutputStream,
+    send: &SendEvent,
+) {
+    let mut buf_reader = BufReader::new(reader);
+    let mut buf = Vec::new();
+    loop {
+        buf.clear();
+        match buf_reader.read_until(b'\n', &mut buf) {
+            Ok(0) | Err(_) => break,
+            Ok(_) => {
+                while matches!(buf.last(), Some(b'\n' | b'\r')) {
+                    buf.pop();
+                }
+                let line = String::from_utf8_lossy(&buf).into_owned();
+                send(BridgeEvent::ProcessStreamOutput { id, stream, line });
+            }
         }
     }
 }
@@ -184,6 +279,75 @@ mod tests {
                 ok: false,
                 error: Some(_),
                 ..
+            } => {}
+            other => panic!("unexpected event: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn streams_stdout_and_stderr_lines_until_exit() {
+        let (bridge, rx) = make_bridge();
+        bridge.spawn_stream(
+            10,
+            vec![
+                "sh".into(),
+                "-c".into(),
+                "printf 'line1\\nline2\\n'; printf 'err1\\n' >&2; exit 3".into(),
+            ],
+            None,
+            HashMap::new(),
+        );
+
+        let mut started = false;
+        let mut stdout_lines = Vec::new();
+        let mut stderr_lines = Vec::new();
+        let mut exit_code = None;
+
+        for _ in 0..10 {
+            let ev = rx.recv_timeout(Duration::from_secs(5)).unwrap();
+            match ev {
+                BridgeEvent::ProcessStreamStarted {
+                    id: 10,
+                    ok: true,
+                    error: None,
+                } => started = true,
+                BridgeEvent::ProcessStreamOutput {
+                    id: 10,
+                    stream: ProcessOutputStream::Stdout,
+                    line,
+                } => stdout_lines.push(line),
+                BridgeEvent::ProcessStreamOutput {
+                    id: 10,
+                    stream: ProcessOutputStream::Stderr,
+                    line,
+                } => stderr_lines.push(line),
+                BridgeEvent::ProcessStreamEnded {
+                    id: 10,
+                    code,
+                    signal: None,
+                } => {
+                    exit_code = code;
+                    break;
+                }
+                other => panic!("unexpected event: {other:?}"),
+            }
+        }
+
+        assert!(started);
+        assert_eq!(stdout_lines, vec!["line1", "line2"]);
+        assert_eq!(stderr_lines, vec!["err1"]);
+        assert_eq!(exit_code, Some(3));
+    }
+
+    #[test]
+    fn stream_reports_failure_for_empty_argv() {
+        let (bridge, rx) = make_bridge();
+        bridge.spawn_stream(11, Vec::new(), None, HashMap::new());
+        match rx.recv_timeout(Duration::from_secs(5)).unwrap() {
+            BridgeEvent::ProcessStreamStarted {
+                id: 11,
+                ok: false,
+                error: Some(_),
             } => {}
             other => panic!("unexpected event: {other:?}"),
         }

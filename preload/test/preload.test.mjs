@@ -477,3 +477,71 @@ test("overlay controller ref-counts acquireOverlay, coalesces switches, and trac
   await Promise.resolve();
   assert.deepEqual(sent[3], { type: "set_overlay", active: false });
 });
+
+test("execStream streams stdout/stderr lines, supports stop(), and handles AbortSignal", async () => {
+  const sent = [];
+  const { api, receive } = createWebbarBridge((json) => {
+    sent.push(JSON.parse(json));
+  });
+
+  const stdout = [];
+  const stderr = [];
+  let exited = null;
+
+  const streamP = api.execStream(["stasis", "watch"], {
+    onStdout: (line) => stdout.push(line),
+    onStderr: (line) => stderr.push(line),
+    onExit: (res) => {
+      exited = res;
+    },
+  });
+
+  assert.equal(sent[0].type, "process_stream_spawn");
+  assert.deepEqual(sent[0].argv, ["stasis", "watch"]);
+
+  receive({ type: "process_stream_started", id: sent[0].id, ok: true, error: null });
+  const handle = await streamP;
+
+  receive({
+    type: "process_stream_output",
+    id: sent[0].id,
+    stream: "stdout",
+    line: '{"state":"waiting"}',
+  });
+  receive({
+    type: "process_stream_output",
+    id: sent[0].id,
+    stream: "stderr",
+    line: "warn",
+  });
+  assert.deepEqual(stdout, ['{"state":"waiting"}']);
+  assert.deepEqual(stderr, ["warn"]);
+
+  handle.stop();
+  assert.deepEqual(sent[1], { type: "process_kill", id: sent[0].id, signal: 15 });
+  // Idempotent stop
+  handle.stop();
+  assert.equal(sent.length, 2);
+  assert.equal(exited, null);
+
+  // Natural exit
+  const ac = new AbortController();
+  let exit2 = null;
+  const stream2P = api.execStream(["echo", "ok"], {
+    signal: ac.signal,
+    onExit: (res) => {
+      exit2 = res;
+    },
+  });
+  receive({ type: "process_stream_started", id: sent[2].id, ok: true, error: null });
+  await stream2P;
+  receive({ type: "process_stream_ended", id: sent[2].id, code: 0, signal: null });
+  assert.deepEqual(exit2, { code: 0, signal: null });
+
+  // Abort before start resolves
+  const ac2 = new AbortController();
+  const stream3P = api.execStream(["sleep", "10"], { signal: ac2.signal });
+  ac2.abort();
+  await assert.rejects(stream3P, { name: "AbortError" });
+  assert.deepEqual(sent[4], { type: "process_kill", id: sent[3].id, signal: 15 });
+});

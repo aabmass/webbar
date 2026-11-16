@@ -82,3 +82,22 @@ export function BluetoothIcon() {
     </svg>
   );
 }
+
+export function IdleIcon({ inhibited }: { inhibited: boolean }) {
+  return (
+    <svg
+      width="16"
+      height="16"
+      viewBox="0 0 16 16"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.5"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M12.5 9.8A5.2 5.2 0 0 1 6.2 3.5a5.2 5.2 0 1 0 6.3 6.3z" />
+      {inhibited && <path d="M2.5 13.5l11-11" />}
+    </svg>
+  );
+}
