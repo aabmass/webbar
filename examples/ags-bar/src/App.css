@@ -487,13 +487,19 @@ button:focus-visible {
   padding: 6px 8px;
 }
 
-.stasis-actions {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 6px;
+.stasis-blame {
+  font-size: 12px;
+  font-weight: 500;
+  color: #deddda;
+  background: var(--surface-color);
+  border-radius: 6px;
+  padding: 6px 8px;
+  white-space: pre-wrap;
+  max-width: 240px;
 }
 
 .stasis-action-btn {
+  width: 100%;
   height: 34px;
   margin: 0;
   padding: 0 10px;

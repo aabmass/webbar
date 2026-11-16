@@ -40,6 +40,7 @@ function formatProfileLabel(profile: string): string {
 export function Stasis() {
   const [status, setStatus] = useState<StasisWatchState | null>(null);
   const [profiles, setProfiles] = useState<string[]>([DEFAULT_PROFILE]);
+  const [blame, setBlame] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [open, setOpen] = useState(false);
@@ -54,6 +55,18 @@ export function Stasis() {
       }
     } catch {
       // Keep existing profiles list if stasis is temporarily unavailable
+    }
+  }, []);
+
+  const refreshBlame = useCallback(async () => {
+    try {
+      const res = await window.webbar.exec(["stasis", "blame"]);
+      if (res.code === 0) {
+        const text = res.stdout.trim();
+        setBlame(text && text !== "No current blockers" ? text : null);
+      }
+    } catch {
+      setBlame(null);
     }
   }, []);
 
@@ -127,11 +140,18 @@ export function Stasis() {
     };
   }, [refreshProfiles]);
 
+  const activeProfile = status?.profile ?? DEFAULT_PROFILE;
+  const isPaused = Boolean(status?.paused || status?.manually_paused);
+
   useEffect(() => {
-    if (open) {
-      void refreshProfiles();
+    if (!open) return;
+    void refreshProfiles();
+    if (isPaused) {
+      void refreshBlame();
+    } else {
+      setBlame(null);
     }
-  }, [open, refreshProfiles]);
+  }, [open, isPaused, refreshProfiles, refreshBlame]);
 
   const runStasisCommand = useCallback(async (argv: string[]) => {
     setBusy(true);
@@ -152,15 +172,9 @@ export function Stasis() {
     }
   }, []);
 
-  const activeProfile = status?.profile ?? DEFAULT_PROFILE;
-  const isPaused = Boolean(status?.paused || status?.manually_paused);
-  const stateLabel = status
-    ? isPaused
-      ? status.manually_paused
-        ? "inhibited"
-        : "paused"
-      : status.state
-    : "offline";
+  const togglePause = useCallback(() => {
+    void runStasisCommand(["stasis", isPaused ? "resume" : "pause"]);
+  }, [isPaused, runStasisCommand]);
 
   const pillClass = [
     "bar-btn",
@@ -182,13 +196,13 @@ export function Stasis() {
           error
             ? `Stasis: ${error}`
             : status
-              ? `Stasis: ${formatProfileLabel(activeProfile)} (${stateLabel}) — click for controls, right-click to toggle inhibit`
+              ? `Idle: ${formatProfileLabel(activeProfile)}${isPaused ? " (paused)" : ""} — click for controls, right-click to ${isPaused ? "resume" : "pause"}`
               : "Stasis offline"
         }
         onClick={() => setOpen((prev) => !prev)}
         onContextMenu={(e) => {
           e.preventDefault();
-          void runStasisCommand(["stasis", "toggle-inhibit"]);
+          togglePause();
         }}
       >
         <IdleIcon inhibited={isPaused} />
@@ -200,41 +214,27 @@ export function Stasis() {
       <Popover open={open} onClose={close} anchorRef={btnRef} align="end">
         <div className="stasis-popover">
           <div className="stasis-header">
-            <span className="stasis-title">Stasis Idle</span>
-            <span
-              className={`stasis-badge${isPaused ? " is-inhibited" : ""}${!status ? " is-offline" : ""}`}
-            >
-              {stateLabel}
-            </span>
+            <span className="stasis-title">Idle</span>
+            {!status ? (
+              <span className="stasis-badge is-offline">offline</span>
+            ) : (
+              isPaused && (
+                <span className="stasis-badge is-inhibited">paused</span>
+              )
+            )}
           </div>
 
           {error && <div className="stasis-error">{error}</div>}
+          {blame && <div className="stasis-blame">{blame}</div>}
 
-          <div className="stasis-actions">
-            <button
-              type="button"
-              className={`bar-btn stasis-action-btn${status?.paused ? " is-active" : ""}`}
-              disabled={busy || !status}
-              onClick={() =>
-                void runStasisCommand([
-                  "stasis",
-                  status?.paused ? "resume" : "pause",
-                ])
-              }
-            >
-              {status?.paused ? "Resume" : "Pause"}
-            </button>
-            <button
-              type="button"
-              className={`bar-btn stasis-action-btn${status?.manually_paused ? " is-active" : ""}`}
-              disabled={busy || !status}
-              onClick={() =>
-                void runStasisCommand(["stasis", "toggle-inhibit"])
-              }
-            >
-              {status?.manually_paused ? "Uninhibit" : "Inhibit"}
-            </button>
-          </div>
+          <button
+            type="button"
+            className={`bar-btn stasis-action-btn${isPaused ? " is-active" : ""}`}
+            disabled={busy || !status}
+            onClick={togglePause}
+          >
+            {isPaused ? "Resume Idle" : "Pause Idle"}
+          </button>
 
           <div className="stasis-section-label">Profiles</div>
           <div className="stasis-profile-list">
