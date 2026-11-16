@@ -84,6 +84,7 @@ export type WebbarApi = {
     backlight: Store<BacklightState> & {
         set: (percent: number) => Promise<void>;
     };
+    acquireOverlay: () => () => void;
     setInputRegion: (rects: InputRect[]) => void;
     resetInputRegion: () => void;
     dbus: {
@@ -98,7 +99,8 @@ export type WebbarApi = {
     exec: (argv: string[], opts?: ExecOptions) => Promise<ExecResult>;
 };
 export declare function createStore<T>(initial: T): InternalStore<T>;
-export declare function createWebbarBridge(postMessage: (json: string) => void, output?: string): {
+export declare function createWebbarBridge(postMessage: (json: string) => void, output?: string, isNativeOverlayActive?: () => boolean): {
     api: WebbarApi;
     receive: (event: Record<string, unknown>) => void;
+    notifyOverlayChange: () => void;
 };

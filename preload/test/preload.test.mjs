@@ -430,3 +430,50 @@ test("stores preserve unchanged slice references and skip identical updates", ()
   assert.equal(api.sway.get().focused_title, "Firefox");
   assert.equal(Object.is(api.sway.get().workspaces, firstWorkspaces), true);
 });
+
+test("overlay controller ref-counts acquireOverlay, coalesces switches, and tracks native popovers", async () => {
+  const sent = [];
+  let nativePopoverOpen = false;
+  const { api, notifyOverlayChange } = createWebbarBridge(
+    (json) => {
+      sent.push(JSON.parse(json));
+    },
+    "DP-1",
+    () => nativePopoverOpen,
+  );
+
+  // Initial check when closed sends nothing
+  notifyOverlayChange();
+  assert.equal(sent.length, 0);
+
+  // Opening first popover activates overlay synchronously
+  const releaseA = api.acquireOverlay();
+  assert.deepEqual(sent, [{ type: "set_overlay", active: true }]);
+
+  // Synchronous handoff (e.g. StrictMode remount or 1-click popover switch)
+  // must not flicker set_overlay(false) -> set_overlay(true)
+  releaseA();
+  releaseA(); // idempotent double-release
+  const releaseB = api.acquireOverlay();
+  await Promise.resolve();
+  assert.deepEqual(sent, [{ type: "set_overlay", active: true }]);
+
+  // Releasing final explicit lease deactivates on microtask
+  releaseB();
+  assert.equal(sent.length, 1);
+  await Promise.resolve();
+  assert.deepEqual(sent, [
+    { type: "set_overlay", active: true },
+    { type: "set_overlay", active: false },
+  ]);
+
+  // Native [popover] toggle events also drive set_overlay without explicit leases
+  nativePopoverOpen = true;
+  notifyOverlayChange();
+  assert.deepEqual(sent[2], { type: "set_overlay", active: true });
+
+  nativePopoverOpen = false;
+  notifyOverlayChange();
+  await Promise.resolve();
+  assert.deepEqual(sent[3], { type: "set_overlay", active: false });
+});

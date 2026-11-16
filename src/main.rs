@@ -350,23 +350,138 @@ fn mime_for(rel: &str) -> &'static str {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum InputMode {
+    BarOnly,
+    Overlay,
+    CustomRects(Vec<(i32, i32, i32, i32)>),
+}
+
+#[derive(Debug, Clone)]
+struct WindowInputState {
+    bar_height: i32,
+    fixed_overlay_height: Option<i32>,
+    monitor_width: i32,
+    overlay_height: i32,
+    mode: InputMode,
+}
+
+impl WindowInputState {
+    fn new(
+        bar_height: i32,
+        fixed_overlay_height: Option<i32>,
+        monitor_width: i32,
+        monitor_height: i32,
+    ) -> Self {
+        let monitor_width = monitor_width.max(1);
+        let overlay_height = fixed_overlay_height
+            .unwrap_or(monitor_height)
+            .max(bar_height);
+        Self {
+            bar_height,
+            fixed_overlay_height,
+            monitor_width,
+            overlay_height,
+            mode: InputMode::BarOnly,
+        }
+    }
+
+    fn update_monitor_geometry(&mut self, monitor_width: i32, monitor_height: i32) -> i32 {
+        self.monitor_width = monitor_width.max(1);
+        self.overlay_height = self
+            .fixed_overlay_height
+            .unwrap_or(monitor_height)
+            .max(self.bar_height);
+        self.overlay_height
+    }
+
+    fn set_overlay(&mut self, active: bool) {
+        self.mode = if active {
+            InputMode::Overlay
+        } else {
+            InputMode::BarOnly
+        };
+    }
+
+    fn set_custom_rects(&mut self, rects: Vec<crate::bridge::InputRect>) {
+        let filtered: Vec<(i32, i32, i32, i32)> = rects
+            .into_iter()
+            .map(|r| {
+                (
+                    r.x.round() as i32,
+                    r.y.round() as i32,
+                    r.width.round() as i32,
+                    r.height.round() as i32,
+                )
+            })
+            .filter(|&(_, _, w, h)| w > 0 && h > 0)
+            .collect();
+        self.mode = if filtered.is_empty() {
+            InputMode::BarOnly
+        } else {
+            InputMode::CustomRects(filtered)
+        };
+    }
+
+    fn reset(&mut self) {
+        self.mode = InputMode::BarOnly;
+    }
+
+    fn keyboard_mode(&self) -> KeyboardMode {
+        match self.mode {
+            InputMode::BarOnly => KeyboardMode::None,
+            InputMode::Overlay => KeyboardMode::Exclusive,
+            InputMode::CustomRects(_) => KeyboardMode::OnDemand,
+        }
+    }
+
+    fn rect_tuples(&self) -> Vec<(i32, i32, i32, i32)> {
+        match &self.mode {
+            InputMode::BarOnly => vec![(0, 0, self.monitor_width, self.bar_height)],
+            InputMode::Overlay => vec![(0, 0, self.monitor_width, self.overlay_height)],
+            InputMode::CustomRects(rects) => rects.clone(),
+        }
+    }
+
+    fn cairo_region(&self) -> cairo::Region {
+        let rects: Vec<cairo::RectangleInt> = self
+            .rect_tuples()
+            .into_iter()
+            .map(|(x, y, w, h)| cairo::RectangleInt::new(x, y, w, h))
+            .collect();
+        cairo::Region::create_rectangles(&rects)
+    }
+}
+
+fn apply_window_input_state(win: &ApplicationWindow, state: &WindowInputState) {
+    let target_kb = state.keyboard_mode();
+    if win.keyboard_mode() != target_kb {
+        win.set_keyboard_mode(target_kb);
+    }
+    if let Some(surface) = win.surface() {
+        surface.set_input_region(&state.cairo_region());
+    }
+}
+
 fn create_bar_window(
     app: &Application,
     monitor: &Monitor,
     config: &Config,
     services: &Arc<HostServices>,
 ) -> ApplicationWindow {
-    let bar_height = config.height;
-    let overlay_height = config
-        .overlay_height
-        .unwrap_or_else(|| (monitor.geometry().height() / 2).max(bar_height))
-        .max(bar_height);
-    let monitor_width = monitor.geometry().width();
+    let geom = monitor.geometry();
+    let input_state = Rc::new(RefCell::new(WindowInputState::new(
+        config.height,
+        config.overlay_height,
+        geom.width(),
+        geom.height(),
+    )));
+    let initial_overlay_height = input_state.borrow().overlay_height;
 
     let window = ApplicationWindow::builder()
         .application(app)
         .title("webbar")
-        .default_height(overlay_height)
+        .default_height(initial_overlay_height)
         .build();
 
     window.init_layer_shell();
@@ -375,15 +490,43 @@ fn create_bar_window(
     window.set_anchor(Edge::Top, true);
     window.set_anchor(Edge::Left, true);
     window.set_anchor(Edge::Right, true);
-    window.set_exclusive_zone(bar_height);
-    window.connect_map(move |win| {
-        if let Some(surface) = win.surface() {
-            let rect = cairo::RectangleInt::new(0, 0, monitor_width, bar_height);
-            let region = cairo::Region::create_rectangle(&rect);
-            surface.set_input_region(&region);
-        }
-    });
+    window.set_exclusive_zone(config.height);
     window.set_keyboard_mode(KeyboardMode::None);
+
+    {
+        let input_state = input_state.clone();
+        window.connect_realize(move |win| {
+            if let Some(surface) = win.surface() {
+                surface.set_input_region(&input_state.borrow().cairo_region());
+                let input_state = input_state.clone();
+                surface.connect_layout(move |surface, _width, _height| {
+                    surface.set_input_region(&input_state.borrow().cairo_region());
+                });
+            }
+        });
+    }
+
+    {
+        let input_state = input_state.clone();
+        window.connect_map(move |win| {
+            apply_window_input_state(win, &input_state.borrow());
+        });
+    }
+
+    {
+        let input_state = input_state.clone();
+        let window_weak = window.downgrade();
+        monitor.connect_geometry_notify(move |mon| {
+            let g = mon.geometry();
+            let next_h = input_state
+                .borrow_mut()
+                .update_monitor_geometry(g.width(), g.height());
+            if let Some(win) = window_weak.upgrade() {
+                win.set_default_size(-1, next_h);
+                apply_window_input_state(&win, &input_state.borrow());
+            }
+        });
+    }
 
     let connector = monitor
         .connector()
@@ -447,8 +590,16 @@ fn create_bar_window(
 
     {
         let snapshots = services.snapshots.clone();
-        web_view.connect_load_changed(move |view, event| {
-            if event == LoadEvent::Finished {
+        let input_state = input_state.clone();
+        let window_weak = window.downgrade();
+        web_view.connect_load_changed(move |view, event| match event {
+            LoadEvent::Committed => {
+                input_state.borrow_mut().reset();
+                if let Some(win) = window_weak.upgrade() {
+                    apply_window_input_state(&win, &input_state.borrow());
+                }
+            }
+            LoadEvent::Finished => {
                 for state in snapshots.snapshot_all() {
                     if let Ok(json) = serde_json::to_string(&state) {
                         let script = format!(
@@ -464,6 +615,7 @@ fn create_bar_window(
                     }
                 }
             }
+            _ => {}
         });
     }
 
@@ -567,47 +719,15 @@ fn create_bar_window(
                 tray::menu_event(bus, menu_path, item_id);
             }
             BridgeRequest::SetInputRegion { rects } => {
+                input_state.borrow_mut().set_custom_rects(rects);
                 if let Some(win) = window_weak.upgrade() {
-                    if let Some(surface) = win.surface() {
-                        if rects.is_empty() {
-                            let rect = cairo::RectangleInt::new(0, 0, monitor_width, bar_height);
-                            let region = cairo::Region::create_rectangle(&rect);
-                            surface.set_input_region(&region);
-                            win.set_keyboard_mode(KeyboardMode::None);
-                        } else {
-                            let cairo_rects: Vec<cairo::RectangleInt> = rects
-                                .into_iter()
-                                .map(|r| {
-                                    (
-                                        r.x.round() as i32,
-                                        r.y.round() as i32,
-                                        r.width.round() as i32,
-                                        r.height.round() as i32,
-                                    )
-                                })
-                                .filter(|&(_, _, w, h)| w > 0 && h > 0)
-                                .map(|(x, y, w, h)| cairo::RectangleInt::new(x, y, w, h))
-                                .collect();
-                            let region = cairo::Region::create_rectangles(&cairo_rects);
-                            surface.set_input_region(&region);
-                            win.set_keyboard_mode(KeyboardMode::OnDemand);
-                        }
-                    }
+                    apply_window_input_state(&win, &input_state.borrow());
                 }
             }
             BridgeRequest::SetOverlay { active } => {
+                input_state.borrow_mut().set_overlay(active);
                 if let Some(win) = window_weak.upgrade() {
-                    let target_h = if active { overlay_height } else { bar_height };
-                    win.set_keyboard_mode(if active {
-                        KeyboardMode::OnDemand
-                    } else {
-                        KeyboardMode::None
-                    });
-                    if let Some(surface) = win.surface() {
-                        let rect = cairo::RectangleInt::new(0, 0, monitor_width, target_h);
-                        let region = cairo::Region::create_rectangle(&rect);
-                        surface.set_input_region(&region);
-                    }
+                    apply_window_input_state(&win, &input_state.borrow());
                 }
             }
         }
@@ -674,5 +794,71 @@ mod tests {
             .err()
             .expect("expected error");
         assert_eq!(err, "unknown argument: -b");
+    }
+
+    #[test]
+    fn window_input_state_transitions_and_resets_cleanly() {
+        let mut state = WindowInputState::new(86, None, 1920, 1080);
+        assert_eq!(state.overlay_height, 1080);
+        assert_eq!(state.keyboard_mode(), KeyboardMode::None);
+        assert_eq!(state.rect_tuples(), vec![(0, 0, 1920, 86)]);
+
+        // Activating overlay expands input to full monitor height with Exclusive keyboard focus
+        state.set_overlay(true);
+        assert_eq!(state.keyboard_mode(), KeyboardMode::Exclusive);
+        assert_eq!(state.rect_tuples(), vec![(0, 0, 1920, 1080)]);
+
+        // Monitor geometry changes update active overlay bounds unless fixed --overlay-height is set
+        let next_h = state.update_monitor_geometry(2560, 1440);
+        assert_eq!(next_h, 1440);
+        assert_eq!(state.rect_tuples(), vec![(0, 0, 2560, 1440)]);
+
+        // Page reload (reset) restores bar-only input and releases keyboard focus
+        state.reset();
+        assert_eq!(state.keyboard_mode(), KeyboardMode::None);
+        assert_eq!(state.rect_tuples(), vec![(0, 0, 2560, 86)]);
+
+        // Custom rects round floats, filter invalid dimensions, and fall back to BarOnly when empty
+        state.set_custom_rects(vec![
+            crate::bridge::InputRect {
+                x: 0.0,
+                y: 0.0,
+                width: 2560.0,
+                height: 86.0,
+            },
+            crate::bridge::InputRect {
+                x: 100.4,
+                y: 93.6,
+                width: 260.2,
+                height: 179.8,
+            },
+            crate::bridge::InputRect {
+                x: 10.0,
+                y: 10.0,
+                width: 0.0,
+                height: 50.0,
+            },
+        ]);
+        assert_eq!(state.keyboard_mode(), KeyboardMode::OnDemand);
+        assert_eq!(
+            state.rect_tuples(),
+            vec![(0, 0, 2560, 86), (100, 94, 260, 180)]
+        );
+
+        state.set_custom_rects(Vec::new());
+        assert_eq!(state.keyboard_mode(), KeyboardMode::None);
+        assert_eq!(state.rect_tuples(), vec![(0, 0, 2560, 86)]);
+    }
+
+    #[test]
+    fn window_input_state_respects_explicit_overlay_height() {
+        let mut state = WindowInputState::new(86, Some(500), 1920, 1080);
+        assert_eq!(state.overlay_height, 500);
+        state.set_overlay(true);
+        assert_eq!(state.rect_tuples(), vec![(0, 0, 1920, 500)]);
+
+        let next_h = state.update_monitor_geometry(3840, 2160);
+        assert_eq!(next_h, 500);
+        assert_eq!(state.rect_tuples(), vec![(0, 0, 3840, 500)]);
     }
 }

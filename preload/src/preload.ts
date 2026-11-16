@@ -111,6 +111,7 @@ export type WebbarApi = {
   backlight: Store<BacklightState> & {
     set: (percent: number) => Promise<void>;
   };
+  acquireOverlay: () => () => void;
   setInputRegion: (rects: InputRect[]) => void;
   resetInputRegion: () => void;
   dbus: {
@@ -235,11 +236,16 @@ function storeView<T, E extends Record<string, unknown>>(
 export function createWebbarBridge(
   postMessage: (json: string) => void,
   output = "",
+  isNativeOverlayActive: () => boolean = () => false,
 ): {
   api: WebbarApi;
   receive: (event: Record<string, unknown>) => void;
+  notifyOverlayChange: () => void;
 } {
   let nextId = 1;
+  let explicitOverlayCount = 0;
+  let sentOverlayActive = false;
+  let deactivateScheduled = false;
   const pending = new Map<
     number,
     {
@@ -260,6 +266,35 @@ export function createWebbarBridge(
 
   function send(payload: Record<string, unknown>): void {
     postMessage(JSON.stringify(payload));
+  }
+
+  function computeOverlayActive(): boolean {
+    return explicitOverlayCount > 0 || isNativeOverlayActive();
+  }
+
+  function syncOverlay(): void {
+    if (computeOverlayActive()) {
+      deactivateScheduled = false;
+      if (!sentOverlayActive) {
+        sentOverlayActive = true;
+        send({ type: "set_overlay", active: true });
+      }
+      return;
+    }
+
+    if (!sentOverlayActive || deactivateScheduled) {
+      return;
+    }
+
+    deactivateScheduled = true;
+    queueMicrotask(() => {
+      if (!deactivateScheduled) return;
+      deactivateScheduled = false;
+      if (!computeOverlayActive() && sentOverlayActive) {
+        sentOverlayActive = false;
+        send({ type: "set_overlay", active: false });
+      }
+    });
   }
 
   function rpc<T = void>(
@@ -474,6 +509,17 @@ export function createWebbarBridge(
     backlight: storeView(stores.backlight, {
       set: (percent: number) => rpc("backlight_set", { percent }),
     }),
+    acquireOverlay: () => {
+      explicitOverlayCount += 1;
+      syncOverlay();
+      let released = false;
+      return () => {
+        if (released) return;
+        released = true;
+        explicitOverlayCount = Math.max(0, explicitOverlayCount - 1);
+        syncOverlay();
+      };
+    },
     setInputRegion: (rects: InputRect[]) =>
       send({ type: "set_input_region", rects }),
     resetInputRegion: () => send({ type: "set_input_region", rects: [] }),
@@ -541,5 +587,5 @@ export function createWebbarBridge(
       ),
   };
 
-  return { api, receive };
+  return { api, receive, notifyOverlayChange: syncOverlay };
 }

@@ -229,20 +229,20 @@ button:focus-visible {
 }
 
 /* Overlay popovers */
-.popover-backdrop {
-  position: fixed;
-  inset: 0;
-  background: transparent;
-  z-index: 100;
-}
-
 .popover-panel {
   position: fixed;
+  inset: auto;
+  margin: 0;
   background: var(--theme-bg-color);
+  color: var(--theme-fg-color);
   border: 1px solid #3c3c3c;
   border-radius: 12px;
   padding: 10px;
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+}
+
+.popover-panel::backdrop {
+  background: transparent;
 }
 
 .popover-slider-row {
