@@ -17,11 +17,14 @@ use gtk4::glib;
 use gtk4::prelude::*;
 use gtk4::{IconLookupFlags, IconTheme, TextDirection};
 use serde::Serialize;
+use futures_util::StreamExt;
 use zbus::blocking::connection::Builder as ConnectionBuilder;
 use zbus::blocking::Connection;
 use zbus::interface;
 use zbus::message::Header;
+use zbus::object_server::SignalEmitter;
 use zbus::zvariant::{OwnedObjectPath, OwnedValue, Value};
+use zbus::{MatchRule, MessageStream};
 
 use crate::bridge::{BridgeEvent, SendEvent};
 
@@ -76,6 +79,26 @@ impl TrayStore {
         let snapshot = guard.clone();
         drop(guard);
         (self.send)(BridgeEvent::Tray { items: snapshot });
+    }
+
+    fn remove_by_bus(&self, bus: &str) -> Vec<String> {
+        let mut guard = self.items.lock().unwrap();
+        let mut removed = Vec::new();
+        guard.retain(|item| {
+            if item.bus == bus {
+                removed.push(format!("{}{}", item.bus, item.path));
+                false
+            } else {
+                true
+            }
+        });
+        if removed.is_empty() {
+            return removed;
+        }
+        let snapshot = guard.clone();
+        drop(guard);
+        (self.send)(BridgeEvent::Tray { items: snapshot });
+        removed
     }
 
     fn registered_items(&self) -> Vec<String> {
@@ -139,6 +162,12 @@ impl StatusNotifierWatcher {
     fn protocol_version(&self) -> i32 {
         0
     }
+
+    #[zbus(signal)]
+    async fn status_notifier_item_unregistered(
+        emitter: &SignalEmitter<'_>,
+        service: &str,
+    ) -> zbus::Result<()>;
 }
 
 fn fetch_item_properties(bus: &str, path: &str) -> (String, String, String, String) {
@@ -289,25 +318,78 @@ fn lookup_theme_icon_data_url(icon_name: &str, icon_theme_path: &str) -> Option<
     rx.recv().ok().flatten()
 }
 
+fn handle_name_owner_changed(store: &TrayStore, name: &str, new_owner: &str) -> Vec<String> {
+    if !new_owner.is_empty() {
+        return Vec::new();
+    }
+    store.remove_by_bus(name)
+}
+
 pub fn spawn_server(send: SendEvent) {
     thread::spawn(move || {
+        let store = TrayStore::new(send);
         let watcher = StatusNotifierWatcher {
-            store: TrayStore::new(send),
+            store: store.clone(),
         };
-        match ConnectionBuilder::session()
+        let conn = match ConnectionBuilder::session()
             .and_then(|b| b.name("org.kde.StatusNotifierWatcher"))
             .and_then(|b| b.serve_at("/StatusNotifierWatcher", watcher))
             .and_then(|b| b.build())
         {
-            Ok(_conn) => loop {
-                thread::park();
-            },
+            Ok(conn) => conn,
             Err(err) => {
                 eprintln!(
                     "webbar: could not claim org.kde.StatusNotifierWatcher ({err}). \
                      Another StatusNotifierWatcher may already be running."
                 );
+                return;
             }
+        };
+
+        let Ok(rule) = MatchRule::builder()
+            .msg_type(zbus::message::Type::Signal)
+            .sender("org.freedesktop.DBus")
+            .and_then(|b| b.path("/org/freedesktop/DBus"))
+            .and_then(|b| b.interface("org.freedesktop.DBus"))
+            .and_then(|b| b.member("NameOwnerChanged"))
+            .map(|b| b.build())
+        else {
+            loop {
+                thread::park();
+            }
+        };
+
+        async_io::block_on(async {
+            let Ok(mut stream) = MessageStream::for_match_rule(rule, conn.inner(), Some(64)).await
+            else {
+                return;
+            };
+
+            while let Some(Ok(msg)) = stream.next().await {
+                if let Ok((name, _old_owner, new_owner)) =
+                    msg.body().deserialize::<(String, String, String)>()
+                {
+                    let removed = handle_name_owner_changed(&store, &name, &new_owner);
+                    if !removed.is_empty() {
+                        if let Ok(iface) = conn
+                            .object_server()
+                            .interface::<_, StatusNotifierWatcher>("/StatusNotifierWatcher")
+                        {
+                            for service in removed {
+                                let _ = StatusNotifierWatcher::status_notifier_item_unregistered(
+                                    iface.signal_emitter(),
+                                    &service,
+                                )
+                                .await;
+                            }
+                        }
+                    }
+                }
+            }
+        });
+
+        loop {
+            thread::park();
         }
     });
 }
@@ -473,5 +555,61 @@ mod tests {
         assert_eq!(parsed.children[0].id, 65536);
         assert_eq!(parsed.children[0].label, "Turn Bluetooth Off");
         assert!(parsed.children[0].enabled);
+    }
+
+    #[test]
+    fn removes_tray_items_when_registered_bus_loses_owner() {
+        let events: Arc<Mutex<Vec<BridgeEvent>>> = Arc::new(Mutex::new(Vec::new()));
+        let events_clone = events.clone();
+        let send: SendEvent = Arc::new(move |ev| {
+            events_clone.lock().unwrap().push(ev);
+        });
+        let store = TrayStore::new(send);
+
+        store.upsert(TrayItem {
+            bus: ":1.42".to_string(),
+            path: "/StatusNotifierItem".to_string(),
+            title: "Stasis".to_string(),
+            icon_name: "stasis".to_string(),
+            icon_url: String::new(),
+            menu_path: "/MenuBar".to_string(),
+        });
+        store.upsert(TrayItem {
+            bus: ":1.99".to_string(),
+            path: "/org/ayatana/NotificationItem/foo/Menu".to_string(),
+            title: "Other".to_string(),
+            icon_name: "other".to_string(),
+            icon_url: String::new(),
+            menu_path: String::new(),
+        });
+        assert_eq!(events.lock().unwrap().len(), 2);
+
+        // Non-empty new_owner (ownership acquired or transferred) must not remove items.
+        assert!(handle_name_owner_changed(&store, ":1.42", ":1.100").is_empty());
+        assert_eq!(store.registered_items().len(), 2);
+        assert_eq!(events.lock().unwrap().len(), 2);
+
+        // Empty new_owner means the bus disconnected/exited.
+        let removed = handle_name_owner_changed(&store, ":1.42", "");
+        assert_eq!(removed, vec![":1.42/StatusNotifierItem".to_string()]);
+        assert_eq!(
+            store.registered_items(),
+            vec![":1.99/org/ayatana/NotificationItem/foo/Menu".to_string()]
+        );
+
+        let guard = events.lock().unwrap();
+        assert_eq!(guard.len(), 3);
+        match guard.last().unwrap() {
+            BridgeEvent::Tray { items } => {
+                assert_eq!(items.len(), 1);
+                assert_eq!(items[0].bus, ":1.99");
+            }
+            other => panic!("expected BridgeEvent::Tray, got {other:?}"),
+        }
+        drop(guard);
+
+        // Repeating for an unknown/already-removed bus is a no-op with no extra event.
+        assert!(handle_name_owner_changed(&store, ":1.42", "").is_empty());
+        assert_eq!(events.lock().unwrap().len(), 3);
     }
 }
