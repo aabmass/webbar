@@ -699,3 +699,18 @@ export function createWebbarBridge(
 
   return { api, receive, notifyOverlayChange: syncOverlay };
 }
+
+declare global {
+  interface Window {
+    webbar: WebbarApi;
+    __webbarOutput?: string;
+    __webbarReceive?: (event: Record<string, unknown>) => void;
+    webkit?: {
+      messageHandlers?: {
+        bridge?: {
+          postMessage: (msg: string) => void;
+        };
+      };
+    };
+  }
+}

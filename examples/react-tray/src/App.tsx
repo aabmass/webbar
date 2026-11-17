@@ -1,4 +1,5 @@
 import { useSyncExternalStore } from "react";
+import type { TrayItem } from "@webbar/types";
 import "./App.css";
 
 export function App() {

@@ -6,7 +6,7 @@
     "strict": true,
     "skipLibCheck": true,
     "declaration": true,
-    "declarationDir": "../generated/types",
+    "declarationDir": "./dist",
     "emitDeclarationOnly": true,
     "rootDir": "src"
   },

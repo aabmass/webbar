@@ -1,10 +1,24 @@
 {
-  "name": "webbar-preload",
+  "name": "@webbar/types",
   "version": "0.1.0",
-  "private": true,
+  "license": "MIT",
   "type": "module",
+  "types": "./src/preload.ts",
+  "exports": {
+    ".": {
+      "types": "./src/preload.ts",
+      "default": "./dist/preload.mjs"
+    },
+    "./global": {
+      "types": "./src/index.ts"
+    }
+  },
+  "files": [
+    "dist/",
+    "src/"
+  ],
   "scripts": {
-    "build": "esbuild src/index.ts --bundle --format=iife --outfile=../generated/preload.js && tsc --emitDeclarationOnly",
+    "build": "esbuild src/index.ts --bundle --format=iife --outfile=../generated/preload.js && esbuild src/preload.ts --bundle --format=esm --outfile=dist/preload.mjs && tsc --emitDeclarationOnly",
     "typecheck": "tsc --noEmit",
     "test": "esbuild src/preload.ts --bundle --format=esm --outfile=dist/preload.mjs && node --test test/preload.test.mjs"
   },

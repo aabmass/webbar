@@ -35,13 +35,11 @@ nix develop
 Requires `rustc`/`cargo`, `node`/`npm`, and system dev libraries for `gtk4`, `gtk4-layer-shell-0`, `webkitgtk-6.0`, and `libpulse`.
 
 ```bash
-# 1. Build the default bar UI (or examples/react-tray)
-cd web
+# 1. Install workspace dependencies and build the default bar UI (or examples/react-tray)
 npm install
-npm run build
+npm --workspace=web run build
 
 # 2. Build and run webbar
-cd ..
 cargo run -- --dir ./web/dist
 ```
 
@@ -97,18 +95,20 @@ Or run individual suites locally (or inside `nix develop`):
 cargo test
 cargo clippy --all-targets
 
-# Preload bridge build, typecheck, and contract tests
-cd preload && npm install && npm run build && npm run typecheck && npm test
+# Install workspace dependencies once at the repo root
+npm install
 
-# Frontend typecheck and production builds
-(cd web && npm run typecheck && npm run build)
-(cd examples/ags-bar && npm run typecheck && npm run build)
-(cd examples/react-tray && npm run typecheck && npm run build)
+# Preload bridge (@webbar/types) build, typecheck, and contract tests
+npm --workspace=@webbar/types run build && npm --workspace=@webbar/types test
+
+# Typecheck and build all workspaces (preload, web, examples/ags-bar, examples/react-tray)
+npm run --workspaces typecheck
+npm run --workspaces build
 ```
 
 ## Architecture & Credits
 
 - Rust payload types use `ts-rs` to generate `preload/src/generated/*.ts` (verified in sync by `nix flake check`).
-- `preload/src/preload.ts` and `preload/src/index.ts` compile to `generated/preload.js` and `generated/types/` (`@webbar/types`), providing `{ get, subscribe, onChange }` stores compatible with React's `useSyncExternalStore` and vanilla TypeScript, `window.webbar.output` per monitor, and `AbortSignal` cancellation on `exec` and `dbus.watch`.
+- `preload/` is packaged as the `@webbar/types` workspace (`preload/src/preload.ts` and `preload/src/index.ts`), compiling `generated/preload.js` and `preload/dist/` while providing `{ get, subscribe, onChange }` stores compatible with React's `useSyncExternalStore` and vanilla TypeScript, `window.webbar.output` per monitor, and `AbortSignal` cancellation on `exec` and `dbus.watch`.
 - System state (`sway`, `tray`, `notifications`, `audio`, `bluetooth`, `network`, `backlight`) is aggregated once in the Rust host and shared across all monitor WebViews.
 - [`src/dbus_json.rs`](src/dbus_json.rs) and [`src/tray.rs`](src/tray.rs) were originally inspired by [domicile](https://github.com/cprussin/domicile) (MIT License).

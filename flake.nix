@@ -10,135 +10,89 @@
     let
       systems = [ "x86_64-linux" "aarch64-linux" ];
       forAllSystems = f: nixpkgs.lib.genAttrs systems (system: f nixpkgs.legacyPackages.${system});
+      version = (builtins.fromTOML (builtins.readFile ./Cargo.toml)).package.version;
+
       mkSystemOutputs = pkgs:
         let
+          npmWorkspaceSrc = pkgs.lib.fileset.toSource {
+            root = ./.;
+            fileset = pkgs.lib.fileset.unions [
+              ./package.json
+              ./package-lock.json
+              ./preload
+              ./web
+              ./examples/ags-bar
+              ./examples/react-tray
+            ];
+          };
+
+          npmDeps = pkgs.importNpmLock {
+            npmRoot = npmWorkspaceSrc;
+          };
+
           preloadPkg = pkgs.buildNpmPackage {
             pname = "webbar-preload";
-            version = "0.1.0";
-            src = ./preload;
-
-            npmDepsHash = "sha256-oOTyHTzkOQl8TIzdx6o1QavKqTwWc0JsEG98jsXDiDI=";
+            inherit version npmDeps;
+            src = npmWorkspaceSrc;
+            npmConfigHook = pkgs.importNpmLock.npmConfigHook;
+            npmWorkspace = "preload";
 
             preBuild = ''
-              mkdir -p ../generated/types
+              mkdir -p generated
             '';
 
             doCheck = true;
             checkPhase = ''
               runHook preCheck
-              npm run typecheck
-              npm test
+              npm run --workspace=preload typecheck
+              npm --workspace=preload test
               runHook postCheck
             '';
 
             installPhase = ''
               runHook preInstall
               mkdir -p $out/generated/types
-              cp ../generated/preload.js $out/generated/
-              cp -r ../generated/types/* $out/generated/types/
+              cp generated/preload.js $out/generated/
+              cp -r preload/dist/* $out/generated/types/
               runHook postInstall
             '';
           };
 
-          webUi = pkgs.buildNpmPackage {
+          mkWorkspaceUi = { pname, workspace }:
+            pkgs.buildNpmPackage {
+              inherit pname version npmDeps;
+              src = npmWorkspaceSrc;
+              npmConfigHook = pkgs.importNpmLock.npmConfigHook;
+              npmWorkspace = workspace;
+
+              doCheck = true;
+              checkPhase = ''
+                runHook preCheck
+                npm run --workspace=${workspace} typecheck
+                runHook postCheck
+              '';
+
+              installPhase = ''
+                runHook preInstall
+                mkdir -p $out
+                cp -r ${workspace}/dist/* $out/
+                runHook postInstall
+              '';
+            };
+
+          webUi = mkWorkspaceUi {
             pname = "webbar-ui";
-            version = "0.1.0";
-            src = ./web;
-
-            npmDepsHash = "sha256-gEUedwYGL5Ps6sIqa+CZpLKIr3XC7FuQ3MiycIpl6QE=";
-
-            preBuild = ''
-              mkdir -p ../generated/types
-              cp -r ${preloadPkg}/generated/types/* ../generated/types/
-            '';
-
-            doCheck = true;
-            checkPhase = ''
-              runHook preCheck
-              npm run typecheck
-              runHook postCheck
-            '';
-
-            installPhase = ''
-              runHook preInstall
-              mkdir -p $out
-              cp -r dist/* $out/
-              runHook postInstall
-            '';
+            workspace = "web";
           };
 
-          agsBarUi = pkgs.buildNpmPackage {
+          agsBarUi = mkWorkspaceUi {
             pname = "webbar-ags-bar";
-            version = "0.1.0";
-            src = pkgs.lib.fileset.toSource {
-              root = ./.;
-              fileset = pkgs.lib.fileset.unions [
-                ./examples/ags-bar
-              ];
-            };
-            sourceRoot = "source/examples/ags-bar";
-
-            npmDeps = pkgs.fetchNpmDeps {
-              src = ./examples/ags-bar;
-              hash = "sha256-/uT+VOYzCz6VHu5o2Dvl+48gzjrwscME8Dcq3qIjTrU=";
-            };
-
-            postUnpack = ''
-              chmod u+w source
-              mkdir -p source/generated/types
-              cp -r ${preloadPkg}/generated/types/* source/generated/types/
-            '';
-
-            doCheck = true;
-            checkPhase = ''
-              runHook preCheck
-              npm run typecheck
-              runHook postCheck
-            '';
-
-            installPhase = ''
-              runHook preInstall
-              mkdir -p $out
-              cp -r dist/* $out/
-              runHook postInstall
-            '';
+            workspace = "examples/ags-bar";
           };
 
-          reactTrayUi = pkgs.buildNpmPackage {
+          reactTrayUi = mkWorkspaceUi {
             pname = "webbar-react-tray";
-            version = "0.1.0";
-            src = pkgs.lib.fileset.toSource {
-              root = ./.;
-              fileset = pkgs.lib.fileset.unions [
-                ./examples/react-tray
-              ];
-            };
-            sourceRoot = "source/examples/react-tray";
-
-            npmDeps = pkgs.fetchNpmDeps {
-              src = ./examples/react-tray;
-              hash = "sha256-n9YrqcbW9MxJZJAGPJn1B3AT1XVGqBfLTbG1uY8FVgg=";
-            };
-
-            postUnpack = ''
-              chmod u+w source
-              mkdir -p source/generated/types
-              cp -r ${preloadPkg}/generated/types/* source/generated/types/
-            '';
-
-            doCheck = true;
-            checkPhase = ''
-              runHook preCheck
-              npm run typecheck
-              runHook postCheck
-            '';
-
-            installPhase = ''
-              runHook preInstall
-              mkdir -p $out
-              cp -r dist/* $out/
-              runHook postInstall
-            '';
+            workspace = "examples/react-tray";
           };
 
           craneLib = crane.mkLib pkgs;
@@ -155,7 +109,7 @@
 
           commonArgs = {
             pname = "webbar";
-            version = "0.1.0";
+            inherit version;
             src = rustSrc;
             strictDeps = true;
 
@@ -213,11 +167,11 @@
                   exit 1
                 fi
 
-                if [ ! -d examples/ags-bar/node_modules ]; then
-                  npm --prefix examples/ags-bar install
+                if [ ! -d node_modules ]; then
+                  npm install
                 fi
 
-                npm --prefix examples/ags-bar run dev -- --port 5173 --strictPort &
+                npm --workspace=examples/ags-bar run dev -- --port 5173 --strictPort &
                 VITE_PID=$!
                 trap 'kill "$VITE_PID" 2>/dev/null || true' EXIT INT TERM
 

@@ -1,0 +1,11 @@
+{
+  "name": "webbar-workspace",
+  "version": "0.1.0",
+  "private": true,
+  "workspaces": [
+    "preload",
+    "web",
+    "examples/ags-bar",
+    "examples/react-tray"
+  ]
+}
