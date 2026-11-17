@@ -10,7 +10,6 @@ mod notifications;
 mod process_bridge;
 mod sway_ipc;
 mod tray;
-#[cfg(feature = "ws-bridge")]
 mod ws_bridge;
 
 use std::cell::RefCell;
@@ -44,8 +43,14 @@ use crate::process_bridge::ProcessBridge;
 const DEFAULT_BAR_HEIGHT: i32 = 34;
 const PRELOAD_JS: &str = include_str!("../generated/preload.js");
 
+struct WindowHandle {
+    window: glib::WeakRef<ApplicationWindow>,
+    input_state: Rc<RefCell<WindowInputState>>,
+}
+
 thread_local! {
     static WEB_VIEWS: RefCell<Vec<glib::WeakRef<WebView>>> = const { RefCell::new(Vec::new()) };
+    static WINDOWS: RefCell<HashMap<String, WindowHandle>> = RefCell::new(HashMap::new());
 }
 
 #[derive(Clone)]
@@ -61,9 +66,7 @@ struct Config {
     overlay_height: Option<i32>,
     replace: bool,
     devtools: bool,
-    #[cfg(feature = "ws-bridge")]
     ws_bridge: Option<u16>,
-    #[cfg(feature = "ws-bridge")]
     ws_token: Option<String>,
 }
 
@@ -79,9 +82,7 @@ impl Config {
         let mut overlay_height: Option<i32> = None;
         let mut replace = false;
         let mut devtools = false;
-        #[cfg(feature = "ws-bridge")]
         let mut ws_bridge: Option<u16> = None;
-        #[cfg(feature = "ws-bridge")]
         let mut ws_token: Option<String> = None;
         let mut args = args.into_iter();
         while let Some(arg) = args.next() {
@@ -111,7 +112,6 @@ impl Config {
                         .ok_or("invalid --overlay-height (must be a positive integer)")?;
                     overlay_height = Some(parsed);
                 }
-                #[cfg(feature = "ws-bridge")]
                 "--ws-bridge" => {
                     let val = args.next().ok_or("missing value for --ws-bridge")?;
                     let parsed = val
@@ -121,7 +121,6 @@ impl Config {
                         .ok_or("invalid --ws-bridge (must be a valid TCP port)")?;
                     ws_bridge = Some(parsed);
                 }
-                #[cfg(feature = "ws-bridge")]
                 "--ws-token" => {
                     let val = args.next().ok_or("missing value for --ws-token")?;
                     if val.is_empty() {
@@ -134,7 +133,6 @@ impl Config {
                 other => return Err(format!("unknown argument: {other}")),
             }
         }
-        #[cfg(feature = "ws-bridge")]
         let source = match (dir, url) {
             (Some(d), None) => Some(Source::Dir(d)),
             (None, Some(u)) => Some(Source::Url(u)),
@@ -145,21 +143,13 @@ impl Config {
                 )
             }
         };
-        #[cfg(not(feature = "ws-bridge"))]
-        let source = match (dir, url) {
-            (Some(d), None) => Some(Source::Dir(d)),
-            (None, Some(u)) => Some(Source::Url(u)),
-            _ => return Err("pass either --dir <path> or --url <url>".to_string()),
-        };
         Ok(Self {
             source,
             height,
             overlay_height,
             replace,
             devtools,
-            #[cfg(feature = "ws-bridge")]
             ws_bridge,
-            #[cfg(feature = "ws-bridge")]
             ws_token,
         })
     }
@@ -174,18 +164,14 @@ impl Config {
 }
 
 struct HostServices {
-    dbus: Arc<DbusBridge>,
-    processes: Arc<ProcessBridge>,
     notifications: NotificationStore,
     audio: AudioController,
     bluetooth: BluetoothController,
     backlight: BacklightController,
-    snapshots: SnapshotCache,
-    send_event: SendEvent,
 }
 
 impl HostServices {
-    fn start(snapshots: SnapshotCache, send_event: SendEvent, claim_dbus_servers: bool) -> Arc<Self> {
+    fn start(send_event: SendEvent, claim_dbus_servers: bool) -> Arc<Self> {
         let notifications = NotificationStore::new(send_event.clone());
         if claim_dbus_servers {
             notifications::spawn_server(notifications.clone());
@@ -196,26 +182,19 @@ impl HostServices {
         let audio = audio::spawn(send_event.clone());
         let bluetooth = bluetooth::spawn(send_event.clone());
         network::spawn(send_event.clone());
-        let backlight = backlight::spawn(send_event.clone());
+        let backlight = backlight::spawn(send_event);
 
         Arc::new(Self {
-            dbus: Arc::new(DbusBridge::new(send_event.clone())),
-            processes: Arc::new(ProcessBridge::new(send_event.clone())),
             notifications,
             audio,
             bluetooth,
             backlight,
-            snapshots,
-            send_event,
         })
     }
 
-    fn dispatch(&self, req: BridgeRequest) {
-        self.dispatch_with(req, &self.dbus, &self.processes, &self.send_event);
-    }
-
-    fn dispatch_with(
+    fn dispatch(
         &self,
+        output: Option<&str>,
         req: BridgeRequest,
         dbus: &DbusBridge,
         processes: &ProcessBridge,
@@ -263,14 +242,18 @@ impl HostServices {
                 id,
                 device_id,
                 volume,
-            } => self.audio.set_volume(id, device_id, volume),
+            } => self
+                .audio
+                .set_volume(id, device_id, volume, reply_send.clone()),
             BridgeRequest::AudioSetMuted {
                 id,
                 device_id,
                 muted,
-            } => self.audio.set_muted(id, device_id, muted),
+            } => self
+                .audio
+                .set_muted(id, device_id, muted, reply_send.clone()),
             BridgeRequest::AudioSetDefault { id, device_id } => {
-                self.audio.set_default(id, device_id);
+                self.audio.set_default(id, device_id, reply_send.clone());
             }
             BridgeRequest::BluetoothSetPowered { id, path, powered } => {
                 self.bluetooth
@@ -283,7 +266,8 @@ impl HostServices {
                 self.bluetooth.disconnect(id, path, reply_send.clone());
             }
             BridgeRequest::BacklightSet { id, percent } => {
-                self.backlight.set_brightness(id, percent);
+                self.backlight
+                    .set_brightness(id, percent, reply_send.clone());
             }
             BridgeRequest::SwayCommand { command } => {
                 if let Err(err) = sway_ipc::run_command(&command) {
@@ -303,87 +287,76 @@ impl HostServices {
             } => {
                 tray::menu_event(bus, menu_path, item_id);
             }
-            BridgeRequest::SetInputRegion { .. } | BridgeRequest::SetOverlay { .. } => {}
+            BridgeRequest::SetInputRegion { rects } => {
+                if let Some(output) = output.map(str::to_owned) {
+                    glib::idle_add_once(move || {
+                        WINDOWS.with(|cell| {
+                            if let Some(handle) = cell.borrow().get(&output) {
+                                handle.input_state.borrow_mut().set_custom_rects(rects);
+                                if let Some(win) = handle.window.upgrade() {
+                                    apply_window_input_state(&win, &handle.input_state.borrow());
+                                }
+                            }
+                        });
+                    });
+                }
+            }
+            BridgeRequest::SetOverlay { active } => {
+                if let Some(output) = output.map(str::to_owned) {
+                    glib::idle_add_once(move || {
+                        WINDOWS.with(|cell| {
+                            if let Some(handle) = cell.borrow().get(&output) {
+                                handle.input_state.borrow_mut().set_overlay(active);
+                                if let Some(win) = handle.window.upgrade() {
+                                    apply_window_input_state(&win, &handle.input_state.borrow());
+                                }
+                            }
+                        });
+                    });
+                }
+            }
         }
     }
 }
 
-fn build_services(
-    #[cfg_attr(not(feature = "ws-bridge"), allow(unused_variables))] config: &Config,
-    forward_to_webviews: bool,
-    claim_dbus_servers: bool,
-) -> Arc<HostServices> {
+fn start_ws_bridge(config: &Config, claim_dbus_servers: bool) -> (u16, String) {
     let snapshots = SnapshotCache::new();
-    #[cfg(feature = "ws-bridge")]
-    let broadcaster = config.ws_bridge.map(|_| ws_bridge::WsBroadcaster::new());
+    let broadcaster = ws_bridge::WsBroadcaster::new();
     let send_event: SendEvent = {
         let snapshots = snapshots.clone();
-        #[cfg(feature = "ws-bridge")]
         let broadcaster = broadcaster.clone();
         Arc::new(move |event: BridgeEvent| {
             snapshots.record(&event);
-            let json = match serde_json::to_string(&event) {
-                Ok(json) => json,
-                Err(err) => {
-                    eprintln!("webbar: failed to serialize event: {err}");
-                    return;
-                }
-            };
-            #[cfg(feature = "ws-bridge")]
-            if let Some(broadcaster) = &broadcaster {
-                broadcaster.broadcast_json(&json);
-            }
-            if forward_to_webviews {
-                glib::idle_add_once(move || {
-                    WEB_VIEWS.with(|cell| {
-                        let mut views = cell.borrow_mut();
-                        views.retain(|weak| {
-                            if let Some(view) = weak.upgrade() {
-                                let script = format!(
-                                    "window.__webbarReceive && window.__webbarReceive({json});"
-                                );
-                                view.evaluate_javascript(
-                                    &script,
-                                    None,
-                                    None,
-                                    None::<&gio::Cancellable>,
-                                    |_| {},
-                                );
-                                true
-                            } else {
-                                false
-                            }
-                        });
-                    });
-                });
+            match serde_json::to_string(&event) {
+                Ok(json) => broadcaster.broadcast_json(&json),
+                Err(err) => eprintln!("webbar: failed to serialize event: {err}"),
             }
         })
     };
 
-    let services = HostServices::start(snapshots.clone(), send_event, claim_dbus_servers);
-    #[cfg(feature = "ws-bridge")]
-    if let (Some(port), Some(broadcaster)) = (config.ws_bridge, broadcaster) {
-        let token = config
-            .ws_token
-            .clone()
-            .unwrap_or_else(ws_bridge::generate_token);
-        let services_for_ws = services.clone();
-        if let Err(err) = ws_bridge::spawn(
-            port,
-            token,
-            broadcaster,
-            snapshots,
-            move |req, client_dbus, client_procs, client_send| {
-                services_for_ws.dispatch_with(req, client_dbus, client_procs, client_send);
-            },
-        ) {
-            eprintln!("webbar: ws-bridge failed to bind 127.0.0.1:{port}: {err}");
-            if config.source.is_none() {
-                std::process::exit(1);
-            }
+    let services = HostServices::start(send_event, claim_dbus_servers);
+    let requested_port = config.ws_bridge.unwrap_or(0);
+    let token = config
+        .ws_token
+        .clone()
+        .unwrap_or_else(ws_bridge::generate_token);
+    let bound_port = match ws_bridge::spawn(
+        requested_port,
+        config.ws_bridge.is_some(),
+        token.clone(),
+        broadcaster,
+        snapshots,
+        move |output, req, client_dbus, client_procs, client_send| {
+            services.dispatch(output, req, client_dbus, client_procs, client_send);
+        },
+    ) {
+        Ok(port) => port,
+        Err(err) => {
+            eprintln!("webbar: ws-bridge failed to bind 127.0.0.1:{requested_port}: {err}");
+            std::process::exit(1);
         }
-    }
-    services
+    };
+    (bound_port, token)
 }
 
 fn main() {
@@ -395,9 +368,8 @@ fn main() {
         }
     };
 
-    #[cfg(feature = "ws-bridge")]
     if config.source.is_none() {
-        let _services = build_services(&config, false, false);
+        let _ = start_ws_bridge(&config, false);
         let main_loop = glib::MainLoop::new(None, false);
         main_loop.run();
         return;
@@ -417,7 +389,7 @@ fn activate(app: &Application, config: &Config) {
         register_webbar_scheme(dir.clone());
     }
 
-    let services = build_services(config, true, true);
+    let (ws_port, ws_token) = start_ws_bridge(config, true);
 
     let Some(display) = gdk::Display::default() else {
         eprintln!("webbar: no GDK display available");
@@ -441,7 +413,6 @@ fn activate(app: &Application, config: &Config) {
     let sync_monitors = {
         let app = app.clone();
         let config = config.clone();
-        let services = services.clone();
         let windows = windows.clone();
         let monitors = monitors.clone();
         move || {
@@ -455,7 +426,7 @@ fn activate(app: &Application, config: &Config) {
                     continue;
                 }
                 if let Ok(monitor) = obj.clone().downcast::<Monitor>() {
-                    let win = create_bar_window(&app, &monitor, &config, &services);
+                    let win = create_bar_window(&app, &monitor, &config, ws_port, &ws_token);
                     windows.borrow_mut().insert(obj, win);
                 }
             }
@@ -471,6 +442,9 @@ fn activate(app: &Application, config: &Config) {
                     win.close();
                 }
             }
+            WINDOWS.with(|cell| {
+                cell.borrow_mut().retain(|_, h| h.window.upgrade().is_some());
+            });
         }
     };
 
@@ -667,7 +641,8 @@ fn create_bar_window(
     app: &Application,
     monitor: &Monitor,
     config: &Config,
-    services: &Arc<HostServices>,
+    ws_port: u16,
+    ws_token: &str,
 ) -> ApplicationWindow {
     let geom = monitor.geometry();
     let input_state = Rc::new(RefCell::new(WindowInputState::new(
@@ -732,17 +707,18 @@ fn create_bar_window(
         .connector()
         .map(|s| s.to_string())
         .unwrap_or_default();
-    let output_json = serde_json::to_string(&connector).unwrap_or_else(|_| "\"\"".to_string());
+
+    WINDOWS.with(|cell| {
+        cell.borrow_mut().insert(
+            connector.clone(),
+            WindowHandle {
+                window: window.downgrade(),
+                input_state: input_state.clone(),
+            },
+        );
+    });
 
     let ucm = UserContentManager::new();
-    ucm.register_script_message_handler("bridge", None);
-    ucm.add_script(&UserScript::new(
-        &format!("window.__webbarOutput = {output_json};"),
-        UserContentInjectedFrames::TopFrame,
-        UserScriptInjectionTime::Start,
-        &[],
-        &[],
-    ));
     ucm.add_script(&UserScript::new(
         PRELOAD_JS,
         UserContentInjectedFrames::TopFrame,
@@ -789,70 +765,25 @@ fn create_bar_window(
     });
 
     {
-        let snapshots = services.snapshots.clone();
         let input_state = input_state.clone();
         let window_weak = window.downgrade();
-        web_view.connect_load_changed(move |view, event| match event {
-            LoadEvent::Committed => {
+        web_view.connect_load_changed(move |_view, event| {
+            if event == LoadEvent::Committed {
                 input_state.borrow_mut().reset();
                 if let Some(win) = window_weak.upgrade() {
                     apply_window_input_state(&win, &input_state.borrow());
                 }
             }
-            LoadEvent::Finished => {
-                for state in snapshots.snapshot_all() {
-                    if let Ok(json) = serde_json::to_string(&state) {
-                        let script = format!(
-                            "window.__webbarReceive && window.__webbarReceive({json});"
-                        );
-                        view.evaluate_javascript(
-                            &script,
-                            None,
-                            None,
-                            None::<&gio::Cancellable>,
-                            |_| {},
-                        );
-                    }
-                }
-            }
-            _ => {}
         });
     }
 
-    let services = services.clone();
-    let window_weak = window.downgrade();
-    ucm.connect_script_message_received(Some("bridge"), move |_, value| {
-        let raw = value.to_str();
-        let req: BridgeRequest = match serde_json::from_str(&raw) {
-            Ok(req) => req,
-            Err(err) => {
-                eprintln!("webbar: invalid bridge request: {err} ({raw})");
-                return;
-            }
-        };
-        match req {
-            BridgeRequest::SetInputRegion { rects } => {
-                input_state.borrow_mut().set_custom_rects(rects);
-                if let Some(win) = window_weak.upgrade() {
-                    apply_window_input_state(&win, &input_state.borrow());
-                }
-            }
-            BridgeRequest::SetOverlay { active } => {
-                input_state.borrow_mut().set_overlay(active);
-                if let Some(win) = window_weak.upgrade() {
-                    apply_window_input_state(&win, &input_state.borrow());
-                }
-            }
-            other => services.dispatch(other),
-        }
-    });
-
+    let query = format!("output={connector}&wsPort={ws_port}&wsToken={ws_token}");
     let uri = match &config.source {
         Some(Source::Url(url)) => {
             let sep = if url.contains('?') { '&' } else { '?' };
-            format!("{url}{sep}output={connector}")
+            format!("{url}{sep}{query}")
         }
-        Some(Source::Dir(_)) => format!("webbar://app/index.html?output={connector}"),
+        Some(Source::Dir(_)) => format!("webbar://app/index.html?{query}"),
         None => unreachable!("headless ws-bridge mode does not create bar windows"),
     };
     web_view.load_uri(&uri);

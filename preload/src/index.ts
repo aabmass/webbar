@@ -1,40 +1,70 @@
 import { createWebbarBridge } from "./preload";
 export * from "./preload";
 
-const initialOutput =
-  window.__webbarOutput ||
-  new URLSearchParams(window.location.search).get("output") ||
-  "";
+if (!window.webbar) {
+  const params = new URLSearchParams(window.location.search);
+  const output = params.get("output") || "";
+  const wsPort = params.get("wsPort") || params.get("ws") || "9123";
+  const wsToken = params.get("wsToken") || params.get("token") || "";
+  const query = [
+    wsToken && `token=${encodeURIComponent(wsToken)}`,
+    output && `output=${encodeURIComponent(output)}`,
+  ]
+    .filter(Boolean)
+    .join("&");
+  const url = `ws://127.0.0.1:${wsPort}${query ? `?${query}` : ""}`;
 
-function hasOpenNativePopover(): boolean {
-  try {
-    return document.querySelector(":popover-open") !== null;
-  } catch {
-    return false;
+  const pending: string[] = [];
+  let ws: WebSocket | null = null;
+  let delay = 500;
+
+  const { api, receive, notifyOverlayChange } = createWebbarBridge(
+    (json) => {
+      if (ws?.readyState === WebSocket.OPEN) {
+        ws.send(json);
+      } else if (pending.length < 64) {
+        pending.push(json);
+      }
+    },
+    output,
+    () => {
+      try {
+        return document.querySelector(":popover-open") !== null;
+      } catch {
+        return false;
+      }
+    },
+  );
+
+  window.webbar = api;
+  document.addEventListener("toggle", notifyOverlayChange, true);
+  if (document.readyState === "loading") {
+    window.addEventListener("DOMContentLoaded", notifyOverlayChange, {
+      once: true,
+    });
+  } else {
+    notifyOverlayChange();
   }
-}
 
-const { api, receive, notifyOverlayChange } = createWebbarBridge(
-  (json) => {
-    const handler = window.webkit?.messageHandlers?.bridge;
-    if (!handler) {
-      console.error("webbar: webkit bridge handler is not available");
-      return;
-    }
-    handler.postMessage(json);
-  },
-  initialOutput,
-  hasOpenNativePopover,
-);
-
-window.webbar = api;
-window.__webbarReceive = receive;
-
-document.addEventListener("toggle", notifyOverlayChange, true);
-if (document.readyState === "loading") {
-  window.addEventListener("DOMContentLoaded", notifyOverlayChange, {
-    once: true,
-  });
-} else {
-  notifyOverlayChange();
+  const connect = () => {
+    const socket = (ws = new WebSocket(url));
+    socket.addEventListener("open", () => {
+      delay = 500;
+      while (pending.length > 0 && socket.readyState === WebSocket.OPEN) {
+        socket.send(pending.shift()!);
+      }
+    });
+    socket.addEventListener("message", (ev) => {
+      if (typeof ev.data === "string") {
+        receive(JSON.parse(ev.data) as Record<string, unknown>);
+      }
+    });
+    socket.addEventListener("close", () => {
+      if (ws === socket) ws = null;
+      pending.length = 0;
+      window.setTimeout(connect, delay);
+      delay = Math.min(delay * 2, 5000);
+    });
+  };
+  connect();
 }

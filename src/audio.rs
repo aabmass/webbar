@@ -40,15 +40,18 @@ enum AudioCommand {
         req_id: u32,
         device_id: u32,
         volume: f64,
+        reply_send: SendEvent,
     },
     SetMuted {
         req_id: u32,
         device_id: u32,
         muted: bool,
+        reply_send: SendEvent,
     },
     SetDefault {
         req_id: u32,
         device_id: u32,
+        reply_send: SendEvent,
     },
     Refresh,
 }
@@ -294,10 +297,10 @@ pub fn spawn(send: SendEvent) -> AudioController {
                     }
                     trigger_refresh(&mut mainloop, &mut context);
                     for c in pending_cmds {
-                        handle_command(&mut mainloop, &mut context, &raw_state, &send, c);
+                        handle_command(&mut mainloop, &mut context, &raw_state, c);
                     }
                 }
-                other => handle_command(&mut mainloop, &mut context, &raw_state, &send, other),
+                other => handle_command(&mut mainloop, &mut context, &raw_state, other),
             }
         }
 
@@ -333,7 +336,6 @@ fn handle_command(
     ml: &mut Mainloop,
     ctx: &mut Context,
     raw_state: &Arc<Mutex<RawAudioState>>,
-    send: &SendEvent,
     cmd: AudioCommand,
 ) {
     match cmd {
@@ -341,6 +343,7 @@ fn handle_command(
             req_id,
             device_id,
             volume,
+            reply_send,
         } => {
             let (is_sink, channels) = {
                 let guard = raw_state.lock().unwrap();
@@ -351,19 +354,18 @@ fn handle_command(
                 {
                     (false, *ch)
                 } else {
-                    reply_err(send, req_id, format!("unknown audio device {device_id}"));
+                    reply_err(&reply_send, req_id, format!("unknown audio device {device_id}"));
                     return;
                 }
             };
             let cv = float_to_channel_volumes(volume, channels);
-            let send = send.clone();
             ml.lock();
             let mut introspect = ctx.introspect();
             let cb = move |ok: bool| {
                 if ok {
-                    reply_ok(&send, req_id);
+                    reply_ok(&reply_send, req_id);
                 } else {
-                    reply_err(&send, req_id, "PulseAudio rejected volume change");
+                    reply_err(&reply_send, req_id, "PulseAudio rejected volume change");
                 }
             };
             if is_sink {
@@ -377,6 +379,7 @@ fn handle_command(
             req_id,
             device_id,
             muted,
+            reply_send,
         } => {
             let is_sink = {
                 let guard = raw_state.lock().unwrap();
@@ -385,18 +388,17 @@ fn handle_command(
                 } else if guard.sources.iter().any(|d| d.id == device_id) {
                     false
                 } else {
-                    reply_err(send, req_id, format!("unknown audio device {device_id}"));
+                    reply_err(&reply_send, req_id, format!("unknown audio device {device_id}"));
                     return;
                 }
             };
-            let send = send.clone();
             ml.lock();
             let mut introspect = ctx.introspect();
             let cb = move |ok: bool| {
                 if ok {
-                    reply_ok(&send, req_id);
+                    reply_ok(&reply_send, req_id);
                 } else {
-                    reply_err(&send, req_id, "PulseAudio rejected mute change");
+                    reply_err(&reply_send, req_id, "PulseAudio rejected mute change");
                 }
             };
             if is_sink {
@@ -406,7 +408,11 @@ fn handle_command(
             }
             ml.unlock();
         }
-        AudioCommand::SetDefault { req_id, device_id } => {
+        AudioCommand::SetDefault {
+            req_id,
+            device_id,
+            reply_send,
+        } => {
             let target = {
                 let guard = raw_state.lock().unwrap();
                 if let Some(d) = guard.sinks.iter().find(|d| d.id == device_id) {
@@ -414,17 +420,16 @@ fn handle_command(
                 } else if let Some(d) = guard.sources.iter().find(|d| d.id == device_id) {
                     (false, d.name.clone())
                 } else {
-                    reply_err(send, req_id, format!("unknown audio device {device_id}"));
+                    reply_err(&reply_send, req_id, format!("unknown audio device {device_id}"));
                     return;
                 }
             };
-            let send = send.clone();
             ml.lock();
             let cb = move |ok: bool| {
                 if ok {
-                    reply_ok(&send, req_id);
+                    reply_ok(&reply_send, req_id);
                 } else {
-                    reply_err(&send, req_id, "PulseAudio rejected default device change");
+                    reply_err(&reply_send, req_id, "PulseAudio rejected default device change");
                 }
             };
             if target.0 {
@@ -439,24 +444,30 @@ fn handle_command(
 }
 
 impl AudioController {
-    pub fn set_volume(&self, req_id: u32, device_id: u32, volume: f64) {
+    pub fn set_volume(&self, req_id: u32, device_id: u32, volume: f64, reply_send: SendEvent) {
         let _ = self.tx.send(AudioCommand::SetVolume {
             req_id,
             device_id,
             volume,
+            reply_send,
         });
     }
 
-    pub fn set_muted(&self, req_id: u32, device_id: u32, muted: bool) {
+    pub fn set_muted(&self, req_id: u32, device_id: u32, muted: bool, reply_send: SendEvent) {
         let _ = self.tx.send(AudioCommand::SetMuted {
             req_id,
             device_id,
             muted,
+            reply_send,
         });
     }
 
-    pub fn set_default(&self, req_id: u32, device_id: u32) {
-        let _ = self.tx.send(AudioCommand::SetDefault { req_id, device_id });
+    pub fn set_default(&self, req_id: u32, device_id: u32, reply_send: SendEvent) {
+        let _ = self.tx.send(AudioCommand::SetDefault {
+            req_id,
+            device_id,
+            reply_send,
+        });
     }
 }
 

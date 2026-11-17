@@ -150,26 +150,10 @@
               platforms = platforms.linux;
             };
           });
-
-          webbarWsBridgePkg = craneLib.buildPackage (commonArgs // {
-            inherit cargoArtifacts;
-            cargoExtraArgs = "--features ws-bridge";
-
-            preBuild = ''
-              mkdir -p generated
-              cp ${preloadPkg}/generated/preload.js generated/preload.js
-            '';
-
-            postInstall = ''
-              mkdir -p $out/share/webbar
-              cp -r ${webUi}/* $out/share/webbar/
-            '';
-          });
         in
         {
           packages = {
             default = webbarPkg;
-            ws-bridge = webbarWsBridgePkg;
             ags-bar-ui = agsBarUi;
             ags-bar = pkgs.writeShellScriptBin "webbar-ags-bar" ''
               exec ${webbarPkg}/bin/webbar --dir ${agsBarUi} --height 86 "$@"
@@ -222,7 +206,7 @@
                 VITE_PORT="''${WEBBAR_VITE_PORT:-5173}"
                 WS_TOKEN="''${WEBBAR_WS_TOKEN:-$(head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n')}"
 
-                ${webbarWsBridgePkg}/bin/webbar --ws-bridge "$WS_PORT" --ws-token "$WS_TOKEN" &
+                ${webbarPkg}/bin/webbar --ws-bridge "$WS_PORT" --ws-token "$WS_TOKEN" &
                 WS_PID=$!
                 VITE_PID=""
                 cleanup() {
@@ -267,11 +251,9 @@
           checks = {
             rust-test = craneLib.cargoTest (commonArgs // {
               inherit cargoArtifacts;
-              cargoExtraArgs = "--all-features";
             });
             rust-clippy = craneLib.cargoClippy (commonArgs // {
               inherit cargoArtifacts;
-              cargoExtraArgs = "--all-features";
               cargoClippyExtraArgs = "--all-targets";
             });
             rust-ts-bindings = craneLib.cargoTest (commonArgs // {

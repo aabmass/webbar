@@ -187,9 +187,10 @@ impl ProcessBridge {
             kill_pid(pid, signal);
         }
     }
+}
 
-    #[cfg(feature = "ws-bridge")]
-    pub fn shutdown(&self) {
+impl Drop for ProcessBridge {
+    fn drop(&mut self) {
         let pids: Vec<u32> = {
             let mut guard = self.state.lock().unwrap();
             guard.closed = true;

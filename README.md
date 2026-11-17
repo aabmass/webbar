@@ -75,11 +75,11 @@ To iterate on `examples/ags-bar` in a standard browser (or an automated browser 
 nix run .#ags-bar-browser-dev
 ```
 
-This starts a headless `webbar --ws-bridge 9123` backend (built with `--features ws-bridge`) alongside Vite on `http://localhost:5173` and prints a tokenized URL such as `http://localhost:5173?wsPort=9123&wsToken=...` (overrides: `WEBBAR_WS_PORT`, `WEBBAR_VITE_PORT`, `WEBBAR_WS_TOKEN`). Or run them separately:
+This starts a headless `webbar --ws-bridge 9123` backend alongside Vite on `http://localhost:5173` and prints a tokenized URL such as `http://localhost:5173?wsPort=9123&wsToken=...` (overrides: `WEBBAR_WS_PORT`, `WEBBAR_VITE_PORT`, `WEBBAR_WS_TOKEN`). Or run them separately:
 
 ```bash
 # Terminal 1: headless Rust backend bridge (prints a per-session ws://...?token=... URL)
-nix run .#ws-bridge -- --ws-bridge 9123
+nix run . -- --ws-bridge 9123
 
 # Terminal 2: build @webbar/types once, then start Vite
 npm --workspace=@webbar/types run build

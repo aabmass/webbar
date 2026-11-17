@@ -221,9 +221,10 @@ impl DbusBridge {
             (self.send)(BridgeEvent::DbusMatchEnded { id, error: None });
         }
     }
+}
 
-    #[cfg(feature = "ws-bridge")]
-    pub fn shutdown(&self) {
+impl Drop for DbusBridge {
+    fn drop(&mut self) {
         let matches: Vec<_> = {
             let mut guard = self.matches.lock().unwrap();
             guard.closed = true;

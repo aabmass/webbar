@@ -208,7 +208,7 @@
         error: typeof e.error === "string" ? e.error : null
       })
     };
-    function receive2(event) {
+    function receive(event) {
       const type = event.type;
       const stateHandler = stateHandlers[type];
       if (stateHandler) {
@@ -326,7 +326,7 @@
         }
       }
     }
-    const api2 = {
+    const api = {
       output,
       sway: storeView(stores.sway, {
         command: (command) => send({ type: "sway_command", command })
@@ -468,38 +468,69 @@
         });
       }
     };
-    return { api: api2, receive: receive2, notifyOverlayChange: syncOverlay };
+    return { api, receive, notifyOverlayChange: syncOverlay };
   }
 
   // src/index.ts
-  var initialOutput = window.__webbarOutput || new URLSearchParams(window.location.search).get("output") || "";
-  function hasOpenNativePopover() {
-    try {
-      return document.querySelector(":popover-open") !== null;
-    } catch {
-      return false;
-    }
-  }
-  var { api, receive, notifyOverlayChange } = createWebbarBridge(
-    (json) => {
-      const handler = window.webkit?.messageHandlers?.bridge;
-      if (!handler) {
-        console.error("webbar: webkit bridge handler is not available");
-        return;
+  if (!window.webbar) {
+    const params = new URLSearchParams(window.location.search);
+    const output = params.get("output") || "";
+    const wsPort = params.get("wsPort") || params.get("ws") || "9123";
+    const wsToken = params.get("wsToken") || params.get("token") || "";
+    const query = [
+      wsToken && `token=${encodeURIComponent(wsToken)}`,
+      output && `output=${encodeURIComponent(output)}`
+    ].filter(Boolean).join("&");
+    const url = `ws://127.0.0.1:${wsPort}${query ? `?${query}` : ""}`;
+    const pending = [];
+    let ws = null;
+    let delay = 500;
+    const { api, receive, notifyOverlayChange } = createWebbarBridge(
+      (json) => {
+        if (ws?.readyState === WebSocket.OPEN) {
+          ws.send(json);
+        } else if (pending.length < 64) {
+          pending.push(json);
+        }
+      },
+      output,
+      () => {
+        try {
+          return document.querySelector(":popover-open") !== null;
+        } catch {
+          return false;
+        }
       }
-      handler.postMessage(json);
-    },
-    initialOutput,
-    hasOpenNativePopover
-  );
-  window.webbar = api;
-  window.__webbarReceive = receive;
-  document.addEventListener("toggle", notifyOverlayChange, true);
-  if (document.readyState === "loading") {
-    window.addEventListener("DOMContentLoaded", notifyOverlayChange, {
-      once: true
-    });
-  } else {
-    notifyOverlayChange();
+    );
+    window.webbar = api;
+    document.addEventListener("toggle", notifyOverlayChange, true);
+    if (document.readyState === "loading") {
+      window.addEventListener("DOMContentLoaded", notifyOverlayChange, {
+        once: true
+      });
+    } else {
+      notifyOverlayChange();
+    }
+    const connect = () => {
+      const socket = ws = new WebSocket(url);
+      socket.addEventListener("open", () => {
+        delay = 500;
+        while (pending.length > 0 && socket.readyState === WebSocket.OPEN) {
+          socket.send(pending.shift());
+        }
+      });
+      socket.addEventListener("message", (ev) => {
+        if (typeof ev.data === "string") {
+          receive(JSON.parse(ev.data));
+        }
+      });
+      socket.addEventListener("close", () => {
+        if (ws === socket) ws = null;
+        pending.length = 0;
+        window.setTimeout(connect, delay);
+        delay = Math.min(delay * 2, 5e3);
+      });
+    };
+    connect();
   }
 })();

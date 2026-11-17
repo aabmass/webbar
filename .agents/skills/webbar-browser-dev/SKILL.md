@@ -21,9 +21,9 @@ Or run the two processes separately (useful when iterating on Rust changes too):
 
 ```bash
 # Terminal 1: headless Rust backend bridge (prints a per-session ws://...?token=... URL)
-nix run .#ws-bridge -- --ws-bridge 9123
+nix run . -- --ws-bridge 9123
 
-# Terminal 2: Vite dev server (only loaded in DEV when window.webbar is absent)
+# Terminal 2: Vite dev server
 npm --workspace=@webbar/types run build
 npm --workspace=examples/ags-bar run dev -- --port 5173 --strictPort
 ```

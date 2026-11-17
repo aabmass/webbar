@@ -19,7 +19,7 @@ const DDC_FLAG_NO_VERIFY: u32 = 4;
 
 #[derive(Clone)]
 pub struct BacklightController {
-    tx: Sender<(u32, u8)>,
+    tx: Sender<(u32, u8, SendEvent)>,
 }
 
 pub fn vcp_to_percent(current: u16, max: u16) -> u8 {
@@ -38,7 +38,7 @@ pub fn percent_to_vcp(percent: u8, max: u16) -> u16 {
 }
 
 pub fn spawn(send: SendEvent) -> BacklightController {
-    let (tx, rx) = mpsc::channel::<(u32, u8)>();
+    let (tx, rx) = mpsc::channel::<(u32, u8, SendEvent)>();
     let max_vcp = Arc::new(Mutex::new(100u16));
 
     // Watcher thread: initial GetVcp + VcpValueChanged signal stream
@@ -143,15 +143,15 @@ pub fn spawn(send: SendEvent) -> BacklightController {
             let conn = match zbus::blocking::Connection::session() {
                 Ok(c) => c,
                 Err(err) => {
-                    while let Ok((req_id, _)) = rx.recv() {
-                        reply_err(&send, req_id, err.to_string());
+                    while let Ok((req_id, _, reply_send)) = rx.recv() {
+                        reply_err(&reply_send, req_id, err.to_string());
                     }
                     return;
                 }
             };
 
-            while let Ok((mut latest_req, mut latest_pct)) = rx.recv() {
-                let mut pending_reqs = vec![latest_req];
+            while let Ok((first_req, mut latest_pct, first_reply)) = rx.recv() {
+                let mut pending_reqs = vec![(first_req, first_reply)];
                 let deadline = Instant::now() + Duration::from_millis(80);
 
                 // Coalesce rapid slider/wheel updates for 80ms
@@ -161,10 +161,9 @@ pub fn spawn(send: SendEvent) -> BacklightController {
                         break;
                     }
                     match rx.recv_timeout(remaining) {
-                        Ok((req_id, pct)) => {
-                            latest_req = req_id;
+                        Ok((req_id, pct, reply_send)) => {
                             latest_pct = pct;
-                            pending_reqs.push(req_id);
+                            pending_reqs.push((req_id, reply_send));
                         }
                         Err(mpsc::RecvTimeoutError::Timeout) => break,
                         Err(mpsc::RecvTimeoutError::Disconnected) => return,
@@ -192,8 +191,8 @@ pub fn spawn(send: SendEvent) -> BacklightController {
                                     brightness: Some(clamped_pct),
                                     error: None,
                                 });
-                                for id in pending_reqs {
-                                    reply_ok(&send, id);
+                                for (id, reply_send) in pending_reqs {
+                                    reply_ok(&reply_send, id);
                                 }
                             }
                             Ok((status, msg)) => {
@@ -203,24 +202,23 @@ pub fn spawn(send: SendEvent) -> BacklightController {
                                     brightness: Some(clamped_pct),
                                     error: Some(err.clone()),
                                 });
-                                for id in pending_reqs {
-                                    reply_err(&send, id, &err);
+                                for (id, reply_send) in pending_reqs {
+                                    reply_err(&reply_send, id, &err);
                                 }
                             }
                             Err(err) => {
-                                for id in pending_reqs {
-                                    reply_err(&send, id, err.to_string());
+                                for (id, reply_send) in pending_reqs {
+                                    reply_err(&reply_send, id, err.to_string());
                                 }
                             }
                         }
                     }
                     Err(err) => {
-                        for id in pending_reqs {
-                            reply_err(&send, id, err.to_string());
+                        for (id, reply_send) in pending_reqs {
+                            reply_err(&reply_send, id, err.to_string());
                         }
                     }
                 }
-                let _ = latest_req;
             }
         });
     }
@@ -229,13 +227,13 @@ pub fn spawn(send: SendEvent) -> BacklightController {
 }
 
 impl BacklightController {
-    pub fn set_brightness(&self, req_id: u32, percent: f64) {
+    pub fn set_brightness(&self, req_id: u32, percent: f64, reply_send: SendEvent) {
         let clamped = if percent.is_nan() {
             0
         } else {
             percent.round().clamp(0.0, 100.0) as u8
         };
-        let _ = self.tx.send((req_id, clamped));
+        let _ = self.tx.send((req_id, clamped, reply_send));
     }
 }
 
