@@ -14,15 +14,21 @@ use crate::bridge::{
     reply_data, reply_err, BridgeEvent, ExecResult, ProcessOutputStream, SendEvent,
 };
 
+#[derive(Default)]
+struct ProcessState {
+    closed: bool,
+    pids: HashMap<u32, u32>,
+}
+
 pub struct ProcessBridge {
-    pids: Arc<Mutex<HashMap<u32, u32>>>,
+    state: Arc<Mutex<ProcessState>>,
     send: SendEvent,
 }
 
 impl ProcessBridge {
     pub fn new(send: SendEvent) -> Self {
         Self {
-            pids: Arc::new(Mutex::new(HashMap::new())),
+            state: Arc::new(Mutex::new(ProcessState::default())),
             send,
         }
     }
@@ -38,8 +44,11 @@ impl ProcessBridge {
             reply_err(&self.send, id, "argv must not be empty");
             return;
         }
+        if self.state.lock().unwrap().closed {
+            return;
+        }
 
-        let pids = self.pids.clone();
+        let state = self.state.clone();
         let send = self.send.clone();
         thread::spawn(move || {
             let mut cmd = build_command(&argv, cwd, env);
@@ -52,7 +61,17 @@ impl ProcessBridge {
                 }
             };
 
-            pids.lock().unwrap().insert(id, child.id());
+            let pid = child.id();
+            {
+                let mut guard = state.lock().unwrap();
+                if guard.closed {
+                    drop(guard);
+                    kill_pid(pid, 15);
+                    let _ = child.wait();
+                    return;
+                }
+                guard.pids.insert(id, pid);
+            }
 
             let stdout_handle = child.stdout.take().map(|out| thread::spawn(move || read_all(out)));
             let stderr_handle = child.stderr.take().map(|err| thread::spawn(move || read_all(err)));
@@ -69,7 +88,7 @@ impl ProcessBridge {
                 Err(_) => (None, None),
             };
 
-            pids.lock().unwrap().remove(&id);
+            state.lock().unwrap().pids.remove(&id);
             reply_data(
                 &send,
                 id,
@@ -98,8 +117,11 @@ impl ProcessBridge {
             });
             return;
         }
+        if self.state.lock().unwrap().closed {
+            return;
+        }
 
-        let pids = self.pids.clone();
+        let state = self.state.clone();
         let send = self.send.clone();
         thread::spawn(move || {
             let mut cmd = build_command(&argv, cwd, env);
@@ -116,7 +138,17 @@ impl ProcessBridge {
                 }
             };
 
-            pids.lock().unwrap().insert(id, child.id());
+            let pid = child.id();
+            {
+                let mut guard = state.lock().unwrap();
+                if guard.closed {
+                    drop(guard);
+                    kill_pid(pid, 15);
+                    let _ = child.wait();
+                    return;
+                }
+                guard.pids.insert(id, pid);
+            }
             send(BridgeEvent::ProcessStreamStarted {
                 id,
                 ok: true,
@@ -144,22 +176,38 @@ impl ProcessBridge {
                 Err(_) => (None, None),
             };
 
-            pids.lock().unwrap().remove(&id);
+            state.lock().unwrap().pids.remove(&id);
             send(BridgeEvent::ProcessStreamEnded { id, code, signal });
         });
     }
 
     pub fn kill(&self, id: u32, signal: i32) {
-        let pid = self.pids.lock().unwrap().get(&id).copied();
+        let pid = self.state.lock().unwrap().pids.get(&id).copied();
         if let Some(pid) = pid {
-            let _ = Command::new("kill")
-                .arg(format!("-{signal}"))
-                .arg(pid.to_string())
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .status();
+            kill_pid(pid, signal);
         }
     }
+
+    #[cfg(feature = "ws-bridge")]
+    pub fn shutdown(&self) {
+        let pids: Vec<u32> = {
+            let mut guard = self.state.lock().unwrap();
+            guard.closed = true;
+            guard.pids.drain().map(|(_, pid)| pid).collect()
+        };
+        for pid in pids {
+            kill_pid(pid, 15);
+        }
+    }
+}
+
+fn kill_pid(pid: u32, signal: i32) {
+    let _ = Command::new("kill")
+        .arg(format!("-{signal}"))
+        .arg(pid.to_string())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
 }
 
 fn build_command(argv: &[String], cwd: Option<String>, env: HashMap<String, String>) -> Command {

@@ -10,6 +10,8 @@ mod notifications;
 mod process_bridge;
 mod sway_ipc;
 mod tray;
+#[cfg(feature = "ws-bridge")]
+mod ws_bridge;
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -54,11 +56,15 @@ enum Source {
 
 #[derive(Clone)]
 struct Config {
-    source: Source,
+    source: Option<Source>,
     height: i32,
     overlay_height: Option<i32>,
     replace: bool,
     devtools: bool,
+    #[cfg(feature = "ws-bridge")]
+    ws_bridge: Option<u16>,
+    #[cfg(feature = "ws-bridge")]
+    ws_token: Option<String>,
 }
 
 impl Config {
@@ -73,6 +79,10 @@ impl Config {
         let mut overlay_height: Option<i32> = None;
         let mut replace = false;
         let mut devtools = false;
+        #[cfg(feature = "ws-bridge")]
+        let mut ws_bridge: Option<u16> = None;
+        #[cfg(feature = "ws-bridge")]
+        let mut ws_token: Option<String> = None;
         let mut args = args.into_iter();
         while let Some(arg) = args.next() {
             match arg.as_str() {
@@ -101,14 +111,44 @@ impl Config {
                         .ok_or("invalid --overlay-height (must be a positive integer)")?;
                     overlay_height = Some(parsed);
                 }
+                #[cfg(feature = "ws-bridge")]
+                "--ws-bridge" => {
+                    let val = args.next().ok_or("missing value for --ws-bridge")?;
+                    let parsed = val
+                        .parse::<u16>()
+                        .ok()
+                        .filter(|&p| p > 0)
+                        .ok_or("invalid --ws-bridge (must be a valid TCP port)")?;
+                    ws_bridge = Some(parsed);
+                }
+                #[cfg(feature = "ws-bridge")]
+                "--ws-token" => {
+                    let val = args.next().ok_or("missing value for --ws-token")?;
+                    if val.is_empty() {
+                        return Err("--ws-token must not be empty".to_string());
+                    }
+                    ws_token = Some(val);
+                }
                 "--replace" => replace = true,
                 "--devtools" => devtools = true,
                 other => return Err(format!("unknown argument: {other}")),
             }
         }
+        #[cfg(feature = "ws-bridge")]
         let source = match (dir, url) {
-            (Some(d), None) => Source::Dir(d),
-            (None, Some(u)) => Source::Url(u),
+            (Some(d), None) => Some(Source::Dir(d)),
+            (None, Some(u)) => Some(Source::Url(u)),
+            (None, None) if ws_bridge.is_some() => None,
+            _ => {
+                return Err(
+                    "pass either --dir <path> or --url <url> (or --ws-bridge <port>)".to_string(),
+                )
+            }
+        };
+        #[cfg(not(feature = "ws-bridge"))]
+        let source = match (dir, url) {
+            (Some(d), None) => Some(Source::Dir(d)),
+            (None, Some(u)) => Some(Source::Url(u)),
             _ => return Err("pass either --dir <path> or --url <url>".to_string()),
         };
         Ok(Self {
@@ -117,6 +157,10 @@ impl Config {
             overlay_height,
             replace,
             devtools,
+            #[cfg(feature = "ws-bridge")]
+            ws_bridge,
+            #[cfg(feature = "ws-bridge")]
+            ws_token,
         })
     }
 
@@ -140,6 +184,208 @@ struct HostServices {
     send_event: SendEvent,
 }
 
+impl HostServices {
+    fn start(snapshots: SnapshotCache, send_event: SendEvent, claim_dbus_servers: bool) -> Arc<Self> {
+        let notifications = NotificationStore::new(send_event.clone());
+        if claim_dbus_servers {
+            notifications::spawn_server(notifications.clone());
+            inhibit::spawn_server();
+            tray::spawn_server(send_event.clone());
+        }
+        sway_ipc::spawn(send_event.clone());
+        let audio = audio::spawn(send_event.clone());
+        let bluetooth = bluetooth::spawn(send_event.clone());
+        network::spawn(send_event.clone());
+        let backlight = backlight::spawn(send_event.clone());
+
+        Arc::new(Self {
+            dbus: Arc::new(DbusBridge::new(send_event.clone())),
+            processes: Arc::new(ProcessBridge::new(send_event.clone())),
+            notifications,
+            audio,
+            bluetooth,
+            backlight,
+            snapshots,
+            send_event,
+        })
+    }
+
+    fn dispatch(&self, req: BridgeRequest) {
+        self.dispatch_with(req, &self.dbus, &self.processes, &self.send_event);
+    }
+
+    fn dispatch_with(
+        &self,
+        req: BridgeRequest,
+        dbus: &DbusBridge,
+        processes: &ProcessBridge,
+        reply_send: &SendEvent,
+    ) {
+        match req {
+            BridgeRequest::DbusCall {
+                id,
+                bus,
+                destination,
+                path,
+                interface,
+                member,
+                signature,
+                body,
+            } => dbus.call(id, bus, destination, path, interface, member, signature, body),
+            BridgeRequest::DbusMatch {
+                id,
+                bus,
+                sender,
+                path,
+                interface,
+                member,
+            } => dbus.match_signals(id, bus, sender, path, interface, member),
+            BridgeRequest::DbusUnwatch { id } => dbus.unwatch(id),
+            BridgeRequest::DismissNotification { id } => {
+                self.notifications.dismiss(id);
+            }
+            BridgeRequest::InvokeNotificationAction { id, action_key } => {
+                self.notifications.invoke_action(id, &action_key);
+            }
+            BridgeRequest::ClearNotifications => {
+                self.notifications.clear_all();
+            }
+            BridgeRequest::ProcessSpawn { id, argv, cwd, env } => {
+                processes.spawn(id, argv, cwd, env);
+            }
+            BridgeRequest::ProcessStreamSpawn { id, argv, cwd, env } => {
+                processes.spawn_stream(id, argv, cwd, env);
+            }
+            BridgeRequest::ProcessKill { id, signal } => {
+                processes.kill(id, signal);
+            }
+            BridgeRequest::AudioSetVolume {
+                id,
+                device_id,
+                volume,
+            } => self.audio.set_volume(id, device_id, volume),
+            BridgeRequest::AudioSetMuted {
+                id,
+                device_id,
+                muted,
+            } => self.audio.set_muted(id, device_id, muted),
+            BridgeRequest::AudioSetDefault { id, device_id } => {
+                self.audio.set_default(id, device_id);
+            }
+            BridgeRequest::BluetoothSetPowered { id, path, powered } => {
+                self.bluetooth
+                    .set_powered(id, path, powered, reply_send.clone());
+            }
+            BridgeRequest::BluetoothConnect { id, path } => {
+                self.bluetooth.connect(id, path, reply_send.clone());
+            }
+            BridgeRequest::BluetoothDisconnect { id, path } => {
+                self.bluetooth.disconnect(id, path, reply_send.clone());
+            }
+            BridgeRequest::BacklightSet { id, percent } => {
+                self.backlight.set_brightness(id, percent);
+            }
+            BridgeRequest::SwayCommand { command } => {
+                if let Err(err) = sway_ipc::run_command(&command) {
+                    eprintln!("webbar: sway command failed: {err}");
+                }
+            }
+            BridgeRequest::TrayActivate { bus, path } => {
+                tray::activate(bus, path);
+            }
+            BridgeRequest::TrayGetMenu { id, bus, menu_path } => {
+                tray::get_menu(id, bus, menu_path, reply_send.clone());
+            }
+            BridgeRequest::TrayMenuEvent {
+                bus,
+                menu_path,
+                item_id,
+            } => {
+                tray::menu_event(bus, menu_path, item_id);
+            }
+            BridgeRequest::SetInputRegion { .. } | BridgeRequest::SetOverlay { .. } => {}
+        }
+    }
+}
+
+fn build_services(
+    #[cfg_attr(not(feature = "ws-bridge"), allow(unused_variables))] config: &Config,
+    forward_to_webviews: bool,
+    claim_dbus_servers: bool,
+) -> Arc<HostServices> {
+    let snapshots = SnapshotCache::new();
+    #[cfg(feature = "ws-bridge")]
+    let broadcaster = config.ws_bridge.map(|_| ws_bridge::WsBroadcaster::new());
+    let send_event: SendEvent = {
+        let snapshots = snapshots.clone();
+        #[cfg(feature = "ws-bridge")]
+        let broadcaster = broadcaster.clone();
+        Arc::new(move |event: BridgeEvent| {
+            snapshots.record(&event);
+            let json = match serde_json::to_string(&event) {
+                Ok(json) => json,
+                Err(err) => {
+                    eprintln!("webbar: failed to serialize event: {err}");
+                    return;
+                }
+            };
+            #[cfg(feature = "ws-bridge")]
+            if let Some(broadcaster) = &broadcaster {
+                broadcaster.broadcast_json(&json);
+            }
+            if forward_to_webviews {
+                glib::idle_add_once(move || {
+                    WEB_VIEWS.with(|cell| {
+                        let mut views = cell.borrow_mut();
+                        views.retain(|weak| {
+                            if let Some(view) = weak.upgrade() {
+                                let script = format!(
+                                    "window.__webbarReceive && window.__webbarReceive({json});"
+                                );
+                                view.evaluate_javascript(
+                                    &script,
+                                    None,
+                                    None,
+                                    None::<&gio::Cancellable>,
+                                    |_| {},
+                                );
+                                true
+                            } else {
+                                false
+                            }
+                        });
+                    });
+                });
+            }
+        })
+    };
+
+    let services = HostServices::start(snapshots.clone(), send_event, claim_dbus_servers);
+    #[cfg(feature = "ws-bridge")]
+    if let (Some(port), Some(broadcaster)) = (config.ws_bridge, broadcaster) {
+        let token = config
+            .ws_token
+            .clone()
+            .unwrap_or_else(ws_bridge::generate_token);
+        let services_for_ws = services.clone();
+        if let Err(err) = ws_bridge::spawn(
+            port,
+            token,
+            broadcaster,
+            snapshots,
+            move |req, client_dbus, client_procs, client_send| {
+                services_for_ws.dispatch_with(req, client_dbus, client_procs, client_send);
+            },
+        ) {
+            eprintln!("webbar: ws-bridge failed to bind 127.0.0.1:{port}: {err}");
+            if config.source.is_none() {
+                std::process::exit(1);
+            }
+        }
+    }
+    services
+}
+
 fn main() {
     let config = match Config::from_args() {
         Ok(c) => c,
@@ -148,6 +394,14 @@ fn main() {
             std::process::exit(1);
         }
     };
+
+    #[cfg(feature = "ws-bridge")]
+    if config.source.is_none() {
+        let _services = build_services(&config, false, false);
+        let main_loop = glib::MainLoop::new(None, false);
+        main_loop.run();
+        return;
+    }
 
     let app = Application::builder()
         .application_id("dev.local.webbar")
@@ -159,67 +413,11 @@ fn main() {
 }
 
 fn activate(app: &Application, config: &Config) {
-    if let Source::Dir(dir) = &config.source {
+    if let Some(Source::Dir(dir)) = &config.source {
         register_webbar_scheme(dir.clone());
     }
 
-    let snapshots = SnapshotCache::new();
-    let send_event: SendEvent = {
-        let snapshots = snapshots.clone();
-        Arc::new(move |event: BridgeEvent| {
-            snapshots.record(&event);
-            let json = match serde_json::to_string(&event) {
-                Ok(json) => json,
-                Err(err) => {
-                    eprintln!("webbar: failed to serialize event: {err}");
-                    return;
-                }
-            };
-            glib::idle_add_once(move || {
-                WEB_VIEWS.with(|cell| {
-                    let mut views = cell.borrow_mut();
-                    views.retain(|weak| {
-                        if let Some(view) = weak.upgrade() {
-                            let script = format!(
-                                "window.__webbarReceive && window.__webbarReceive({json});"
-                            );
-                            view.evaluate_javascript(
-                                &script,
-                                None,
-                                None,
-                                None::<&gio::Cancellable>,
-                                |_| {},
-                            );
-                            true
-                        } else {
-                            false
-                        }
-                    });
-                });
-            });
-        })
-    };
-
-    let notifications = NotificationStore::new(send_event.clone());
-    notifications::spawn_server(notifications.clone());
-    inhibit::spawn_server();
-    sway_ipc::spawn(send_event.clone());
-    tray::spawn_server(send_event.clone());
-    let audio = audio::spawn(send_event.clone());
-    let bluetooth = bluetooth::spawn(send_event.clone());
-    network::spawn(send_event.clone());
-    let backlight = backlight::spawn(send_event.clone());
-
-    let services = Arc::new(HostServices {
-        dbus: Arc::new(DbusBridge::new(send_event.clone())),
-        processes: Arc::new(ProcessBridge::new(send_event.clone())),
-        notifications,
-        audio,
-        bluetooth,
-        backlight,
-        snapshots,
-        send_event,
-    });
+    let services = build_services(config, true, true);
 
     let Some(display) = gdk::Display::default() else {
         eprintln!("webbar: no GDK display available");
@@ -633,96 +831,6 @@ fn create_bar_window(
             }
         };
         match req {
-            BridgeRequest::DbusCall {
-                id,
-                bus,
-                destination,
-                path,
-                interface,
-                member,
-                signature,
-                body,
-            } => services
-                .dbus
-                .call(id, bus, destination, path, interface, member, signature, body),
-            BridgeRequest::DbusMatch {
-                id,
-                bus,
-                sender,
-                path,
-                interface,
-                member,
-            } => services
-                .dbus
-                .match_signals(id, bus, sender, path, interface, member),
-            BridgeRequest::DbusUnwatch { id } => services.dbus.unwatch(id),
-            BridgeRequest::DismissNotification { id } => {
-                services.notifications.dismiss(id);
-            }
-            BridgeRequest::InvokeNotificationAction { id, action_key } => {
-                services.notifications.invoke_action(id, &action_key);
-            }
-            BridgeRequest::ClearNotifications => {
-                services.notifications.clear_all();
-            }
-            BridgeRequest::ProcessSpawn { id, argv, cwd, env } => {
-                services.processes.spawn(id, argv, cwd, env);
-            }
-            BridgeRequest::ProcessStreamSpawn { id, argv, cwd, env } => {
-                services.processes.spawn_stream(id, argv, cwd, env);
-            }
-            BridgeRequest::ProcessKill { id, signal } => {
-                services.processes.kill(id, signal);
-            }
-            BridgeRequest::AudioSetVolume {
-                id,
-                device_id,
-                volume,
-            } => services.audio.set_volume(id, device_id, volume),
-            BridgeRequest::AudioSetMuted {
-                id,
-                device_id,
-                muted,
-            } => services.audio.set_muted(id, device_id, muted),
-            BridgeRequest::AudioSetDefault { id, device_id } => {
-                services.audio.set_default(id, device_id);
-            }
-            BridgeRequest::BluetoothSetPowered { id, path, powered } => {
-                services
-                    .bluetooth
-                    .set_powered(id, path, powered, services.send_event.clone());
-            }
-            BridgeRequest::BluetoothConnect { id, path } => {
-                services
-                    .bluetooth
-                    .connect(id, path, services.send_event.clone());
-            }
-            BridgeRequest::BluetoothDisconnect { id, path } => {
-                services
-                    .bluetooth
-                    .disconnect(id, path, services.send_event.clone());
-            }
-            BridgeRequest::BacklightSet { id, percent } => {
-                services.backlight.set_brightness(id, percent);
-            }
-            BridgeRequest::SwayCommand { command } => {
-                if let Err(err) = sway_ipc::run_command(&command) {
-                    eprintln!("webbar: sway command failed: {err}");
-                }
-            }
-            BridgeRequest::TrayActivate { bus, path } => {
-                tray::activate(bus, path);
-            }
-            BridgeRequest::TrayGetMenu { id, bus, menu_path } => {
-                tray::get_menu(id, bus, menu_path, services.send_event.clone());
-            }
-            BridgeRequest::TrayMenuEvent {
-                bus,
-                menu_path,
-                item_id,
-            } => {
-                tray::menu_event(bus, menu_path, item_id);
-            }
             BridgeRequest::SetInputRegion { rects } => {
                 input_state.borrow_mut().set_custom_rects(rects);
                 if let Some(win) = window_weak.upgrade() {
@@ -735,15 +843,17 @@ fn create_bar_window(
                     apply_window_input_state(&win, &input_state.borrow());
                 }
             }
+            other => services.dispatch(other),
         }
     });
 
     let uri = match &config.source {
-        Source::Url(url) => {
+        Some(Source::Url(url)) => {
             let sep = if url.contains('?') { '&' } else { '?' };
             format!("{url}{sep}output={connector}")
         }
-        Source::Dir(_) => format!("webbar://app/index.html?output={connector}"),
+        Some(Source::Dir(_)) => format!("webbar://app/index.html?output={connector}"),
+        None => unreachable!("headless ws-bridge mode does not create bar windows"),
     };
     web_view.load_uri(&uri);
 

@@ -150,10 +150,26 @@
               platforms = platforms.linux;
             };
           });
+
+          webbarWsBridgePkg = craneLib.buildPackage (commonArgs // {
+            inherit cargoArtifacts;
+            cargoExtraArgs = "--features ws-bridge";
+
+            preBuild = ''
+              mkdir -p generated
+              cp ${preloadPkg}/generated/preload.js generated/preload.js
+            '';
+
+            postInstall = ''
+              mkdir -p $out/share/webbar
+              cp -r ${webUi}/* $out/share/webbar/
+            '';
+          });
         in
         {
           packages = {
             default = webbarPkg;
+            ws-bridge = webbarWsBridgePkg;
             ags-bar-ui = agsBarUi;
             ags-bar = pkgs.writeShellScriptBin "webbar-ags-bar" ''
               exec ${webbarPkg}/bin/webbar --dir ${agsBarUi} --height 86 "$@"
@@ -185,14 +201,77 @@
                 ${webbarPkg}/bin/webbar --url http://localhost:5173 --height 86 --replace "$@"
               '';
             };
+            ags-bar-browser-dev = pkgs.writeShellApplication {
+              name = "webbar-ags-bar-browser-dev";
+              runtimeInputs = [ pkgs.nodejs pkgs.curl pkgs.coreutils ];
+              text = ''
+                if [ ! -f examples/ags-bar/package.json ]; then
+                  echo "webbar-ags-bar-browser-dev: run from the webbar repository root" >&2
+                  exit 1
+                fi
+
+                if [ ! -d node_modules ]; then
+                  npm install
+                fi
+
+                if [ ! -f preload/dist/preload.mjs ]; then
+                  npm --workspace=@webbar/types run build
+                fi
+
+                WS_PORT="''${WEBBAR_WS_PORT:-9123}"
+                VITE_PORT="''${WEBBAR_VITE_PORT:-5173}"
+                WS_TOKEN="''${WEBBAR_WS_TOKEN:-$(head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n')}"
+
+                ${webbarWsBridgePkg}/bin/webbar --ws-bridge "$WS_PORT" --ws-token "$WS_TOKEN" &
+                WS_PID=$!
+                VITE_PID=""
+                cleanup() {
+                  kill "$WS_PID" 2>/dev/null || true
+                  if [ -n "$VITE_PID" ]; then
+                    kill "$VITE_PID" 2>/dev/null || true
+                  fi
+                }
+                trap cleanup EXIT INT TERM
+
+                npm --workspace=examples/ags-bar run dev -- --port "$VITE_PORT" --strictPort &
+                VITE_PID=$!
+
+                ready=0
+                for _ in $(seq 1 100); do
+                  if ! kill -0 "$WS_PID" 2>/dev/null; then
+                    echo "webbar-ags-bar-browser-dev: ws-bridge exited early" >&2
+                    exit 1
+                  fi
+                  if ! kill -0 "$VITE_PID" 2>/dev/null; then
+                    echo "webbar-ags-bar-browser-dev: vite exited early" >&2
+                    exit 1
+                  fi
+                  if curl -fsS "http://localhost:$VITE_PORT" >/dev/null 2>&1; then
+                    ready=1
+                    break
+                  fi
+                  sleep 0.15
+                done
+
+                if [ "$ready" -ne 1 ]; then
+                  echo "webbar-ags-bar-browser-dev: timed out waiting for Vite on port $VITE_PORT" >&2
+                  exit 1
+                fi
+
+                echo "webbar-ags-bar-browser-dev: open http://localhost:$VITE_PORT?wsPort=$WS_PORT&wsToken=$WS_TOKEN"
+                wait "$VITE_PID"
+              '';
+            };
           };
 
           checks = {
             rust-test = craneLib.cargoTest (commonArgs // {
               inherit cargoArtifacts;
+              cargoExtraArgs = "--all-features";
             });
             rust-clippy = craneLib.cargoClippy (commonArgs // {
               inherit cargoArtifacts;
+              cargoExtraArgs = "--all-features";
               cargoClippyExtraArgs = "--all-targets";
             });
             rust-ts-bindings = craneLib.cargoTest (commonArgs // {

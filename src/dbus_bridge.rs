@@ -15,9 +15,15 @@ use zbus::{Connection as AsyncConnection, MessageStream};
 use crate::bridge::{reply_data, reply_err, BridgeEvent, Bus, SendEvent};
 use crate::dbus_json;
 
+#[derive(Default)]
+struct MatchState {
+    closed: bool,
+    active: HashMap<u32, oneshot::Sender<()>>,
+}
+
 pub struct DbusBridge {
     buses: Arc<Mutex<HashMap<Bus, BlockingConnection>>>,
-    matches: Arc<Mutex<HashMap<u32, oneshot::Sender<()>>>>,
+    matches: Arc<Mutex<MatchState>>,
     send: SendEvent,
 }
 
@@ -25,7 +31,7 @@ impl DbusBridge {
     pub fn new(send: SendEvent) -> Self {
         Self {
             buses: Arc::new(Mutex::new(HashMap::new())),
-            matches: Arc::new(Mutex::new(HashMap::new())),
+            matches: Arc::new(Mutex::new(MatchState::default())),
             send,
         }
     }
@@ -94,6 +100,9 @@ impl DbusBridge {
         interface: Option<String>,
         member: Option<String>,
     ) {
+        if self.matches.lock().unwrap().closed {
+            return;
+        }
         let matches = self.matches.clone();
         let send = self.send.clone();
         thread::spawn(move || {
@@ -130,7 +139,13 @@ impl DbusBridge {
                 };
 
                 let (cancel_tx, cancel_rx) = oneshot::channel::<()>();
-                matches.lock().unwrap().insert(id, cancel_tx);
+                {
+                    let mut guard = matches.lock().unwrap();
+                    if guard.closed {
+                        return;
+                    }
+                    guard.active.insert(id, cancel_tx);
+                }
                 send(BridgeEvent::DbusMatchStarted {
                     id,
                     ok: true,
@@ -167,7 +182,7 @@ impl DbusBridge {
                                             body: body_json,
                                         }),
                                         Err(err) => {
-                                            if matches.lock().unwrap().remove(&id).is_some() {
+                                            if matches.lock().unwrap().active.remove(&id).is_some() {
                                                 send(BridgeEvent::DbusMatchEnded {
                                                     id,
                                                     error: Some(err.to_string()),
@@ -178,7 +193,7 @@ impl DbusBridge {
                                     }
                                 }
                                 Some(Err(err)) => {
-                                    if matches.lock().unwrap().remove(&id).is_some() {
+                                    if matches.lock().unwrap().active.remove(&id).is_some() {
                                         send(BridgeEvent::DbusMatchEnded {
                                             id,
                                             error: Some(err.to_string()),
@@ -187,7 +202,7 @@ impl DbusBridge {
                                     return;
                                 }
                                 None => {
-                                    if matches.lock().unwrap().remove(&id).is_some() {
+                                    if matches.lock().unwrap().active.remove(&id).is_some() {
                                         send(BridgeEvent::DbusMatchEnded { id, error: None });
                                     }
                                     return;
@@ -201,9 +216,21 @@ impl DbusBridge {
     }
 
     pub fn unwatch(&self, id: u32) {
-        if let Some(cancel_tx) = self.matches.lock().unwrap().remove(&id) {
+        if let Some(cancel_tx) = self.matches.lock().unwrap().active.remove(&id) {
             let _ = cancel_tx.send(());
             (self.send)(BridgeEvent::DbusMatchEnded { id, error: None });
+        }
+    }
+
+    #[cfg(feature = "ws-bridge")]
+    pub fn shutdown(&self) {
+        let matches: Vec<_> = {
+            let mut guard = self.matches.lock().unwrap();
+            guard.closed = true;
+            guard.active.drain().collect()
+        };
+        for (_, cancel_tx) in matches {
+            let _ = cancel_tx.send(());
         }
     }
 }

@@ -67,6 +67,25 @@ nix run . -- --url http://localhost:5173 --height 86 --replace
 
 Edits to `examples/ags-bar/src/` will hot-reload in the bar, and `webbar` automatically replays the latest system snapshots on reload.
 
+#### External Browser Dev Mode (WebSocket Bridge)
+
+To iterate on `examples/ags-bar` in a standard browser (or an automated browser agent such as [Antigravity's browser subagent](https://antigravity.google/docs/ide/browser/)) with live `window.webbar` data and without replacing your running desktop bar:
+
+```bash
+nix run .#ags-bar-browser-dev
+```
+
+This starts a headless `webbar --ws-bridge 9123` backend (built with `--features ws-bridge`) alongside Vite on `http://localhost:5173` and prints a tokenized URL such as `http://localhost:5173?wsPort=9123&wsToken=...` (overrides: `WEBBAR_WS_PORT`, `WEBBAR_VITE_PORT`, `WEBBAR_WS_TOKEN`). Or run them separately:
+
+```bash
+# Terminal 1: headless Rust backend bridge (prints a per-session ws://...?token=... URL)
+nix run .#ws-bridge -- --ws-bridge 9123
+
+# Terminal 2: build @webbar/types once, then start Vite
+npm --workspace=@webbar/types run build
+npm --workspace=examples/ags-bar run dev -- --port 5173 --strictPort
+```
+
 ### DevTools (WebKit Web Inspector)
 
 WebKitGTK includes a built-in Web Inspector (DOM, Console, Sources, Network, Storage). You can open it in a detached window in any of these ways:
