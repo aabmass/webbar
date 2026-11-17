@@ -4,6 +4,7 @@ mod bluetooth;
 mod bridge;
 mod dbus_bridge;
 mod dbus_json;
+mod inhibit;
 mod network;
 mod notifications;
 mod process_bridge;
@@ -201,6 +202,7 @@ fn activate(app: &Application, config: &Config) {
 
     let notifications = NotificationStore::new(send_event.clone());
     notifications::spawn_server(notifications.clone());
+    inhibit::spawn_server();
     sway_ipc::spawn(send_event.clone());
     tray::spawn_server(send_event.clone());
     let audio = audio::spawn(send_event.clone());

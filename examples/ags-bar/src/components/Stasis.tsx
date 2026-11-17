@@ -9,6 +9,45 @@ type StasisWatchState = {
   profile: string;
 };
 
+type BlameCategory = {
+  active: boolean;
+  count: number;
+  sources: string[];
+};
+
+type DbusHold = {
+  sender: string;
+  application: string | null;
+  process: string | null;
+  reason: string | null;
+};
+
+type Login1IdleHold = {
+  who: string;
+  why: string;
+  process: string | null;
+};
+
+type BlameSnapshot = {
+  progression_blocked: boolean;
+  manual_pause: boolean;
+  system_pause: boolean;
+  browser_source_capture: boolean;
+  app_inhibitors: BlameCategory;
+  media_inhibitors: BlameCategory;
+  game_inhibitors: BlameCategory;
+  suspend_app_inhibitors: BlameCategory;
+  suspend_media_inhibitors: BlameCategory;
+  dbus_holds: DbusHold[];
+  login1_idle_holds: Login1IdleHold[];
+};
+
+type BlockerItem = {
+  key: string;
+  name: string;
+  detail?: string;
+};
+
 const DEFAULT_PROFILE = "default";
 
 function parseProfilesOutput(stdout: string): string[] {
@@ -37,10 +76,81 @@ function formatProfileLabel(profile: string): string {
   return profile.replace(/_/g, "-");
 }
 
+function extractBlockers(snapshot: BlameSnapshot | null): BlockerItem[] {
+  if (!snapshot) return [];
+  const items: BlockerItem[] = [];
+
+  for (const hold of snapshot.dbus_holds) {
+    const name =
+      hold.application?.trim() || hold.process?.trim() || hold.sender;
+    items.push({
+      key: `dbus:${hold.sender}:${hold.application ?? ""}:${hold.reason ?? ""}`,
+      name,
+      detail: hold.reason?.trim() || "D-Bus inhibit",
+    });
+  }
+
+  for (const hold of snapshot.login1_idle_holds) {
+    const name = hold.who.trim() || hold.process?.trim() || "systemd-inhibit";
+    items.push({
+      key: `login1:${name}:${hold.why}`,
+      name,
+      detail: hold.why.trim() || "Suspend hold",
+    });
+  }
+
+  const pushCategory = (
+    prefix: string,
+    label: string,
+    cat: BlameCategory,
+  ) => {
+    if (!cat.active || cat.count === 0) return;
+    if (cat.sources.length > 0) {
+      for (const src of cat.sources) {
+        items.push({
+          key: `${prefix}:${src}`,
+          name: src,
+          detail: label,
+        });
+      }
+    } else {
+      items.push({
+        key: `${prefix}:count`,
+        name: label,
+        detail: `${cat.count} active`,
+      });
+    }
+  };
+
+  pushCategory("app", "App", snapshot.app_inhibitors);
+  pushCategory("media", "Media", snapshot.media_inhibitors);
+  pushCategory("game", "Game", snapshot.game_inhibitors);
+  pushCategory("sapp", "Suspend hold", snapshot.suspend_app_inhibitors);
+  pushCategory("smedia", "Media (suspend)", snapshot.suspend_media_inhibitors);
+
+  if (snapshot.browser_source_capture) {
+    items.push({
+      key: "browser-capture",
+      name: "Browser",
+      detail: "Audio/screen capture",
+    });
+  }
+
+  if (snapshot.system_pause) {
+    items.push({
+      key: "system-pause",
+      name: "System",
+      detail: "Sleep or lid hold",
+    });
+  }
+
+  return items;
+}
+
 export function Stasis() {
   const [status, setStatus] = useState<StasisWatchState | null>(null);
   const [profiles, setProfiles] = useState<string[]>([DEFAULT_PROFILE]);
-  const [blame, setBlame] = useState<string | null>(null);
+  const [blame, setBlame] = useState<BlameSnapshot | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [open, setOpen] = useState(false);
@@ -60,10 +170,10 @@ export function Stasis() {
 
   const refreshBlame = useCallback(async () => {
     try {
-      const res = await window.webbar.exec(["stasis", "blame"]);
+      const res = await window.webbar.exec(["stasis", "blame", "--json"]);
       if (res.code === 0) {
-        const text = res.stdout.trim();
-        setBlame(text && text !== "No current blockers" ? text : null);
+        const parsed = JSON.parse(res.stdout) as BlameSnapshot;
+        setBlame(parsed);
       }
     } catch {
       setBlame(null);
@@ -141,17 +251,32 @@ export function Stasis() {
   }, [refreshProfiles]);
 
   const activeProfile = status?.profile ?? DEFAULT_PROFILE;
-  const isPaused = Boolean(status?.paused || status?.manually_paused);
+  const isManuallyPaused = Boolean(status?.manually_paused);
+  const blockers = extractBlockers(blame);
+  const hasExternalInhibitor = Boolean(
+    status?.paused || blame?.progression_blocked || blockers.length > 0,
+  );
+  const isInhibited = isManuallyPaused || hasExternalInhibitor;
+
+  useEffect(() => {
+    if (!status) {
+      setBlame(null);
+      return;
+    }
+    void refreshBlame();
+    const timer = window.setInterval(() => {
+      void refreshBlame();
+    }, 3000);
+    return () => {
+      window.clearInterval(timer);
+    };
+  }, [status, refreshBlame]);
 
   useEffect(() => {
     if (!open) return;
     void refreshProfiles();
-    if (isPaused) {
-      void refreshBlame();
-    } else {
-      setBlame(null);
-    }
-  }, [open, isPaused, refreshProfiles, refreshBlame]);
+    void refreshBlame();
+  }, [open, refreshProfiles, refreshBlame]);
 
   const runStasisCommand = useCallback(async (argv: string[]) => {
     setBusy(true);
@@ -173,14 +298,30 @@ export function Stasis() {
   }, []);
 
   const togglePause = useCallback(() => {
-    void runStasisCommand(["stasis", isPaused ? "resume" : "pause"]);
-  }, [isPaused, runStasisCommand]);
+    void runStasisCommand(["stasis", isManuallyPaused ? "resume" : "pause"]);
+  }, [isManuallyPaused, runStasisCommand]);
+
+  const statusSuffix = isManuallyPaused
+    ? " (paused)"
+    : isInhibited
+      ? " (inhibited)"
+      : "";
+
+  const badgeTooltip = !status
+    ? "Stasis idle daemon is not running or unreachable"
+    : isManuallyPaused
+      ? "Idle timers are manually paused until resumed"
+      : isInhibited
+        ? blockers.length > 0
+          ? `Idle progression blocked by: ${blockers.map((b) => b.name).join(", ")}`
+          : "Idle progression is blocked by an active inhibitor"
+        : `Idle timers are running (${formatProfileLabel(activeProfile)} profile)`;
 
   const pillClass = [
     "bar-btn",
     "stasis-btn",
     !status ? "is-dimmed" : "",
-    isPaused ? "is-inhibited" : "",
+    isInhibited ? "is-inhibited" : "",
     open ? "is-open" : "",
   ]
     .filter(Boolean)
@@ -196,7 +337,7 @@ export function Stasis() {
           error
             ? `Stasis: ${error}`
             : status
-              ? `Idle: ${formatProfileLabel(activeProfile)}${isPaused ? " (paused)" : ""} — click for controls, right-click to ${isPaused ? "resume" : "pause"}`
+              ? `Idle: ${formatProfileLabel(activeProfile)}${statusSuffix} — click for controls, right-click to ${isManuallyPaused ? "resume" : "pause"}`
               : "Stasis offline"
         }
         onClick={() => setOpen((prev) => !prev)}
@@ -205,7 +346,7 @@ export function Stasis() {
           togglePause();
         }}
       >
-        <IdleIcon inhibited={isPaused} />
+        <IdleIcon inhibited={isInhibited} />
         <span className="stasis-label">
           {status ? formatProfileLabel(activeProfile) : "idle"}
         </span>
@@ -216,24 +357,27 @@ export function Stasis() {
           <div className="stasis-header">
             <span className="stasis-title">Idle</span>
             {!status ? (
-              <span className="stasis-badge is-offline">offline</span>
+              <span className="stasis-badge is-offline" title={badgeTooltip}>
+                offline
+              </span>
+            ) : isInhibited ? (
+              <span className="stasis-badge is-inhibited" title={badgeTooltip}>
+                {isManuallyPaused ? "paused" : "inhibited"}
+              </span>
             ) : (
-              isPaused && (
-                <span className="stasis-badge is-inhibited">paused</span>
-              )
+              <span className="stasis-badge" title={badgeTooltip}>
+                active
+              </span>
             )}
           </div>
 
-          {error && <div className="stasis-error">{error}</div>}
-          {blame && <div className="stasis-blame">{blame}</div>}
-
           <button
             type="button"
-            className={`bar-btn stasis-action-btn${isPaused ? " is-active" : ""}`}
+            className={`bar-btn stasis-action-btn${isManuallyPaused ? " is-active" : ""}`}
             disabled={busy || !status}
             onClick={togglePause}
           >
-            {isPaused ? "Resume Idle" : "Pause Idle"}
+            {isManuallyPaused ? "Resume Idle" : "Pause Idle"}
           </button>
 
           <div className="stasis-section-label">Profiles</div>
@@ -260,6 +404,26 @@ export function Stasis() {
               );
             })}
           </div>
+
+          {blockers.length > 0 && (
+            <>
+              <div className="stasis-section-label">Inhibitors</div>
+              <div className="stasis-inhibitor-list">
+                {blockers.map((item) => (
+                  <div key={item.key} className="stasis-inhibitor-item">
+                    <span className="stasis-inhibitor-name">{item.name}</span>
+                    {item.detail && (
+                      <span className="stasis-inhibitor-detail">
+                        {item.detail}
+                      </span>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </>
+          )}
+
+          {error && <div className="stasis-error">{error}</div>}
         </div>
       </Popover>
     </>

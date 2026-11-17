@@ -446,7 +446,7 @@ button:focus-visible {
   display: flex;
   flex-direction: column;
   gap: 8px;
-  min-width: 220px;
+  width: 232px;
 }
 
 .stasis-header {
@@ -454,11 +454,12 @@ button:focus-visible {
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  padding: 2px 4px;
+  padding: 2px 2px 4px;
 }
 
 .stasis-title {
   font-size: 13px;
+  font-weight: 700;
 }
 
 .stasis-badge {
@@ -487,15 +488,37 @@ button:focus-visible {
   padding: 6px 8px;
 }
 
-.stasis-blame {
-  font-size: 12px;
-  font-weight: 500;
-  color: #deddda;
-  background: var(--surface-color);
-  border-radius: 6px;
+.stasis-inhibitor-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding-top: 2px;
+}
+
+.stasis-inhibitor-item {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
   padding: 6px 8px;
-  white-space: pre-wrap;
-  max-width: 240px;
+  border-radius: 6px;
+  background: var(--surface-color);
+}
+
+.stasis-inhibitor-name {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--theme-fg-color);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.stasis-inhibitor-detail {
+  font-size: 11px;
+  color: #9a9996;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .stasis-action-btn {
