@@ -53,6 +53,7 @@ export function AudioOutput() {
           <input
             type="range"
             className="bar-slider popover-slider"
+            style={{ "--fill": `${Math.min(100, pct)}%` } as React.CSSProperties}
             min={0}
             max={1}
             step={0.01}

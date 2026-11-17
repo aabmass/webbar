@@ -60,6 +60,7 @@ export function Bluetooth() {
       </button>
 
       <Popover open={open} onClose={close} anchorRef={btnRef} align="end">
+        <div className="popover-title">Bluetooth</div>
         <div className="bt-popover-list">
           {pairedDevices.length === 0 ? (
             <span className="drawer-empty">No paired devices</span>
@@ -79,8 +80,11 @@ export function Bluetooth() {
                   title={`${device.name} (${device.address})`}
                   onClick={() => void toggleDevice(device)}
                 >
-                  {device.name}
-                  {device.battery != null ? ` (${device.battery}%)` : ""}
+                  <span className="bt-dot" aria-hidden="true" />
+                  <span className="bt-name">{device.name}</span>
+                  {device.battery != null && (
+                    <span className="bt-battery">{device.battery}%</span>
+                  )}
                 </button>
               );
             })

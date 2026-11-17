@@ -43,6 +43,7 @@ export function MonitorBacklight() {
           <input
             type="range"
             className="bar-slider popover-slider"
+            style={{ "--fill": `${brightness ?? 50}%` } as React.CSSProperties}
             min={0}
             max={100}
             step={1}

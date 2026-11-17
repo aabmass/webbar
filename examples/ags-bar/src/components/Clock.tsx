@@ -1,20 +1,29 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Popover } from "./Popover";
 
-function formatClock(date: Date): string {
-  // Matches GLib "%c" style: "Thu 12 Nov 2026 10:30:52 PM EST"
-  const weekday = date.toLocaleDateString("en-US", { weekday: "short" });
-  const day = String(date.getDate()).padStart(2, "0");
-  const month = date.toLocaleDateString("en-US", { month: "short" });
-  const year = date.getFullYear();
-  const time = date.toLocaleTimeString("en-US", {
-    hour: "2-digit",
+function clockParts(date: Date) {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    hour: "numeric",
     minute: "2-digit",
     second: "2-digit",
     hour12: true,
     timeZoneName: "short",
+  }).formatToParts(date);
+  const get = (type: Intl.DateTimeFormatPartTypes) =>
+    parts.find((p) => p.type === type)?.value ?? "";
+  const time = `${get("hour")}:${get("minute")}:${get("second")}`;
+  const date_ = date.toLocaleDateString("en-US", {
+    weekday: "long",
+    month: "long",
+    day: "numeric",
+    year: "numeric",
   });
-  return `${weekday} ${day} ${month} ${year} ${time}`;
+  return {
+    time,
+    ampm: get("dayPeriod"),
+    tz: get("timeZoneName"),
+    date: date_,
+  };
 }
 
 const WEEKDAYS = ["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"];
@@ -37,6 +46,9 @@ function Calendar({ today }: { today: Date }) {
     d === today.getDate() &&
     month === today.getMonth() &&
     year === today.getFullYear();
+
+  const isWeekend = (cellIdx: number) =>
+    cellIdx % 7 === 0 || cellIdx % 7 === 6;
 
   const monthLabel = view.toLocaleDateString("en-US", {
     month: "long",
@@ -76,7 +88,7 @@ function Calendar({ today }: { today: Date }) {
           ) : (
             <span
               key={day}
-              className={`cal-day${isToday(day) ? " is-today" : ""}`}
+              className={`cal-day${isToday(day) ? " is-today" : ""}${isWeekend(idx) ? " is-weekend" : ""}`}
             >
               {day}
             </span>
@@ -98,6 +110,8 @@ export function Clock() {
     return () => window.clearInterval(id);
   }, []);
 
+  const parts = clockParts(now);
+
   return (
     <>
       <button
@@ -107,7 +121,12 @@ export function Clock() {
         title={now.toLocaleString()}
         onClick={() => setOpen((prev) => !prev)}
       >
-        {formatClock(now)}
+        <span className="clock-time">
+          {parts.time}
+          <span className="clock-ampm">{parts.ampm}</span>
+          <span className="clock-tz">{parts.tz}</span>
+        </span>
+        <span className="clock-date">{parts.date}</span>
       </button>
       <Popover open={open} onClose={close} anchorRef={btnRef} align="center">
         <Calendar today={now} />
