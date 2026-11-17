@@ -19,11 +19,13 @@ export function App() {
         </div>
 
         <div className="bar-end">
-          <Stasis />
-          <AudioOutput />
-          <MonitorBacklight />
-          <Bluetooth />
           <Tray />
+          <div className="widget-cluster" role="group" aria-label="System controls">
+            <Stasis />
+            <AudioOutput />
+            <MonitorBacklight />
+            <Bluetooth />
+          </div>
         </div>
       </header>
     </div>

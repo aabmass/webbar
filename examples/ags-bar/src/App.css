@@ -66,7 +66,33 @@ body,
   display: flex;
   align-items: center;
   justify-self: end;
-  gap: 4px;
+  gap: 10px;
+}
+
+/* Persistent widgets share one segmented pill */
+.widget-cluster {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  height: 60px;
+  padding: 4px;
+  border-radius: 10px;
+  background: var(--surface-color);
+}
+
+.widget-cluster > .bar-btn {
+  height: 100%;
+  margin: 0;
+  border-radius: 7px;
+  background: transparent;
+}
+
+.widget-cluster > .bar-btn:hover {
+  background: var(--surface-hover);
+}
+
+.widget-cluster > .bar-btn.is-open {
+  background: #4e4e4e;
 }
 
 button {
@@ -344,11 +370,28 @@ button:focus-visible {
   display: inline-flex;
   align-items: center;
   gap: 2px;
+  height: 44px;
+  padding: 4px;
+  border-radius: 10px;
+  background: #1a1a1a;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.05);
 }
 
-.tray-item {
-  font-size: 12px;
+.tray-item.bar-btn {
+  height: 36px;
+  margin: 0;
+  font-size: 11px;
   padding: 0 8px;
+  border-radius: 7px;
+  background: transparent;
+}
+
+.tray-item.bar-btn:hover {
+  background: var(--surface-color);
+}
+
+.tray-item.bar-btn.is-open {
+  background: var(--surface-hover);
 }
 
 .tray-item.icon-btn {
