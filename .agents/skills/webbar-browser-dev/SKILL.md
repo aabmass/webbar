@@ -30,6 +30,8 @@ npm --workspace=examples/ags-bar run dev -- --port 5173 --strictPort
 
 Wait until it prints `open http://localhost:5173?wsPort=9123&wsToken=...`.
 
+> Note: The backend needs the host session (Sway IPC socket, session/system D-Bus, PulseAudio), so run the `webbar` / `nix run` process outside any agent sandbox. If a prebuilt `webbar` binary rejects `--ws-bridge`, it is stale — rebuild it (e.g. `nix build`).
+
 ## 2. Inspect with the Browser Subagent
 
 Open the printed `http://localhost:5173?wsPort=9123&wsToken=...` URL in the browser subagent:
