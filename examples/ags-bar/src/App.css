@@ -24,9 +24,10 @@
   --radius-md: 10px;
   --radius-sm: 7px;
 
-  /* Motion */
-  --ease-out: ease;
-  --dur-fast: 120ms;
+  /* Motion: short and crisp */
+  --ease-out: cubic-bezier(0.2, 0, 0, 1);
+  --dur-fast: 70ms;
+  --dur-med: 110ms;
 
   /* Backwards-compatible aliases */
   --theme-bg-color: var(--bar-bg);
@@ -107,7 +108,12 @@ button {
     background-color var(--dur-fast) var(--ease-out),
     color var(--dur-fast) var(--ease-out),
     box-shadow var(--dur-fast) var(--ease-out),
-    opacity var(--dur-fast) var(--ease-out);
+    opacity var(--dur-fast) var(--ease-out),
+    scale var(--dur-fast) var(--ease-out);
+}
+
+button:active:not(:disabled) {
+  scale: 0.96;
 }
 
 button:focus-visible {
@@ -329,6 +335,11 @@ button:focus-visible {
   background: #ffffff;
   border: none;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.5);
+  transition: scale var(--dur-fast) var(--ease-out);
+}
+
+.bar-slider:active::-webkit-slider-thumb {
+  scale: 1.15;
 }
 
 .bar-slider::-moz-range-thumb {
@@ -360,6 +371,19 @@ button:focus-visible {
 }
 
 /* Overlay popovers */
+@keyframes popover-in {
+  from {
+    opacity: 0;
+    translate: 0 -6px;
+    scale: 0.98;
+  }
+  to {
+    opacity: 1;
+    translate: 0 0;
+    scale: 1;
+  }
+}
+
 .popover-panel {
   position: fixed;
   inset: auto;
@@ -372,6 +396,8 @@ button:focus-visible {
   box-shadow:
     0 12px 32px rgba(0, 0, 0, 0.5),
     0 2px 6px rgba(0, 0, 0, 0.3);
+  transform-origin: top center;
+  animation: popover-in var(--dur-med) var(--ease-out);
 }
 
 .popover-panel::backdrop {
@@ -622,6 +648,10 @@ button:focus-visible {
   text-align: left;
 }
 
+.tray-menu-item:active:not(:disabled) {
+  scale: 1;
+}
+
 .tray-menu-item:hover:not(.is-disabled) {
   background: var(--accent-soft);
 }
@@ -817,3 +847,11 @@ button:focus-visible {
   font-size: 12px;
 }
 
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 1ms !important;
+    transition-duration: 1ms !important;
+  }
+}
