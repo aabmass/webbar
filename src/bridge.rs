@@ -22,6 +22,8 @@ pub struct InputRect {
     pub height: f64,
 }
 
+#[cfg(test)]
+#[allow(dead_code)]
 #[derive(Debug, Clone, Serialize, TS)]
 #[ts(export, export_to = "../preload/src/generated/")]
 pub struct SwayState {
@@ -30,6 +32,8 @@ pub struct SwayState {
     pub mode: String,
 }
 
+#[cfg(test)]
+#[allow(dead_code)]
 #[derive(Debug, Clone, Serialize, TS)]
 #[ts(export, export_to = "../preload/src/generated/")]
 pub struct AudioState {
@@ -38,6 +42,8 @@ pub struct AudioState {
     pub inputs: Vec<crate::audio::AudioDevice>,
 }
 
+#[cfg(test)]
+#[allow(dead_code)]
 #[derive(Debug, Clone, Serialize, TS)]
 #[ts(export, export_to = "../preload/src/generated/")]
 pub struct BluetoothState {
@@ -46,6 +52,8 @@ pub struct BluetoothState {
     pub devices: Vec<crate::bluetooth::BluetoothDevice>,
 }
 
+#[cfg(test)]
+#[allow(dead_code)]
 #[derive(Debug, Clone, Serialize, TS)]
 #[ts(export, export_to = "../preload/src/generated/")]
 pub struct NetworkState {
@@ -54,6 +62,8 @@ pub struct NetworkState {
     pub link: crate::network::NetworkLink,
 }
 
+#[cfg(test)]
+#[allow(dead_code)]
 #[derive(Debug, Clone, Serialize, TS)]
 #[ts(export, export_to = "../preload/src/generated/")]
 pub struct BacklightState {

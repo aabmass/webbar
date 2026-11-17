@@ -254,7 +254,7 @@
             });
             rust-clippy = craneLib.cargoClippy (commonArgs // {
               inherit cargoArtifacts;
-              cargoClippyExtraArgs = "--all-targets";
+              cargoClippyExtraArgs = "--all-targets -- --deny warnings";
             });
             rust-ts-bindings = craneLib.cargoTest (commonArgs // {
               inherit cargoArtifacts;

@@ -36,6 +36,7 @@ impl DbusBridge {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn call(
         &self,
         id: u32,

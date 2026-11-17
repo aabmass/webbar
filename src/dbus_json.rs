@@ -56,11 +56,6 @@ pub fn written_value(values: &[Value<'_>]) -> Json {
     Json::Array(values.iter().map(json).collect())
 }
 
-/// `values` as a body's JSON text.
-pub fn written(values: &[Value<'_>]) -> String {
-    written_value(values).to_string()
-}
-
 /// The complete types in `signature`, in order.
 fn types(signature: &str) -> Result<Vec<Signature>, NotABody> {
     if signature.is_empty() {
@@ -205,6 +200,10 @@ fn key_text(key: &Value<'_>) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn written(values: &[Value<'_>]) -> String {
+        written_value(values).to_string()
+    }
 
     fn assert_roundtrip_json(signature: &str, body_json: &str) {
         let values = read(signature, body_json)

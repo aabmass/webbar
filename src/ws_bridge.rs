@@ -18,6 +18,9 @@ use crate::process_bridge::ProcessBridge;
 
 const CLIENT_CHANNEL_CAPACITY: usize = 256;
 
+type RequestHandler =
+    dyn Fn(Option<&str>, BridgeRequest, &DbusBridge, &ProcessBridge, &SendEvent) + Send + Sync;
+
 #[derive(Clone, Default)]
 pub struct WsBroadcaster {
     clients: Arc<Mutex<Vec<mpsc::SyncSender<String>>>>,
@@ -92,12 +95,13 @@ where
     Ok(bound_port)
 }
 
+#[allow(clippy::result_large_err)]
 fn handle_client(
     stream: TcpStream,
     expected_token: &str,
     broadcaster: WsBroadcaster,
     snapshots: SnapshotCache,
-    on_request: &dyn Fn(Option<&str>, BridgeRequest, &DbusBridge, &ProcessBridge, &SendEvent),
+    on_request: &RequestHandler,
 ) {
     let mut client_output: Option<String> = None;
     let Ok(mut ws) = accept_hdr(stream, |req: &Request, resp: Response| {

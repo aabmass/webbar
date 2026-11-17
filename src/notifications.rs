@@ -67,7 +67,9 @@ pub fn parse_urgency(hints: &HashMap<String, OwnedValue>) -> NotificationUrgency
 }
 
 pub fn parse_actions(raw: &[String]) -> Vec<NotificationAction> {
-    raw.chunks_exact(2)
+    raw.as_chunks::<2>()
+        .0
+        .iter()
         .filter(|pair| !pair[0].is_empty())
         .map(|pair| NotificationAction {
             key: pair[0].clone(),
@@ -86,6 +88,7 @@ impl NotificationStore {
         }
     }
 
+    #[cfg(test)]
     pub fn push(&self, replaces_id: u32, app_name: String, summary: String, body: String) -> u32 {
         self.push_full(
             replaces_id,

@@ -259,7 +259,7 @@ fn select_best_pixmap(pixmaps: Vec<(i32, i32, Vec<u8>)>) -> Option<(i32, i32, Ve
 
 fn argb_pixmap_to_png_data_url(width: i32, height: i32, argb: &[u8]) -> Option<String> {
     let mut rgba = Vec::with_capacity(argb.len());
-    for px in argb.chunks_exact(4) {
+    for px in argb.as_chunks::<4>().0 {
         rgba.push(px[1]);
         rgba.push(px[2]);
         rgba.push(px[3]);
@@ -298,7 +298,7 @@ fn lookup_theme_icon_data_url(icon_name: &str, icon_theme_path: &str) -> Option<
     glib::idle_add_once(move || {
         let theme = gdk::Display::default()
             .map(|d| IconTheme::for_display(&d))
-            .unwrap_or_else(IconTheme::new);
+            .unwrap_or_default();
         if !theme_path.is_empty() && !theme.search_path().iter().any(|p| p == Path::new(&theme_path))
         {
             theme.add_search_path(&theme_path);
