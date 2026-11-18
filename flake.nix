@@ -102,6 +102,7 @@
             fileset = pkgs.lib.fileset.unions [
               ./Cargo.toml
               ./Cargo.lock
+              ./build.rs
               ./src
               ./generated/preload.js
             ];
@@ -261,7 +262,8 @@
               cargoTestExtraArgs = "export_bindings_";
               preCheck = ''
                 export TS_RS_EXPORT_DIR="$PWD/target/ts-root/dummy"
-                mkdir -p "$TS_RS_EXPORT_DIR"
+                export WEBBAR_TS_DIR="$PWD/target/ts-root/preload/src/generated"
+                mkdir -p "$TS_RS_EXPORT_DIR" "$WEBBAR_TS_DIR"
               '';
               postCheck = ''
                 diff -ru ${./preload/src/generated} "$PWD/target/ts-root/preload/src/generated"

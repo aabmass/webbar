@@ -50,8 +50,9 @@ function renderSway(state: SwayState): void {
       btn.dataset.urgent = String(ws.urgent);
       btn.title = `${ws.output}: ${ws.name}`;
       btn.addEventListener("click", () => {
-        const escaped = ws.name.replace(/"/g, '\\"');
-        sway.command(`workspace "${escaped}"`);
+        sway
+          .focusWorkspace(ws)
+          .catch((err) => console.warn("focusWorkspace failed:", err));
       });
       return btn;
     }),
@@ -64,8 +65,9 @@ function renderSway(state: SwayState): void {
     modeEl.hidden = true;
   }
 
-  focusedTitleEl.textContent = state.focused_title;
-  focusedTitleEl.title = state.focused_title;
+  const title = sway.focusedTitle(state.tree);
+  focusedTitleEl.textContent = title;
+  focusedTitleEl.title = title;
 }
 
 function renderTray(items: TrayItem[]): void {

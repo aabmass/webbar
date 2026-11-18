@@ -320,6 +320,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "00d174d5400e5e8fd687ad1049e2f578285fa914201b1af7e8b112a4546bd826"
 
 [[package]]
+name = "erased-discriminant"
+version = "1.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c1a6df962265a53221f29081896c412ef325c17fa7d638cd9578febe53d3c82c"
+dependencies = [
+ "typeid",
+]
+
+[[package]]
 name = "errno"
 version = "0.3.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1151,6 +1160,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "serde-reflection"
+version = "0.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1b5da1e701056e29fcd3508529fda5cc3df8b5299d56a89dee0deb048e733b9a"
+dependencies = [
+ "erased-discriminant",
+ "once_cell",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+ "typeid",
+]
+
+[[package]]
 name = "serde_core"
 version = "1.0.229"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1260,6 +1283,28 @@ dependencies = [
  "gobject-sys",
  "libc",
  "system-deps",
+]
+
+[[package]]
+name = "swayipc"
+version = "4.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7fd6ee13016b1ae2fbf741ddb2133d983a3fecdc34686eec6202e2a80612d82f"
+dependencies = [
+ "serde",
+ "serde_json",
+ "swayipc-types",
+]
+
+[[package]]
+name = "swayipc-types"
+version = "2.0.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a38abba293875141fd89c08df734fc1621218ef3b4adf0e585c155ff62c0cc4d"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -1489,6 +1534,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "typeid"
+version = "1.0.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bc7d623258602320d5c55d1bc22793b57daff0ec7efc270ea7d55ce1d5f5471c"
+
+[[package]]
 name = "typenum"
 version = "1.18.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1602,7 +1653,10 @@ dependencies = [
  "gtk4-layer-shell",
  "libpulse-binding",
  "serde",
+ "serde-reflection",
  "serde_json",
+ "swayipc",
+ "swayipc-types",
  "thiserror 2.0.21",
  "ts-rs",
  "tungstenite",

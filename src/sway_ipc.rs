@@ -1,408 +1,441 @@
-//! Sway / i3 IPC client for workspace, window focus, and binding mode state.
+//! Sway IPC client built on the `swayipc` crate.
+//!
+//! State: on every relevant Sway event (bursts are coalesced) we re-fetch the
+//! full tree, workspaces, and binding mode and publish them as one
+//! [`SwayState`] snapshot. Events are only used as triggers, never patched in.
+//!
+//! Commands: run on a dedicated thread with its own connection and answered
+//! with an `RpcReply` so the frontend gets a typed success/error result.
 
-use std::collections::HashMap;
-use std::env;
-use std::io::{self, ErrorKind, Read, Write};
-use std::os::unix::net::UnixStream;
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::thread;
+use std::time::{Duration, Instant};
 
-use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use swayipc::{Connection, Error, EventType, Fallible};
 
-use crate::bridge::{BridgeEvent, SendEvent};
+use crate::bridge::{reply_ok, BridgeEvent, SendEvent, SwayCommandError};
+use crate::sway_state::SwayState;
 
-const MAGIC: &[u8; 6] = b"i3-ipc";
+const SUBSCRIPTIONS: [EventType; 4] = [
+    EventType::Workspace,
+    EventType::Window,
+    EventType::Mode,
+    EventType::Output,
+];
 
-pub const RUN_COMMAND: u32 = 0;
-pub const GET_WORKSPACES: u32 = 1;
-pub const SUBSCRIBE: u32 = 2;
-pub const GET_TREE: u32 = 4;
+/// How long to wait for further events before re-fetching state.
+const COALESCE_WINDOW: Duration = Duration::from_millis(16);
+const BACKOFF_MIN: Duration = Duration::from_millis(250);
+const BACKOFF_MAX: Duration = Duration::from_secs(5);
+/// A session that lived at least this long resets the reconnect backoff.
+const HEALTHY_SESSION: Duration = Duration::from_secs(10);
 
-const EVENT_WORKSPACE: u32 = 0x8000_0000;
-const EVENT_MODE: u32 = 0x8000_0002;
-const EVENT_WINDOW: u32 = 0x8000_0003;
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
-#[ts(export, export_to = "../preload/src/generated/")]
-pub struct SwayWorkspace {
-    #[serde(default)]
-    #[ts(type = "number")]
-    pub id: i64,
-    #[serde(default)]
-    pub num: i32,
-    #[serde(default)]
-    pub name: String,
-    #[serde(default)]
-    pub visible: bool,
-    #[serde(default)]
-    pub focused: bool,
-    #[serde(default)]
-    pub urgent: bool,
-    #[serde(default)]
-    pub output: String,
-    /// Number of application windows (tiled + floating) on this workspace.
-    /// Not part of Sway's GET_WORKSPACES reply; filled in from GET_TREE.
-    #[serde(default)]
-    pub window_count: u32,
+/// Message from the event-reader thread to the state thread.
+#[derive(Debug)]
+enum Trigger {
+    Changed,
+    Disconnected(Error),
 }
 
-pub fn encode_frame(msg_type: u32, payload: &[u8]) -> Vec<u8> {
-    let mut frame = Vec::with_capacity(14 + payload.len());
-    frame.extend_from_slice(MAGIC);
-    frame.extend_from_slice(&(payload.len() as u32).to_ne_bytes());
-    frame.extend_from_slice(&msg_type.to_ne_bytes());
-    frame.extend_from_slice(payload);
-    frame
+/// Why a state session ended.
+#[derive(Debug)]
+enum SessionEnd {
+    /// Socket-level failure; reconnecting may help.
+    Lost(Error),
+    /// Sway IPC is unavailable (e.g. no socket path); give up.
+    Unavailable(Error),
 }
 
-pub fn read_frame<R: Read>(reader: &mut R) -> io::Result<(u32, Vec<u8>)> {
-    let mut header = [0u8; 14];
-    reader.read_exact(&mut header)?;
-    if &header[0..6] != MAGIC {
-        return Err(io::Error::new(
-            ErrorKind::InvalidData,
-            "invalid i3-ipc magic header",
-        ));
-    }
-    let len = u32::from_ne_bytes(header[6..10].try_into().unwrap()) as usize;
-    let msg_type = u32::from_ne_bytes(header[10..14].try_into().unwrap());
-    let mut payload = vec![0u8; len];
-    reader.read_exact(&mut payload)?;
-    Ok((msg_type, payload))
-}
-
-pub fn extract_focused_title(tree: &Value) -> String {
-    fn find_focused(node: &Value) -> Option<String> {
-        for key in ["nodes", "floating_nodes"] {
-            if let Some(children) = node.get(key).and_then(|v| v.as_array()) {
-                for child in children {
-                    if let Some(title) = find_focused(child) {
-                        return Some(title);
-                    }
-                }
-            }
-        }
-        if node.get("focused").and_then(|v| v.as_bool()) == Some(true) {
-            return Some(
-                node.get("name")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or_default()
-                    .to_string(),
-            );
-        }
-        None
-    }
-
-    find_focused(tree).unwrap_or_default()
-}
-
-/// Count application windows (leaf containers with a pid) per workspace name.
-pub fn count_workspace_windows(tree: &Value) -> HashMap<String, u32> {
-    fn count_windows(node: &Value) -> u32 {
-        let mut children = 0usize;
-        let mut total = 0u32;
-        for key in ["nodes", "floating_nodes"] {
-            if let Some(list) = node.get(key).and_then(|v| v.as_array()) {
-                children += list.len();
-                total += list.iter().map(count_windows).sum::<u32>();
-            }
-        }
-        if children == 0 {
-            let is_con = matches!(
-                node.get("type").and_then(|v| v.as_str()),
-                Some("con" | "floating_con")
-            );
-            let has_pid = node.get("pid").and_then(|v| v.as_i64()).is_some();
-            return u32::from(is_con && has_pid);
-        }
-        total
-    }
-
-    fn walk(node: &Value, out: &mut HashMap<String, u32>) {
-        if node.get("type").and_then(|v| v.as_str()) == Some("workspace") {
-            if let Some(name) = node.get("name").and_then(|v| v.as_str()) {
-                if name != "__i3_scratch" {
-                    out.insert(name.to_string(), count_windows(node));
-                }
-            }
-            return;
-        }
-        if let Some(list) = node.get("nodes").and_then(|v| v.as_array()) {
-            for child in list {
-                walk(child, out);
-            }
+impl From<Error> for SessionEnd {
+    fn from(err: Error) -> Self {
+        match err {
+            Error::SocketNotFound => SessionEnd::Unavailable(err),
+            other => SessionEnd::Lost(other),
         }
     }
-
-    let mut out = HashMap::new();
-    walk(tree, &mut out);
-    out
 }
 
-fn apply_window_counts(workspaces: &mut [SwayWorkspace], counts: &HashMap<String, u32>) {
-    for ws in workspaces {
-        ws.window_count = counts.get(&ws.name).copied().unwrap_or(0);
-    }
+/// True for errors where the payload was read completely but didn't match
+/// swayipc's types (e.g. a value added in a newer Sway). The connection is
+/// still in sync, so we can keep using it.
+fn is_decode_error(err: &Error) -> bool {
+    matches!(err, Error::SerdeJson(_) | Error::UnimplementedEvent(..))
 }
 
-/// Refresh focused title and per-workspace window counts from one GET_TREE.
-fn refresh_from_tree(
-    stream: &mut UnixStream,
-    workspaces: &mut [SwayWorkspace],
-    focused_title: &mut String,
-) {
-    if let Ok(tree) = query_json(stream, GET_TREE) {
-        *focused_title = extract_focused_title(&tree);
-        apply_window_counts(workspaces, &count_workspace_windows(&tree));
-    }
-}
+// ---------------------------------------------------------------------------
+// State
+// ---------------------------------------------------------------------------
 
-fn store_and_send(send: &SendEvent, event: BridgeEvent) {
-    send(event);
-}
-
+/// Spawn the state supervisor: connects, publishes snapshots, and reconnects
+/// with exponential backoff when the connection drops (e.g. `swaymsg reload`).
 pub fn spawn(send: SendEvent) {
     thread::spawn(move || {
-        let sock_path = match env::var("SWAYSOCK") {
-            Ok(path) if !path.is_empty() => path,
-            _ => {
-                eprintln!("webbar: SWAYSOCK is not set; Sway IPC disabled");
-                return;
-            }
-        };
-
-        let mut query_stream = match UnixStream::connect(&sock_path) {
-            Ok(s) => s,
-            Err(err) => {
-                eprintln!("webbar: failed to connect to SWAYSOCK ({sock_path}): {err}");
-                return;
-            }
-        };
-
-        let mut event_stream = match UnixStream::connect(&sock_path) {
-            Ok(s) => s,
-            Err(err) => {
-                eprintln!("webbar: failed to open Sway event socket: {err}");
-                return;
-            }
-        };
-
-        let mut workspaces = fetch_workspaces(&mut query_stream).unwrap_or_default();
-        let mut focused_title = String::new();
-        refresh_from_tree(&mut query_stream, &mut workspaces, &mut focused_title);
-        let mut mode = "default".to_string();
-
-        store_and_send(
-            &send,
-            BridgeEvent::SwayState {
-                workspaces: workspaces.clone(),
-                focused_title: focused_title.clone(),
-                mode: mode.clone(),
-            },
-        );
-
-        let sub_payload = br#"["workspace","window","mode"]"#;
-        if let Err(err) = event_stream
-            .write_all(&encode_frame(SUBSCRIBE, sub_payload))
-            .and_then(|_| read_frame(&mut event_stream).map(|_| ()))
-        {
-            eprintln!("webbar: failed to subscribe to Sway events: {err}");
-            return;
-        }
-
-        while let Ok((msg_type, payload)) = read_frame(&mut event_stream) {
-            match msg_type {
-                EVENT_WORKSPACE => {
-                    if let Ok(ws) = fetch_workspaces(&mut query_stream) {
-                        workspaces = ws;
-                    }
-                    refresh_from_tree(&mut query_stream, &mut workspaces, &mut focused_title);
+        let mut publisher = Publisher::default();
+        let mut backoff = BACKOFF_MIN;
+        loop {
+            let started = Instant::now();
+            match run_session(&send, &mut publisher) {
+                SessionEnd::Unavailable(err) => {
+                    eprintln!("webbar: Sway IPC disabled: {err}");
+                    return;
                 }
-                EVENT_WINDOW => {
-                    refresh_from_tree(&mut query_stream, &mut workspaces, &mut focused_title);
+                SessionEnd::Lost(err) => {
+                    eprintln!("webbar: Sway IPC connection lost: {err}; reconnecting");
                 }
-                EVENT_MODE => {
-                    if let Ok(val) = serde_json::from_slice::<Value>(&payload) {
-                        if let Some(change) = val.get("change").and_then(|v| v.as_str()) {
-                            mode = change.to_string();
-                        }
-                    }
-                }
-                _ => continue,
             }
-
-            store_and_send(
-                &send,
-                BridgeEvent::SwayState {
-                    workspaces: workspaces.clone(),
-                    focused_title: focused_title.clone(),
-                    mode: mode.clone(),
-                },
-            );
+            if started.elapsed() >= HEALTHY_SESSION {
+                backoff = BACKOFF_MIN;
+            }
+            thread::sleep(backoff);
+            backoff = (backoff * 2).min(BACKOFF_MAX);
         }
     });
 }
 
-pub fn run_command(command: &str) -> Result<(), String> {
-    let sock_path = env::var("SWAYSOCK").map_err(|_| "SWAYSOCK is not set".to_string())?;
-    let mut stream = UnixStream::connect(&sock_path).map_err(|e| e.to_string())?;
-    stream
-        .write_all(&encode_frame(RUN_COMMAND, command.as_bytes()))
-        .map_err(|e| e.to_string())?;
-    let (_msg_type, payload) = read_frame(&mut stream).map_err(|e| e.to_string())?;
-    if let Ok(results) = serde_json::from_slice::<Vec<Value>>(&payload) {
-        for item in results {
-            if item.get("success").and_then(|v| v.as_bool()) == Some(false) {
-                let err = item
-                    .get("error")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("sway command failed");
-                return Err(err.to_string());
+fn run_session(send: &SendEvent, publisher: &mut Publisher) -> SessionEnd {
+    match run_session_inner(send, publisher) {
+        Ok(never) => match never {},
+        Err(end) => end,
+    }
+}
+
+fn run_session_inner(
+    send: &SendEvent,
+    publisher: &mut Publisher,
+) -> Result<std::convert::Infallible, SessionEnd> {
+    let mut query = Connection::new()?;
+    // Subscribe before the first fetch so no change can slip in between.
+    let events = Connection::new()?.subscribe(SUBSCRIPTIONS)?;
+
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || read_events(events, tx));
+
+    publisher.publish(&mut query, send)?;
+    loop {
+        wait_for_change(&rx, COALESCE_WINDOW)?;
+        publisher.publish(&mut query, send)?;
+    }
+}
+
+fn read_events(events: swayipc::EventStream, tx: Sender<Trigger>) {
+    let mut warned = false;
+    for event in events {
+        let trigger = match event {
+            Ok(_) => Trigger::Changed,
+            Err(err) if is_decode_error(&err) => {
+                if !warned {
+                    eprintln!("webbar: ignoring undecodable Sway event: {err}");
+                    warned = true;
+                }
+                // Still a sign something changed; refresh anyway.
+                Trigger::Changed
             }
+            Err(err) => Trigger::Disconnected(err),
+        };
+        let disconnected = matches!(trigger, Trigger::Disconnected(_));
+        if tx.send(trigger).is_err() || disconnected {
+            return;
         }
     }
-    Ok(())
 }
 
-fn query_json(stream: &mut UnixStream, msg_type: u32) -> io::Result<Value> {
-    stream.write_all(&encode_frame(msg_type, &[]))?;
-    let (_reply_type, payload) = read_frame(stream)?;
-    serde_json::from_slice(&payload).map_err(|e| io::Error::new(ErrorKind::InvalidData, e))
+/// Block until at least one change arrives, then keep draining until the
+/// stream has been quiet for `window`, so a burst causes a single refresh.
+fn wait_for_change(rx: &Receiver<Trigger>, window: Duration) -> Result<(), SessionEnd> {
+    let closed = || SessionEnd::Lost(Error::SubscriptionFailed("event stream closed".into()));
+    match rx.recv() {
+        Ok(Trigger::Changed) => {}
+        Ok(Trigger::Disconnected(err)) => return Err(SessionEnd::Lost(err)),
+        Err(_) => return Err(closed()),
+    }
+    loop {
+        match rx.recv_timeout(window) {
+            Ok(Trigger::Changed) => continue,
+            Ok(Trigger::Disconnected(err)) => return Err(SessionEnd::Lost(err)),
+            Err(RecvTimeoutError::Timeout) => return Ok(()),
+            Err(RecvTimeoutError::Disconnected) => return Err(closed()),
+        }
+    }
 }
 
-fn fetch_workspaces(stream: &mut UnixStream) -> io::Result<Vec<SwayWorkspace>> {
-    let val = query_json(stream, GET_WORKSPACES)?;
-    serde_json::from_value(val).map_err(|e| io::Error::new(ErrorKind::InvalidData, e))
+/// Fetches snapshots and only sends them when they actually changed.
+#[derive(Default)]
+struct Publisher {
+    last_json: Option<String>,
+    warned_decode: bool,
+}
+
+impl Publisher {
+    fn publish(&mut self, conn: &mut Connection, send: &SendEvent) -> Result<(), SessionEnd> {
+        match fetch_state(conn) {
+            Ok(state) => {
+                if self.should_send(&state) {
+                    send(BridgeEvent::SwayState(Box::new(state)));
+                }
+                Ok(())
+            }
+            Err(err) if is_decode_error(&err) => {
+                // Keep the last good snapshot rather than blanking the bar.
+                if !self.warned_decode {
+                    eprintln!(
+                        "webbar: could not decode Sway state (newer Sway than swayipc supports?): {err}"
+                    );
+                    self.warned_decode = true;
+                }
+                Ok(())
+            }
+            Err(err) => Err(err.into()),
+        }
+    }
+
+    /// Returns true if `state` differs from the last snapshot sent.
+    fn should_send(&mut self, state: &SwayState) -> bool {
+        let Ok(json) = serde_json::to_string(state) else {
+            return true;
+        };
+        if self.last_json.as_deref() == Some(json.as_str()) {
+            return false;
+        }
+        self.last_json = Some(json);
+        true
+    }
+}
+
+fn fetch_state(conn: &mut Connection) -> Fallible<SwayState> {
+    Ok(SwayState {
+        tree: conn.get_tree()?,
+        workspaces: conn.get_workspaces()?,
+        mode: conn.get_binding_state()?,
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Commands
+// ---------------------------------------------------------------------------
+
+struct CommandJob {
+    id: u32,
+    command: String,
+    reply: SendEvent,
+}
+
+/// Handle to the Sway command thread.
+pub struct SwayCommands {
+    tx: Sender<CommandJob>,
+}
+
+impl SwayCommands {
+    pub fn spawn() -> Self {
+        let (tx, rx) = mpsc::channel::<CommandJob>();
+        thread::spawn(move || {
+            let mut conn: Option<Connection> = None;
+            for job in rx {
+                let result = run_command_with_retry(&mut conn, &job.command);
+                send_command_reply(&job.reply, job.id, result);
+            }
+        });
+        Self { tx }
+    }
+
+    pub fn run(&self, id: u32, command: String, reply: SendEvent) {
+        let job = CommandJob { id, command, reply };
+        if let Err(mpsc::SendError(job)) = self.tx.send(job) {
+            send_command_reply(
+                &job.reply,
+                job.id,
+                Err(Error::CommandFailed("Sway command thread stopped".into())),
+            );
+        }
+    }
+}
+
+type CommandResult = Fallible<Vec<Fallible<()>>>;
+
+/// Run on a cached connection, reconnecting once if the socket went stale.
+fn run_command_with_retry(conn: &mut Option<Connection>, command: &str) -> CommandResult {
+    for attempt in 0..2 {
+        let c = match conn {
+            Some(c) => c,
+            None => conn.insert(Connection::new()?),
+        };
+        match c.run_command(command) {
+            Err(Error::Io(err)) if attempt == 0 => {
+                eprintln!("webbar: Sway command connection lost ({err}); reconnecting");
+                *conn = None;
+            }
+            other => return other,
+        }
+    }
+    unreachable!("loop returns on the second attempt")
+}
+
+fn command_error(result: CommandResult) -> Option<SwayCommandError> {
+    let err = match result {
+        Ok(outcomes) => outcomes.into_iter().find_map(Result::err)?,
+        Err(err) => err,
+    };
+    Some(match err {
+        Error::CommandParse(message) => SwayCommandError {
+            message,
+            parse_error: true,
+        },
+        Error::CommandFailed(message) => SwayCommandError {
+            message,
+            parse_error: false,
+        },
+        other => SwayCommandError {
+            message: other.to_string(),
+            parse_error: false,
+        },
+    })
+}
+
+fn send_command_reply(send: &SendEvent, id: u32, result: CommandResult) {
+    match command_error(result) {
+        None => reply_ok(send, id),
+        Some(err) => send(BridgeEvent::RpcReply {
+            id,
+            ok: false,
+            error: Some(err.message.clone()),
+            data: serde_json::to_value(&err).ok(),
+        }),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+/// A minimal valid snapshot (empty root). swayipc's types are
+/// `#[non_exhaustive]`, so they can only be built by deserializing.
+#[cfg(test)]
+pub fn test_state() -> SwayState {
+    serde_json::from_value(serde_json::json!({
+        "tree": {
+            "id": 1, "name": "root", "type": "root", "border": "none",
+            "current_border_width": 0, "layout": "splith", "orientation": "horizontal",
+            "percent": null,
+            "rect": { "x": 0, "y": 0, "width": 1920, "height": 1080 },
+            "window_rect": { "x": 0, "y": 0, "width": 0, "height": 0 },
+            "deco_rect": { "x": 0, "y": 0, "width": 0, "height": 0 },
+            "geometry": { "x": 0, "y": 0, "width": 0, "height": 0 },
+            "urgent": false, "focused": false, "focus": [], "floating": null,
+            "nodes": [], "floating_nodes": [], "sticky": false
+        },
+        "workspaces": [],
+        "mode": "default"
+    }))
+    .expect("valid test SwayState")
 }
 
 #[cfg(test)]
 mod tests {
-    use std::io::Cursor;
+    use std::sync::{Arc, Mutex};
 
-    use serde_json::json;
-
-    use super::{
-        count_workspace_windows, encode_frame, extract_focused_title, read_frame, GET_WORKSPACES,
-    };
+    use super::*;
 
     #[test]
-    fn encode_decode_frame_roundtrip() {
-        let payload = br#"{"hello":"world"}"#;
-        let frame = encode_frame(GET_WORKSPACES, payload);
-        let mut cursor = Cursor::new(frame);
-        let (msg_type, decoded) = read_frame(&mut cursor).unwrap();
-        assert_eq!(msg_type, GET_WORKSPACES);
-        assert_eq!(decoded, payload);
+    fn coalesces_a_burst_into_one_refresh() {
+        let (tx, rx) = mpsc::channel();
+        for _ in 0..5 {
+            tx.send(Trigger::Changed).unwrap();
+        }
+        assert!(wait_for_change(&rx, Duration::from_millis(5)).is_ok());
+        // The whole burst was consumed by one wait.
+        assert!(rx.try_recv().is_err());
     }
 
     #[test]
-    fn decode_rejects_invalid_magic() {
-        let mut bad = Vec::from(&b"not-i3"[..]);
-        bad.extend_from_slice(&0u32.to_ne_bytes());
-        bad.extend_from_slice(&0u32.to_ne_bytes());
-        let mut cursor = Cursor::new(bad);
-        assert!(read_frame(&mut cursor).is_err());
+    fn disconnect_mid_burst_ends_session() {
+        let (tx, rx) = mpsc::channel();
+        tx.send(Trigger::Changed).unwrap();
+        tx.send(Trigger::Disconnected(Error::Io(std::io::ErrorKind::BrokenPipe.into())))
+            .unwrap();
+        assert!(matches!(
+            wait_for_change(&rx, Duration::from_millis(5)),
+            Err(SessionEnd::Lost(Error::Io(_)))
+        ));
     }
 
     #[test]
-    fn extract_focused_title_from_sample_tree() {
-        let tree = json!({
-            "name": "root",
-            "focused": false,
-            "nodes": [
-                {
-                    "name": "eDP-1",
-                    "focused": false,
-                    "nodes": [
-                        {
-                            "name": "1",
-                            "focused": false,
-                            "nodes": [
-                                {
-                                    "name": "Alacritty",
-                                    "focused": false,
-                                    "nodes": [],
-                                    "floating_nodes": []
-                                },
-                                {
-                                    "name": "Mozilla Firefox",
-                                    "focused": true,
-                                    "nodes": [],
-                                    "floating_nodes": []
-                                }
-                            ],
-                            "floating_nodes": []
-                        }
-                    ],
-                    "floating_nodes": []
-                }
-            ],
-            "floating_nodes": []
-        });
-        assert_eq!(extract_focused_title(&tree), "Mozilla Firefox");
+    fn closed_channel_ends_session() {
+        let (tx, rx) = mpsc::channel::<Trigger>();
+        drop(tx);
+        assert!(matches!(
+            wait_for_change(&rx, Duration::from_millis(5)),
+            Err(SessionEnd::Lost(_))
+        ));
     }
 
     #[test]
-    fn extract_focused_title_from_floating_node() {
-        let tree = json!({
-            "name": "root",
-            "focused": false,
-            "nodes": [],
-            "floating_nodes": [
-                {
-                    "name": "Picture-in-Picture",
-                    "focused": true,
-                    "nodes": [],
-                    "floating_nodes": []
-                }
-            ]
-        });
-        assert_eq!(extract_focused_title(&tree), "Picture-in-Picture");
+    fn skips_unchanged_snapshots() {
+        let mut publisher = Publisher::default();
+        let mut state = test_state();
+        assert!(publisher.should_send(&state));
+        assert!(!publisher.should_send(&state));
+        state.mode = "resize".into();
+        assert!(publisher.should_send(&state));
     }
 
     #[test]
-    fn count_workspace_windows_counts_tiled_and_floating_leaves() {
-        let tree = json!({
-            "type": "root",
-            "nodes": [
-                {
-                    "type": "output",
-                    "name": "__i3",
-                    "nodes": [
-                        { "type": "workspace", "name": "__i3_scratch", "nodes": [],
-                          "floating_nodes": [{ "type": "floating_con", "pid": 9, "nodes": [], "floating_nodes": [] }] }
-                    ]
-                },
-                {
-                    "type": "output",
-                    "name": "eDP-1",
-                    "nodes": [
-                        {
-                            "type": "workspace",
-                            "name": "1",
-                            "nodes": [
-                                { "type": "con", "pid": 1, "nodes": [], "floating_nodes": [] },
-                                {
-                                    "type": "con",
-                                    "nodes": [
-                                        { "type": "con", "pid": 2, "nodes": [], "floating_nodes": [] },
-                                        { "type": "con", "pid": 3, "nodes": [], "floating_nodes": [] }
-                                    ],
-                                    "floating_nodes": []
-                                }
-                            ],
-                            "floating_nodes": [
-                                { "type": "floating_con", "pid": 4, "nodes": [], "floating_nodes": [] }
-                            ]
-                        },
-                        { "type": "workspace", "name": "2", "nodes": [], "floating_nodes": [] }
-                    ]
-                }
-            ]
-        });
-        let counts = count_workspace_windows(&tree);
-        assert_eq!(counts.get("1"), Some(&4));
-        assert_eq!(counts.get("2"), Some(&0));
-        assert!(!counts.contains_key("__i3_scratch"));
+    fn missing_socket_is_unavailable_not_retried() {
+        assert!(matches!(
+            SessionEnd::from(Error::SocketNotFound),
+            SessionEnd::Unavailable(_)
+        ));
+        assert!(matches!(
+            SessionEnd::from(Error::Io(std::io::ErrorKind::BrokenPipe.into())),
+            SessionEnd::Lost(_)
+        ));
+    }
+
+    #[test]
+    fn maps_command_outcomes() {
+        assert_eq!(command_error(Ok(vec![Ok(()), Ok(())])), None);
+        assert_eq!(
+            command_error(Ok(vec![Ok(()), Err(Error::CommandParse("bad".into()))])),
+            Some(SwayCommandError {
+                message: "bad".into(),
+                parse_error: true
+            })
+        );
+        assert_eq!(
+            command_error(Ok(vec![Err(Error::CommandFailed("nope".into()))])),
+            Some(SwayCommandError {
+                message: "nope".into(),
+                parse_error: false
+            })
+        );
+        assert!(matches!(
+            command_error(Err(Error::SocketNotFound)),
+            Some(SwayCommandError {
+                parse_error: false,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn command_reply_carries_typed_error() {
+        let sent = Arc::new(Mutex::new(Vec::new()));
+        let sink = sent.clone();
+        let send: SendEvent = Arc::new(move |ev| sink.lock().unwrap().push(ev));
+
+        send_command_reply(&send, 7, Ok(vec![Err(Error::CommandParse("x".into()))]));
+        let json = serde_json::to_value(&sent.lock().unwrap()[0]).unwrap();
+        assert_eq!(json["type"], "rpc_reply");
+        assert_eq!(json["id"], 7);
+        assert_eq!(json["ok"], false);
+        assert_eq!(json["error"], "x");
+        assert_eq!(json["data"]["parse_error"], true);
+    }
+
+    #[test]
+    fn sway_state_event_inlines_fields() {
+        let json = serde_json::to_value(BridgeEvent::SwayState(Box::new(test_state()))).unwrap();
+        assert_eq!(json["type"], "sway_state");
+        assert_eq!(json["mode"], "default");
+        assert_eq!(json["tree"]["type"], "root");
+        assert!(json["workspaces"].is_array());
     }
 }

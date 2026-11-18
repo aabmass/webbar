@@ -24,7 +24,7 @@ Let users build a Sway status bar in plain HTML, CSS, and TypeScript/React—wit
 │  Rust Host (src/*.rs) — 1 shared instance across all monitors        │
 │  gtk4-layer-shell (1 bar/monitor) + webkit6 WebView                  │
 │  - bridge.rs (protocol + SnapshotCache replay on LoadEvent::Finished)│
-│  - sway_ipc.rs ($SWAYSOCK workspaces, title, mode)                   │
+│  - sway_ipc.rs (swayipc: tree, workspaces, mode, commands)           │
 │  - tray.rs (StatusNotifierWatcher + DBusMenu) + notifications.rs     │
 │  - audio.rs (libpulse) + bluetooth.rs (BlueZ) + network.rs (NM)      │
 │  - backlight.rs (ddcutil D-Bus)                                      │
@@ -44,8 +44,10 @@ Let users build a Sway status bar in plain HTML, CSS, and TypeScript/React—wit
    - Each store exposes `{ get(), subscribe(cb), onChange(cb) }`, working directly with React's `useSyncExternalStore(store.subscribe, store.get)` as well as vanilla TS listeners, while mutations return standard `Promise`s.
    - `window.webbar.dbus` and `window.webbar.exec` remain available as Promise-based escape hatches for custom widgets.
 
-3. **Sway IPC in Rust (`src/sway_ipc.rs`)**
-   - `sway_ipc.rs` subscribes directly to `$SWAYSOCK` (`workspace`, `window`, `mode`) and forwards commands like workspace switches without spawning `swaymsg`.
+3. **Sway IPC in Rust (`src/sway_ipc.rs`, `src/sway_state.rs`, `build.rs`)**
+   - `sway_ipc.rs` uses `swayipc` to subscribe to `workspace`, `window`, `mode`, and `output` events with exponential-backoff reconnect, coalesces event bursts, and emits full `SwayState` snapshots (`tree`, `workspaces`, `mode`) using Sway's own IPC types.
+   - `build.rs` traces `SwayState` via `serde-reflection` to generate `preload/src/generated/sway.ts` at build time.
+   - Commands run on a dedicated thread and return an `RpcReply` (`SwayCommandError` on failure), exposed via `sway.command`, `sway.focus`, and `sway.focusWorkspace`.
 
 4. **Explicit UI source (`--dir` / `--url`) + Nix**
    - `webbar` takes either `--dir <path>` (served over a custom `webbar://app/...` URI scheme) or `--url <url>` (e.g., a Vite dev server for live reload).

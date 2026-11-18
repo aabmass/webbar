@@ -1,6 +1,118 @@
 "use strict";
 (() => {
+  // src/sway.ts
+  var SwayCommandError = class extends Error {
+    /** True when Sway could not parse the command (vs. it failing to run). */
+    parseError;
+    constructor(data) {
+      super(data.message);
+      this.name = "SwayCommandError";
+      this.parseError = data.parse_error;
+    }
+  };
+  function swayQuote(value) {
+    return `"${value.replace(/[\\"]/g, (c) => `\\${c}`)}"`;
+  }
+  function swayFocusedTitle(tree) {
+    const stack = [tree];
+    while (stack.length > 0) {
+      const node = stack.pop();
+      if (node.focused) return node.name ?? "";
+      stack.push(...node.nodes, ...node.floating_nodes);
+    }
+    return "";
+  }
+  function swayWindowCounts(tree) {
+    const counts = /* @__PURE__ */ new Map();
+    const countWindows = (node) => {
+      const children = [...node.nodes, ...node.floating_nodes];
+      if (children.length === 0) {
+        const isCon = node.type === "con" || node.type === "floating_con";
+        return isCon && node.pid !== null && node.pid !== void 0 ? 1 : 0;
+      }
+      return children.reduce((sum, child) => sum + countWindows(child), 0);
+    };
+    const walk = (node) => {
+      if (node.type === "workspace") {
+        if (node.name !== null && node.name !== "__i3_scratch") {
+          counts.set(node.name, countWindows(node));
+        }
+        return;
+      }
+      node.nodes.forEach(walk);
+    };
+    walk(tree);
+    return counts;
+  }
+  var EMPTY_SWAY_TREE = {
+    id: 0,
+    name: "root",
+    type: "root",
+    border: "none",
+    current_border_width: 0,
+    layout: "none",
+    orientation: "none",
+    percent: null,
+    rect: { x: 0, y: 0, width: 0, height: 0 },
+    window_rect: { x: 0, y: 0, width: 0, height: 0 },
+    deco_rect: { x: 0, y: 0, width: 0, height: 0 },
+    geometry: { x: 0, y: 0, width: 0, height: 0 },
+    urgent: false,
+    focused: false,
+    focus: [],
+    floating: null,
+    nodes: [],
+    floating_nodes: [],
+    sticky: false,
+    representation: null,
+    fullscreen_mode: null,
+    scratchpad_state: null,
+    app_id: null,
+    pid: null,
+    window: null,
+    num: null,
+    window_properties: null,
+    marks: [],
+    inhibit_idle: null,
+    idle_inhibitors: null,
+    sandbox_engine: null,
+    sandbox_app_id: null,
+    sandbox_instance_id: null,
+    tag: null,
+    shell: null,
+    foreign_toplevel_identifier: null,
+    visible: null,
+    output: null
+  };
+
   // src/preload.ts
+  function idOf(item) {
+    if (item === null || typeof item !== "object" || Array.isArray(item)) {
+      return void 0;
+    }
+    const id = item.id;
+    return typeof id === "number" || typeof id === "string" ? id : void 0;
+  }
+  function indexById(items) {
+    if (items.length === 0) return null;
+    const map = /* @__PURE__ */ new Map();
+    for (const item of items) {
+      const id = idOf(item);
+      if (id === void 0 || map.has(id)) return null;
+      map.set(id, item);
+    }
+    return map;
+  }
+  function reconcileById(prev, next, prevById) {
+    let changed = prev.length !== next.length;
+    const result = next.map((nextItem, i) => {
+      const prevItem = prevById.get(idOf(nextItem));
+      const item = prevItem === void 0 ? nextItem : reconcile(prevItem, nextItem);
+      if (!Object.is(item, prev[i])) changed = true;
+      return item;
+    });
+    return changed ? result : prev;
+  }
   function reconcile(prev, next) {
     if (Object.is(prev, next)) {
       return prev;
@@ -9,6 +121,10 @@
       return next;
     }
     if (Array.isArray(prev) && Array.isArray(next)) {
+      const byId = indexById(prev);
+      if (byId && indexById(next)) {
+        return reconcileById(prev, next, byId);
+      }
       let changed2 = prev.length !== next.length;
       const result2 = new Array(next.length);
       for (let i = 0; i < next.length; i++) {
@@ -127,7 +243,7 @@
         }
       });
     }
-    function rpc(type, payload = {}, abort) {
+    function rpc(type, payload = {}, abort, mapError) {
       if (abort?.signal?.aborted) {
         return Promise.reject(new DOMException("Aborted", "AbortError"));
       }
@@ -145,15 +261,16 @@
         pending.set(id, {
           resolve,
           reject,
-          cleanup
+          cleanup,
+          mapError
         });
         send({ type, id, ...payload });
       });
     }
     const stores = {
       sway: createStore({
+        tree: EMPTY_SWAY_TREE,
         workspaces: [],
-        focused_title: "",
         mode: "default"
       }),
       tray: createStore([]),
@@ -181,8 +298,8 @@
     };
     const stateHandlers = {
       sway_state: (e) => stores.sway._update({
+        tree: e.tree ?? EMPTY_SWAY_TREE,
         workspaces: e.workspaces ?? [],
-        focused_title: e.focused_title ?? "",
         mode: e.mode ?? "default"
       }),
       tray: (e) => stores.tray._update(e.items ?? []),
@@ -225,8 +342,9 @@
           if (event.ok) {
             entry.resolve(event.data);
           } else {
+            const message = event.error ?? "Request failed";
             entry.reject(
-              new Error(event.error ?? "Request failed")
+              entry.mapError ? entry.mapError(message, event.data) : new Error(message)
             );
           }
           break;
@@ -326,10 +444,28 @@
         }
       }
     }
+    function swayCommand(command) {
+      return rpc(
+        "sway_command",
+        { command },
+        void 0,
+        (message, data) => new SwayCommandError(
+          data ?? {
+            message,
+            parse_error: false
+          }
+        )
+      );
+    }
     const api = {
       output,
       sway: storeView(stores.sway, {
-        command: (command) => send({ type: "sway_command", command })
+        command: swayCommand,
+        focus: (node) => swayCommand(`[con_id=${node.id}] focus`),
+        focusWorkspace: (ws) => swayCommand(`workspace ${swayQuote(ws.name)}`),
+        quote: swayQuote,
+        focusedTitle: swayFocusedTitle,
+        windowCounts: swayWindowCounts
       }),
       tray: storeView(stores.tray, {
         activate: (bus, path) => send({ type: "tray_activate", bus, path }),

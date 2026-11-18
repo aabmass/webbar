@@ -48,6 +48,11 @@ export function Workspaces() {
     window.webbar.sway.get,
   );
 
+  const windowCounts = useMemo(
+    () => window.webbar.sway.windowCounts(swayState.tree),
+    [swayState.tree],
+  );
+
   const items = useMemo<WorkspaceItem[]>(() => {
     const byName = new Map<string, SwayWorkspace>();
     for (const ws of swayState.workspaces) {
@@ -65,7 +70,7 @@ export function Workspaces() {
           urgent: ws.urgent,
           virtual: false,
           output: ws.output,
-          windows: ws.window_count,
+          windows: windowCounts.get(name) ?? 0,
           row: cfg.row,
           col: cfg.col,
         });
@@ -95,7 +100,7 @@ export function Workspaces() {
           urgent: ws.urgent,
           virtual: false,
           output: ws.output,
-          windows: ws.window_count,
+          windows: windowCounts.get(ws.name) ?? 0,
           row: 1,
           col: extraCol++,
         });
@@ -103,7 +108,7 @@ export function Workspaces() {
     }
 
     return result;
-  }, [swayState.workspaces]);
+  }, [swayState.workspaces, windowCounts]);
 
   return (
     <div className="workspaces-wrap">
@@ -127,8 +132,9 @@ export function Workspaces() {
                   : `Workspace ${ws.name}`
               }
               onClick={() => {
-                const escaped = ws.name.replace(/"/g, '\\"');
-                window.webbar.sway.command(`workspace "${escaped}"`);
+                window.webbar.sway
+                  .focusWorkspace({ name: ws.name })
+                  .catch((err) => console.warn("focusWorkspace failed:", err));
               }}
             >
               {ws.name}

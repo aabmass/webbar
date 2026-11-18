@@ -12,10 +12,20 @@ import type { NetworkState } from "./generated/NetworkState";
 import type { NotificationAction } from "./generated/NotificationAction";
 import type { NotificationItem } from "./generated/NotificationItem";
 import type { NotificationUrgency } from "./generated/NotificationUrgency";
-import type { SwayState } from "./generated/SwayState";
-import type { SwayWorkspace } from "./generated/SwayWorkspace";
+import type { SwayCommandError as SwayCommandErrorData } from "./generated/SwayCommandError";
+import type { SwayNode, SwayState, SwayWorkspace } from "./generated/sway";
 import type { TrayItem } from "./generated/TrayItem";
 import type { TrayMenuItem } from "./generated/TrayMenuItem";
+import {
+  EMPTY_SWAY_TREE,
+  SwayCommandError,
+  swayFocusedTitle,
+  swayQuote,
+  swayWindowCounts,
+} from "./sway";
+
+export * from "./sway";
+export type * from "./generated/sway";
 
 export type {
   AudioDevice,
@@ -32,8 +42,6 @@ export type {
   NotificationAction,
   NotificationItem,
   NotificationUrgency,
-  SwayState,
-  SwayWorkspace,
   TrayItem,
   TrayMenuItem,
 };
@@ -95,7 +103,21 @@ export type ExecStreamHandle = {
 export type WebbarApi = {
   readonly output: string;
   sway: Store<SwayState> & {
-    command: (cmd: string) => void;
+    /**
+     * Run a raw Sway command string (see sway(5)). Resolves when Sway reports
+     * success; rejects with a `SwayCommandError` otherwise.
+     */
+    command: (cmd: string) => Promise<void>;
+    /** Focus a container by id: `[con_id=N] focus`. */
+    focus: (node: Pick<SwayNode, "id">) => Promise<void>;
+    /** Switch to a workspace by name (quoted for you). */
+    focusWorkspace: (ws: Pick<SwayWorkspace, "name">) => Promise<void>;
+    /** Quote a value as a single Sway command argument. */
+    quote: (value: string) => string;
+    /** Title of the focused container in `tree`. */
+    focusedTitle: (tree: SwayNode) => string;
+    /** Application windows (tiled + floating) per workspace name. */
+    windowCounts: (tree: SwayNode) => Map<string, number>;
   };
   tray: Store<TrayItem[]> & {
     activate: (bus: string, path: string) => void;
@@ -140,6 +162,48 @@ export type WebbarApi = {
   ) => Promise<ExecStreamHandle>;
 };
 
+type Id = string | number;
+
+function idOf(item: unknown): Id | undefined {
+  if (item === null || typeof item !== "object" || Array.isArray(item)) {
+    return undefined;
+  }
+  const id = (item as { id?: unknown }).id;
+  return typeof id === "number" || typeof id === "string" ? id : undefined;
+}
+
+/** Map of id -> item if every item is an object with a unique id, else null. */
+function indexById(items: unknown[]): Map<Id, unknown> | null {
+  if (items.length === 0) return null;
+  const map = new Map<Id, unknown>();
+  for (const item of items) {
+    const id = idOf(item);
+    if (id === undefined || map.has(id)) return null;
+    map.set(id, item);
+  }
+  return map;
+}
+
+/**
+ * Reconcile arrays by item id, so reordering or inserting items keeps the
+ * identity of untouched siblings (e.g. Sway tree nodes when a window moves).
+ */
+function reconcileById(
+  prev: unknown[],
+  next: unknown[],
+  prevById: Map<Id, unknown>,
+): unknown[] {
+  let changed = prev.length !== next.length;
+  const result = next.map((nextItem, i) => {
+    const prevItem = prevById.get(idOf(nextItem)!);
+    const item =
+      prevItem === undefined ? nextItem : reconcile<unknown>(prevItem, nextItem);
+    if (!Object.is(item, prev[i])) changed = true;
+    return item;
+  });
+  return changed ? result : prev;
+}
+
 function reconcile<T>(prev: T, next: T): T {
   if (Object.is(prev, next)) {
     return prev;
@@ -154,6 +218,10 @@ function reconcile<T>(prev: T, next: T): T {
   }
 
   if (Array.isArray(prev) && Array.isArray(next)) {
+    const byId = indexById(prev);
+    if (byId && indexById(next)) {
+      return reconcileById(prev, next, byId) as T;
+    }
     let changed = prev.length !== next.length;
     const result: unknown[] = new Array(next.length);
     for (let i = 0; i < next.length; i++) {
@@ -266,6 +334,7 @@ export function createWebbarBridge(
       resolve: (value: never) => void;
       reject: (err: Error) => void;
       cleanup?: () => void;
+      mapError?: (message: string, data: unknown) => Error;
     }
   >();
   const dbusWatches = new Map<
@@ -326,6 +395,7 @@ export function createWebbarBridge(
     type: string,
     payload: Record<string, unknown> = {},
     abort?: { signal?: AbortSignal; onAbort?: (id: number) => void },
+    mapError?: (message: string, data: unknown) => Error,
   ): Promise<T> {
     if (abort?.signal?.aborted) {
       return Promise.reject(new DOMException("Aborted", "AbortError"));
@@ -347,6 +417,7 @@ export function createWebbarBridge(
         resolve: resolve as (value: never) => void,
         reject,
         cleanup,
+        mapError,
       });
       send({ type, id, ...payload });
     });
@@ -354,8 +425,8 @@ export function createWebbarBridge(
 
   const stores = {
     sway: createStore<SwayState>({
+      tree: EMPTY_SWAY_TREE,
       workspaces: [],
-      focused_title: "",
       mode: "default",
     }),
     tray: createStore<TrayItem[]>([]),
@@ -385,8 +456,8 @@ export function createWebbarBridge(
   const stateHandlers: Record<string, (event: Record<string, unknown>) => void> = {
     sway_state: (e) =>
       stores.sway._update({
+        tree: (e.tree as SwayNode) ?? EMPTY_SWAY_TREE,
         workspaces: (e.workspaces as SwayWorkspace[]) ?? [],
-        focused_title: (e.focused_title as string) ?? "",
         mode: (e.mode as string) ?? "default",
       }),
     tray: (e) => stores.tray._update((e.items as TrayItem[]) ?? []),
@@ -436,8 +507,11 @@ export function createWebbarBridge(
         if (event.ok) {
           entry.resolve(event.data as never);
         } else {
+          const message = (event.error as string | undefined) ?? "Request failed";
           entry.reject(
-            new Error((event.error as string | undefined) ?? "Request failed"),
+            entry.mapError
+              ? entry.mapError(message, event.data)
+              : new Error(message),
           );
         }
         break;
@@ -538,10 +612,28 @@ export function createWebbarBridge(
     }
   }
 
+  function swayCommand(command: string): Promise<void> {
+    return rpc<void>("sway_command", { command }, undefined, (message, data) =>
+      new SwayCommandError(
+        (data as SwayCommandErrorData | undefined) ?? {
+          message,
+          parse_error: false,
+        },
+      ),
+    );
+  }
+
   const api: WebbarApi = {
     output,
     sway: storeView(stores.sway, {
-      command: (command: string) => send({ type: "sway_command", command }),
+      command: swayCommand,
+      focus: (node: Pick<SwayNode, "id">) =>
+        swayCommand(`[con_id=${node.id}] focus`),
+      focusWorkspace: (ws: Pick<SwayWorkspace, "name">) =>
+        swayCommand(`workspace ${swayQuote(ws.name)}`),
+      quote: swayQuote,
+      focusedTitle: swayFocusedTitle,
+      windowCounts: swayWindowCounts,
     }),
     tray: storeView(stores.tray, {
       activate: (bus: string, path: string) =>

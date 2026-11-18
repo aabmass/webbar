@@ -22,14 +22,13 @@ pub struct InputRect {
     pub height: f64,
 }
 
-#[cfg(test)]
-#[allow(dead_code)]
-#[derive(Debug, Clone, Serialize, TS)]
+/// Error payload (`RpcReply.data`) for a failed `sway_command`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
 #[ts(export, export_to = "../preload/src/generated/")]
-pub struct SwayState {
-    pub workspaces: Vec<crate::sway_ipc::SwayWorkspace>,
-    pub focused_title: String,
-    pub mode: String,
+pub struct SwayCommandError {
+    pub message: String,
+    /// True when Sway could not parse the command (vs. it failing to run).
+    pub parse_error: bool,
 }
 
 #[cfg(test)]
@@ -85,6 +84,7 @@ pub struct ExecResult {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum BridgeRequest {
     SwayCommand {
+        id: u32,
         command: String,
     },
     TrayActivate {
@@ -212,11 +212,8 @@ pub enum BridgeEvent {
         #[serde(skip_serializing_if = "Option::is_none")]
         error: Option<String>,
     },
-    SwayState {
-        workspaces: Vec<crate::sway_ipc::SwayWorkspace>,
-        focused_title: String,
-        mode: String,
-    },
+    /// Full Sway snapshot; fields are inlined next to `type`.
+    SwayState(Box<crate::sway_state::SwayState>),
     Tray {
         items: Vec<crate::tray::TrayItem>,
     },
@@ -295,7 +292,7 @@ pub enum SnapshotKey {
 impl BridgeEvent {
     pub fn snapshot_key(&self) -> Option<SnapshotKey> {
         match self {
-            BridgeEvent::SwayState { .. } => Some(SnapshotKey::Sway),
+            BridgeEvent::SwayState(_) => Some(SnapshotKey::Sway),
             BridgeEvent::Tray { .. } => Some(SnapshotKey::Tray),
             BridgeEvent::Notifications { .. } => Some(SnapshotKey::Notifications),
             BridgeEvent::AudioState { .. } => Some(SnapshotKey::Audio),
@@ -421,11 +418,7 @@ mod tests {
             brightness: Some(80),
             error: None,
         });
-        cache.record(&BridgeEvent::SwayState {
-            workspaces: Vec::new(),
-            focused_title: "term".into(),
-            mode: "default".into(),
-        });
+        cache.record(&BridgeEvent::SwayState(Box::new(crate::sway_ipc::test_state())));
         cache.record(&BridgeEvent::RpcReply {
             id: 1,
             ok: true,
@@ -435,7 +428,7 @@ mod tests {
 
         let all = cache.snapshot_all();
         assert_eq!(all.len(), 2);
-        assert!(matches!(all[0], BridgeEvent::SwayState { .. }));
+        assert!(matches!(all[0], BridgeEvent::SwayState(_)));
         assert!(matches!(
             all[1],
             BridgeEvent::BacklightState {

@@ -9,6 +9,7 @@ mod network;
 mod notifications;
 mod process_bridge;
 mod sway_ipc;
+mod sway_state;
 mod tray;
 mod ws_bridge;
 
@@ -168,6 +169,7 @@ struct HostServices {
     audio: AudioController,
     bluetooth: BluetoothController,
     backlight: BacklightController,
+    sway: sway_ipc::SwayCommands,
 }
 
 impl HostServices {
@@ -189,6 +191,7 @@ impl HostServices {
             audio,
             bluetooth,
             backlight,
+            sway: sway_ipc::SwayCommands::spawn(),
         })
     }
 
@@ -269,10 +272,8 @@ impl HostServices {
                 self.backlight
                     .set_brightness(id, percent, reply_send.clone());
             }
-            BridgeRequest::SwayCommand { command } => {
-                if let Err(err) = sway_ipc::run_command(&command) {
-                    eprintln!("webbar: sway command failed: {err}");
-                }
+            BridgeRequest::SwayCommand { id, command } => {
+                self.sway.run(id, command, reply_send.clone());
             }
             BridgeRequest::TrayActivate { bus, path } => {
                 tray::activate(bus, path);

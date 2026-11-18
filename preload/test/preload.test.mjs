@@ -1,6 +1,41 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { createStore, createWebbarBridge } from "../dist/preload.mjs";
+import {
+  SwayCommandError,
+  createStore,
+  createWebbarBridge,
+  swayFocusedTitle,
+  swayQuote,
+  swayWindowCounts,
+} from "../dist/preload.mjs";
+
+// Minimal Sway tree node; only the fields the helpers and reconcile look at.
+const swayNode = (id, type, overrides = {}) => ({
+  id,
+  name: null,
+  type,
+  focused: false,
+  pid: null,
+  nodes: [],
+  floating_nodes: [],
+  ...overrides,
+});
+
+const swayTree = (title) =>
+  swayNode(1, "root", {
+    name: "root",
+    nodes: [
+      swayNode(2, "output", {
+        name: "DP-1",
+        nodes: [
+          swayNode(3, "workspace", {
+            name: "1",
+            nodes: [swayNode(4, "con", { name: title, focused: true, pid: 100 })],
+          }),
+        ],
+      }),
+    ],
+  });
 
 test("createStore satisfies React useSyncExternalStore contract", () => {
   const store = createStore({ count: 0 });
@@ -73,12 +108,12 @@ test("all window.webbar stores follow snapshot + subscribe + onChange contract",
             urgent: false,
           },
         ],
-        focused_title: "Alacritty",
+        tree: swayTree("Alacritty"),
         mode: "default",
       },
       assertState: (s) => {
         assert.equal(s.workspaces.length, 1);
-        assert.equal(s.focused_title, "Alacritty");
+        assert.equal(swayFocusedTitle(s.tree), "Alacritty");
       },
     },
     {
@@ -389,7 +424,7 @@ test("stores preserve unchanged slice references and skip identical updates", ()
   receive({
     type: "sway_state",
     workspaces: [makeWorkspace()],
-    focused_title: "Alacritty",
+    tree: swayTree("Alacritty"),
     mode: "default",
   });
 
@@ -411,23 +446,23 @@ test("stores preserve unchanged slice references and skip identical updates", ()
   receive({
     type: "sway_state",
     workspaces: [makeWorkspace()],
-    focused_title: "Alacritty",
+    tree: swayTree("Alacritty"),
     mode: "default",
   });
   assert.equal(subCalls, 0);
   assert.equal(changeCalls, 1);
   assert.equal(Object.is(api.sway.get(), firstSnapshot), true);
 
-  // Changing only focused_title must preserve workspaces array reference
+  // Changing only a window title must preserve workspaces array reference
   receive({
     type: "sway_state",
     workspaces: [makeWorkspace()],
-    focused_title: "Firefox",
+    tree: swayTree("Firefox"),
     mode: "default",
   });
   assert.equal(subCalls, 1);
   assert.equal(changeCalls, 2);
-  assert.equal(api.sway.get().focused_title, "Firefox");
+  assert.equal(api.sway.focusedTitle(api.sway.get().tree), "Firefox");
   assert.equal(Object.is(api.sway.get().workspaces, firstWorkspaces), true);
 });
 
@@ -544,4 +579,151 @@ test("execStream streams stdout/stderr lines, supports stop(), and handles Abort
   ac2.abort();
   await assert.rejects(stream3P, { name: "AbortError" });
   assert.deepEqual(sent[4], { type: "process_kill", id: sent[3].id, signal: 15 });
+});
+
+test("reconcile matches id'd array items by id, keeping untouched siblings", () => {
+  const store = createStore({ items: [] });
+  const a = { id: 1, name: "a", nested: { v: 1 } };
+  const b = { id: 2, name: "b", nested: { v: 2 } };
+  store._update({ items: [a, b] });
+  const [prevA, prevB] = store.get().items;
+
+  // Reorder + insert: a and b keep identity even though positions changed.
+  store._update({
+    items: [
+      { id: 3, name: "c", nested: { v: 3 } },
+      { id: 2, name: "b", nested: { v: 2 } },
+      { id: 1, name: "a", nested: { v: 1 } },
+    ],
+  });
+  const items = store.get().items;
+  assert.equal(Object.is(items[1], prevB), true);
+  assert.equal(Object.is(items[2], prevA), true);
+
+  // Same ids, same order, same content: array identity preserved.
+  const before = store.get().items;
+  store._update({ items: before.map((x) => ({ ...x, nested: { ...x.nested } })) });
+  assert.equal(Object.is(store.get().items, before), true);
+
+  // Duplicate or missing ids fall back to positional matching.
+  store._update({ items: [{ id: 9 }, { id: 9 }] });
+  assert.equal(store.get().items.length, 2);
+  store._update({ items: [{ name: "no id" }] });
+  assert.deepEqual(store.get().items, [{ name: "no id" }]);
+});
+
+test("sway tree updates keep identity of unchanged subtrees", () => {
+  const { api, receive } = createWebbarBridge(() => {});
+  const tree = (ws2Windows) =>
+    swayNode(1, "root", {
+      nodes: [
+        swayNode(2, "output", {
+          nodes: [
+            swayNode(10, "workspace", {
+              name: "1",
+              nodes: [swayNode(11, "con", { name: "term", pid: 1 })],
+            }),
+            swayNode(20, "workspace", { name: "2", nodes: ws2Windows }),
+          ],
+        }),
+      ],
+    });
+  receive({ type: "sway_state", workspaces: [], mode: "default", tree: tree([]) });
+  const ws1 = api.sway.get().tree.nodes[0].nodes[0];
+
+  // A window opens on workspace 2: workspace 1's subtree is untouched.
+  receive({
+    type: "sway_state",
+    workspaces: [],
+    mode: "default",
+    tree: tree([swayNode(21, "con", { name: "new", pid: 2 })]),
+  });
+  const next = api.sway.get().tree.nodes[0].nodes;
+  assert.equal(Object.is(next[0], ws1), true);
+  assert.equal(next[1].nodes.length, 1);
+});
+
+test("swayFocusedTitle finds tiled and floating focus", () => {
+  assert.equal(swayFocusedTitle(swayTree("Mozilla Firefox")), "Mozilla Firefox");
+  const floating = swayNode(1, "root", {
+    floating_nodes: [
+      swayNode(2, "floating_con", { name: "Picture-in-Picture", focused: true }),
+    ],
+  });
+  assert.equal(swayFocusedTitle(floating), "Picture-in-Picture");
+  assert.equal(swayFocusedTitle(swayNode(1, "root")), "");
+});
+
+test("swayWindowCounts counts tiled and floating leaves, skipping scratchpad", () => {
+  const tree = swayNode(1, "root", {
+    nodes: [
+      swayNode(2, "output", {
+        name: "__i3",
+        nodes: [
+          swayNode(3, "workspace", {
+            name: "__i3_scratch",
+            floating_nodes: [swayNode(4, "floating_con", { pid: 9 })],
+          }),
+        ],
+      }),
+      swayNode(5, "output", {
+        name: "eDP-1",
+        nodes: [
+          swayNode(6, "workspace", {
+            name: "1",
+            nodes: [
+              swayNode(7, "con", { pid: 1 }),
+              swayNode(8, "con", {
+                nodes: [swayNode(9, "con", { pid: 2 }), swayNode(10, "con", { pid: 3 })],
+              }),
+            ],
+            floating_nodes: [swayNode(11, "floating_con", { pid: 4 })],
+          }),
+          swayNode(12, "workspace", { name: "2" }),
+        ],
+      }),
+    ],
+  });
+  const counts = swayWindowCounts(tree);
+  assert.equal(counts.get("1"), 4);
+  assert.equal(counts.get("2"), 0);
+  assert.equal(counts.has("__i3_scratch"), false);
+});
+
+test("swayQuote escapes quotes and backslashes", () => {
+  assert.equal(swayQuote("1"), '"1"');
+  assert.equal(swayQuote('a "b" c'), '"a \\"b\\" c"');
+  assert.equal(swayQuote("back\\slash"), '"back\\\\slash"');
+});
+
+test("sway.command resolves on success and rejects with SwayCommandError", async () => {
+  const sent = [];
+  const { api, receive } = createWebbarBridge((json) => sent.push(JSON.parse(json)));
+
+  const ok = api.sway.focusWorkspace({ name: 'my "ws"' });
+  assert.equal(sent[0].type, "sway_command");
+  assert.equal(sent[0].command, 'workspace "my \\"ws\\""');
+  receive({ type: "rpc_reply", id: sent[0].id, ok: true });
+  await ok;
+
+  const focus = api.sway.focus({ id: 42 });
+  assert.equal(sent[1].command, "[con_id=42] focus");
+  receive({ type: "rpc_reply", id: sent[1].id, ok: true });
+  await focus;
+
+  const bad = api.sway.command("nonsense");
+  receive({
+    type: "rpc_reply",
+    id: sent[2].id,
+    ok: false,
+    error: "Unknown/invalid command 'nonsense'",
+    data: { message: "Unknown/invalid command 'nonsense'", parse_error: true },
+  });
+  await assert.rejects(bad, (err) => {
+    assert.equal(err instanceof SwayCommandError, true);
+    assert.equal(err.name, "SwayCommandError");
+    assert.equal(err.parseError, true);
+    assert.equal(err.message, "Unknown/invalid command 'nonsense'");
+    return true;
+  });
 });
