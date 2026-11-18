@@ -1,5 +1,6 @@
 //! Sway / i3 IPC client for workspace, window focus, and binding mode state.
 
+use std::collections::HashMap;
 use std::env;
 use std::io::{self, ErrorKind, Read, Write};
 use std::os::unix::net::UnixStream;
@@ -39,6 +40,10 @@ pub struct SwayWorkspace {
     pub urgent: bool,
     #[serde(default)]
     pub output: String,
+    /// Number of application windows (tiled + floating) on this workspace.
+    /// Not part of Sway's GET_WORKSPACES reply; filled in from GET_TREE.
+    #[serde(default)]
+    pub window_count: u32,
 }
 
 pub fn encode_frame(msg_type: u32, payload: &[u8]) -> Vec<u8> {
@@ -91,6 +96,67 @@ pub fn extract_focused_title(tree: &Value) -> String {
     find_focused(tree).unwrap_or_default()
 }
 
+/// Count application windows (leaf containers with a pid) per workspace name.
+pub fn count_workspace_windows(tree: &Value) -> HashMap<String, u32> {
+    fn count_windows(node: &Value) -> u32 {
+        let mut children = 0usize;
+        let mut total = 0u32;
+        for key in ["nodes", "floating_nodes"] {
+            if let Some(list) = node.get(key).and_then(|v| v.as_array()) {
+                children += list.len();
+                total += list.iter().map(count_windows).sum::<u32>();
+            }
+        }
+        if children == 0 {
+            let is_con = matches!(
+                node.get("type").and_then(|v| v.as_str()),
+                Some("con" | "floating_con")
+            );
+            let has_pid = node.get("pid").and_then(|v| v.as_i64()).is_some();
+            return u32::from(is_con && has_pid);
+        }
+        total
+    }
+
+    fn walk(node: &Value, out: &mut HashMap<String, u32>) {
+        if node.get("type").and_then(|v| v.as_str()) == Some("workspace") {
+            if let Some(name) = node.get("name").and_then(|v| v.as_str()) {
+                if name != "__i3_scratch" {
+                    out.insert(name.to_string(), count_windows(node));
+                }
+            }
+            return;
+        }
+        if let Some(list) = node.get("nodes").and_then(|v| v.as_array()) {
+            for child in list {
+                walk(child, out);
+            }
+        }
+    }
+
+    let mut out = HashMap::new();
+    walk(tree, &mut out);
+    out
+}
+
+fn apply_window_counts(workspaces: &mut [SwayWorkspace], counts: &HashMap<String, u32>) {
+    for ws in workspaces {
+        ws.window_count = counts.get(&ws.name).copied().unwrap_or(0);
+    }
+}
+
+/// Refresh focused title and per-workspace window counts from one GET_TREE.
+fn refresh_from_tree(
+    stream: &mut UnixStream,
+    workspaces: &mut [SwayWorkspace],
+    focused_title: &mut String,
+) {
+    if let Ok(tree) = query_json(stream, GET_TREE) {
+        *focused_title = extract_focused_title(&tree);
+        apply_window_counts(workspaces, &count_workspace_windows(&tree));
+    }
+}
+
 fn store_and_send(send: &SendEvent, event: BridgeEvent) {
     send(event);
 }
@@ -122,7 +188,8 @@ pub fn spawn(send: SendEvent) {
         };
 
         let mut workspaces = fetch_workspaces(&mut query_stream).unwrap_or_default();
-        let mut focused_title = fetch_focused_title(&mut query_stream).unwrap_or_default();
+        let mut focused_title = String::new();
+        refresh_from_tree(&mut query_stream, &mut workspaces, &mut focused_title);
         let mut mode = "default".to_string();
 
         store_and_send(
@@ -149,14 +216,10 @@ pub fn spawn(send: SendEvent) {
                     if let Ok(ws) = fetch_workspaces(&mut query_stream) {
                         workspaces = ws;
                     }
-                    if let Ok(title) = fetch_focused_title(&mut query_stream) {
-                        focused_title = title;
-                    }
+                    refresh_from_tree(&mut query_stream, &mut workspaces, &mut focused_title);
                 }
                 EVENT_WINDOW => {
-                    if let Ok(title) = fetch_focused_title(&mut query_stream) {
-                        focused_title = title;
-                    }
+                    refresh_from_tree(&mut query_stream, &mut workspaces, &mut focused_title);
                 }
                 EVENT_MODE => {
                     if let Ok(val) = serde_json::from_slice::<Value>(&payload) {
@@ -212,18 +275,15 @@ fn fetch_workspaces(stream: &mut UnixStream) -> io::Result<Vec<SwayWorkspace>> {
     serde_json::from_value(val).map_err(|e| io::Error::new(ErrorKind::InvalidData, e))
 }
 
-fn fetch_focused_title(stream: &mut UnixStream) -> io::Result<String> {
-    let tree = query_json(stream, GET_TREE)?;
-    Ok(extract_focused_title(&tree))
-}
-
 #[cfg(test)]
 mod tests {
     use std::io::Cursor;
 
     use serde_json::json;
 
-    use super::{encode_frame, extract_focused_title, read_frame, GET_WORKSPACES};
+    use super::{
+        count_workspace_windows, encode_frame, extract_focused_title, read_frame, GET_WORKSPACES,
+    };
 
     #[test]
     fn encode_decode_frame_roundtrip() {
@@ -298,5 +358,51 @@ mod tests {
             ]
         });
         assert_eq!(extract_focused_title(&tree), "Picture-in-Picture");
+    }
+
+    #[test]
+    fn count_workspace_windows_counts_tiled_and_floating_leaves() {
+        let tree = json!({
+            "type": "root",
+            "nodes": [
+                {
+                    "type": "output",
+                    "name": "__i3",
+                    "nodes": [
+                        { "type": "workspace", "name": "__i3_scratch", "nodes": [],
+                          "floating_nodes": [{ "type": "floating_con", "pid": 9, "nodes": [], "floating_nodes": [] }] }
+                    ]
+                },
+                {
+                    "type": "output",
+                    "name": "eDP-1",
+                    "nodes": [
+                        {
+                            "type": "workspace",
+                            "name": "1",
+                            "nodes": [
+                                { "type": "con", "pid": 1, "nodes": [], "floating_nodes": [] },
+                                {
+                                    "type": "con",
+                                    "nodes": [
+                                        { "type": "con", "pid": 2, "nodes": [], "floating_nodes": [] },
+                                        { "type": "con", "pid": 3, "nodes": [], "floating_nodes": [] }
+                                    ],
+                                    "floating_nodes": []
+                                }
+                            ],
+                            "floating_nodes": [
+                                { "type": "floating_con", "pid": 4, "nodes": [], "floating_nodes": [] }
+                            ]
+                        },
+                        { "type": "workspace", "name": "2", "nodes": [], "floating_nodes": [] }
+                    ]
+                }
+            ]
+        });
+        let counts = count_workspace_windows(&tree);
+        assert_eq!(counts.get("1"), Some(&4));
+        assert_eq!(counts.get("2"), Some(&0));
+        assert!(!counts.contains_key("__i3_scratch"));
     }
 }
