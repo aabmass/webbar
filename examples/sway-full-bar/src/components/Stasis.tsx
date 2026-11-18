@@ -263,19 +263,23 @@ export function Stasis() {
       setBlame(null);
       return;
     }
+    if (open) {
+      void refreshBlame();
+    }
+  }, [status, open, refreshBlame]);
+
+  useEffect(() => {
+    if (!open) return;
+    void refreshProfiles();
     void refreshBlame();
+    // stasis watch only streams state/paused/profile, not blame details, so poll
+    // blame while the popover is open to catch inhibitor changes without 24/7 polling.
     const timer = window.setInterval(() => {
       void refreshBlame();
     }, 3000);
     return () => {
       window.clearInterval(timer);
     };
-  }, [status, refreshBlame]);
-
-  useEffect(() => {
-    if (!open) return;
-    void refreshProfiles();
-    void refreshBlame();
   }, [open, refreshProfiles, refreshBlame]);
 
   const runStasisCommand = useCallback(async (argv: string[]) => {
