@@ -1,38 +1,4 @@
-:root {
-  /* Palette */
-  --bar-bg: #18181c;
-  --bar-border: rgba(255, 255, 255, 0.06);
-  --panel-bg: #1c1c21;
-  --panel-border: rgba(255, 255, 255, 0.08);
-  --well-bg: #111114;
-  --surface-color: #26262c;
-  --surface-hover: #303037;
-  --surface-active: #3a3a42;
-  --fg-color: #ececf1;
-  --fg-muted: #9a9aa6;
-  --fg-faint: #5c5c66;
-  --accent-color: #8ab4f8;
-  --accent-fg: #0e1420;
-  --accent-soft: rgba(138, 180, 248, 0.16);
-  --accent-green: #6fcf97;
-  --accent-yellow: #f2c94c;
-  --accent-red: #f2726f;
-  --urgent-bg: #e5484d;
-
-  /* Shape */
-  --radius-lg: 14px;
-  --radius-md: 10px;
-  --radius-sm: 7px;
-
-  /* Motion: short and crisp */
-  --ease-out: cubic-bezier(0.2, 0, 0, 1);
-  --dur-fast: 70ms;
-  --dur-med: 110ms;
-
-  /* Backwards-compatible aliases */
-  --theme-bg-color: var(--bar-bg);
-  --theme-fg-color: var(--fg-color);
-}
+@import "./theme.css";
 
 * {
   box-sizing: border-box;
@@ -72,8 +38,8 @@ body,
   border: 1px solid var(--bar-border);
   border-radius: var(--radius-lg);
   box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.03),
-    0 2px 6px rgba(0, 0, 0, 0.35);
+    inset 0 1px 0 color-mix(in srgb, var(--fg-color) 3%, transparent),
+    0 2px 6px var(--shadow-sm);
   padding: 0 4px;
   gap: 8px;
 }
@@ -162,13 +128,13 @@ button:focus-visible {
 .ws-btn.focused {
   background: var(--accent-color);
   color: var(--accent-fg);
-  box-shadow: 0 0 10px rgba(138, 180, 248, 0.35);
+  box-shadow: 0 0 10px var(--accent-glow);
 }
 
 /* Pinned slot with no workspace: quiet placeholder, label on hover */
 .ws-btn.virtual {
-  background: rgba(255, 255, 255, 0.025);
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.05);
+  background: color-mix(in srgb, var(--fg-color) 2.5%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--fg-color) 5%, transparent);
   color: var(--fg-faint);
 }
 
@@ -179,14 +145,14 @@ button:focus-visible {
 
 .ws-btn.urgent {
   background: var(--urgent-bg);
-  color: #ffffff;
+  color: var(--urgent-fg);
 }
 
 .sway-mode {
   padding: 5px 10px;
   border-radius: var(--radius-sm);
   background: var(--accent-yellow);
-  color: #1c1700;
+  color: var(--accent-yellow-fg);
   font-size: 11px;
   font-weight: 700;
   text-transform: uppercase;
@@ -332,9 +298,9 @@ button:focus-visible {
   width: 16px;
   height: 16px;
   border-radius: 50%;
-  background: #ffffff;
+  background: var(--fg-color);
   border: none;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.5);
+  box-shadow: 0 1px 3px var(--shadow-lg);
   transition: scale var(--dur-fast) var(--ease-out);
 }
 
@@ -346,7 +312,7 @@ button:focus-visible {
   width: 16px;
   height: 16px;
   border-radius: 50%;
-  background: #ffffff;
+  background: var(--fg-color);
   border: none;
 }
 
@@ -394,8 +360,8 @@ button:focus-visible {
   border-radius: var(--radius-lg);
   padding: 12px;
   box-shadow:
-    0 12px 32px rgba(0, 0, 0, 0.5),
-    0 2px 6px rgba(0, 0, 0, 0.3);
+    0 12px 32px var(--shadow-lg),
+    0 2px 6px var(--shadow-sm);
   transform-origin: top center;
   animation: popover-in var(--dur-med) var(--ease-out);
 }
@@ -473,16 +439,16 @@ button:focus-visible {
 }
 
 .bt-device.connected {
-  background: rgba(111, 207, 151, 0.12);
+  background: var(--green-soft);
 }
 
 .bt-device.connected:hover {
-  background: rgba(111, 207, 151, 0.2);
+  background: color-mix(in srgb, var(--accent-green) 20%, transparent);
 }
 
 .bt-device.connected .bt-dot {
   background: var(--accent-green);
-  box-shadow: 0 0 6px rgba(111, 207, 151, 0.6);
+  box-shadow: 0 0 6px var(--green-glow);
 }
 
 @keyframes pulse {
@@ -572,13 +538,13 @@ button:focus-visible {
   padding: 4px;
   border-radius: var(--radius-md);
   background: var(--well-bg);
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.04);
+  box-shadow: inset 0 0 0 1px var(--hairline);
 }
 
 .tray-divider {
   width: 1px;
   height: 28px;
-  background: rgba(255, 255, 255, 0.08);
+  background: var(--panel-border);
   flex: none;
 }
 
@@ -733,12 +699,12 @@ button:focus-visible {
   font-weight: 700;
   padding: 3px 9px;
   border-radius: 999px;
-  background: rgba(111, 207, 151, 0.14);
+  background: var(--green-soft);
   color: var(--accent-green);
 }
 
 .stasis-badge.is-inhibited {
-  background: rgba(242, 201, 76, 0.14);
+  background: var(--yellow-soft);
   color: var(--accent-yellow);
 }
 
@@ -751,7 +717,7 @@ button:focus-visible {
   font-size: 12px;
   font-weight: 500;
   color: var(--accent-red);
-  background: rgba(229, 72, 77, 0.14);
+  background: var(--red-soft);
   border-radius: var(--radius-sm);
   padding: 6px 8px;
 }
@@ -800,7 +766,7 @@ button:focus-visible {
 
 .stasis-action-btn.is-active {
   background: var(--accent-yellow);
-  color: #1c1700;
+  color: var(--accent-yellow-fg);
 }
 
 .stasis-action-btn:disabled,

@@ -1,0 +1,61 @@
+/*
+ * ags-bar theme.
+ *
+ * Retheme the whole bar by editing the base colors below. Everything else
+ * (tints, glows, soft backgrounds) is derived from them with color-mix(), so
+ * changing e.g. --accent-color is enough to restyle focused workspaces,
+ * sliders, selected rows and glows consistently.
+ *
+ * Tip: generate a file that overrides just these variables from your
+ * wallpaper (pywal, matugen, ...) and @import it after this one.
+ */
+:root {
+  /* ---- Base palette (edit these) ---- */
+  --bar-bg: #18181c;
+  --panel-bg: #1c1c21;
+  --well-bg: #111114;
+  --surface-color: #26262c;
+  --fg-color: #ececf1;
+  --fg-muted: #9a9aa6;
+  --fg-faint: #5c5c66;
+  --accent-color: #8ab4f8;
+  --accent-fg: #0e1420;
+  --accent-green: #6fcf97;
+  --accent-yellow: #f2c94c;
+  --accent-yellow-fg: #1c1700;
+  --accent-red: #f2726f;
+  --urgent-bg: #e5484d;
+  --urgent-fg: #ffffff;
+  --shadow-color: #000000;
+
+  /* ---- Shape ---- */
+  --radius-lg: 14px;
+  --radius-md: 10px;
+  --radius-sm: 7px;
+
+  /* ---- Motion: short and crisp ---- */
+  --ease-out: cubic-bezier(0.2, 0, 0, 1);
+  --dur-fast: 70ms;
+  --dur-med: 110ms;
+
+  /* ---- Derived (normally no need to edit) ---- */
+  --hairline: color-mix(in srgb, var(--fg-color) 6%, transparent);
+  --bar-border: var(--hairline);
+  --panel-border: color-mix(in srgb, var(--fg-color) 8%, transparent);
+  --surface-hover: color-mix(in srgb, var(--surface-color), var(--fg-color) 6%);
+  --surface-active: color-mix(in srgb, var(--surface-color), var(--fg-color) 11%);
+  --accent-soft: color-mix(in srgb, var(--accent-color) 16%, transparent);
+  --accent-glow: color-mix(in srgb, var(--accent-color) 35%, transparent);
+  --green-soft: color-mix(in srgb, var(--accent-green) 13%, transparent);
+  --green-glow: color-mix(in srgb, var(--accent-green) 60%, transparent);
+  --yellow-soft: color-mix(in srgb, var(--accent-yellow) 14%, transparent);
+  --yellow-glow: color-mix(in srgb, var(--accent-yellow) 45%, transparent);
+  --red-soft: color-mix(in srgb, var(--urgent-bg) 14%, transparent);
+  --urgent-glow: color-mix(in srgb, var(--urgent-bg) 55%, transparent);
+  --shadow-sm: color-mix(in srgb, var(--shadow-color) 35%, transparent);
+  --shadow-lg: color-mix(in srgb, var(--shadow-color) 50%, transparent);
+
+  /* Backwards-compatible aliases */
+  --theme-bg-color: var(--bar-bg);
+  --theme-fg-color: var(--fg-color);
+}
