@@ -16,16 +16,18 @@ import type { SwayCommandError as SwayCommandErrorData } from "./generated/SwayC
 import type { SwayNode, SwayState, SwayWorkspace } from "./generated/sway";
 import type { TrayItem } from "./generated/TrayItem";
 import type { TrayMenuItem } from "./generated/TrayMenuItem";
-import {
-  EMPTY_SWAY_TREE,
-  SwayCommandError,
-  swayFocusedTitle,
-  swayQuote,
-  swayWindowCounts,
-} from "./sway";
 
-export * from "./sway";
 export type * from "./generated/sway";
+
+export class SwayCommandError extends Error {
+  readonly parseError: boolean;
+
+  constructor(data: SwayCommandErrorData) {
+    super(data.message);
+    this.name = "SwayCommandError";
+    this.parseError = data.parse_error;
+  }
+}
 
 export type {
   AudioDevice,
@@ -103,21 +105,7 @@ export type ExecStreamHandle = {
 export type WebbarApi = {
   readonly output: string;
   sway: Store<SwayState> & {
-    /**
-     * Run a raw Sway command string (see sway(5)). Resolves when Sway reports
-     * success; rejects with a `SwayCommandError` otherwise.
-     */
     command: (cmd: string) => Promise<void>;
-    /** Focus a container by id: `[con_id=N] focus`. */
-    focus: (node: Pick<SwayNode, "id">) => Promise<void>;
-    /** Switch to a workspace by name (quoted for you). */
-    focusWorkspace: (ws: Pick<SwayWorkspace, "name">) => Promise<void>;
-    /** Quote a value as a single Sway command argument. */
-    quote: (value: string) => string;
-    /** Title of the focused container in `tree`. */
-    focusedTitle: (tree: SwayNode) => string;
-    /** Application windows (tiled + floating) per workspace name. */
-    windowCounts: (tree: SwayNode) => Map<string, number>;
   };
   tray: Store<TrayItem[]> & {
     activate: (bus: string, path: string) => void;
@@ -425,7 +413,8 @@ export function createWebbarBridge(
 
   const stores = {
     sway: createStore<SwayState>({
-      tree: EMPTY_SWAY_TREE,
+      available: false,
+      tree: null,
       workspaces: [],
       mode: "default",
     }),
@@ -456,7 +445,8 @@ export function createWebbarBridge(
   const stateHandlers: Record<string, (event: Record<string, unknown>) => void> = {
     sway_state: (e) =>
       stores.sway._update({
-        tree: (e.tree as SwayNode) ?? EMPTY_SWAY_TREE,
+        available: Boolean(e.available),
+        tree: (e.tree as SwayNode | null) ?? null,
         workspaces: (e.workspaces as SwayWorkspace[]) ?? [],
         mode: (e.mode as string) ?? "default",
       }),
@@ -627,13 +617,6 @@ export function createWebbarBridge(
     output,
     sway: storeView(stores.sway, {
       command: swayCommand,
-      focus: (node: Pick<SwayNode, "id">) =>
-        swayCommand(`[con_id=${node.id}] focus`),
-      focusWorkspace: (ws: Pick<SwayWorkspace, "name">) =>
-        swayCommand(`workspace ${swayQuote(ws.name)}`),
-      quote: swayQuote,
-      focusedTitle: swayFocusedTitle,
-      windowCounts: swayWindowCounts,
     }),
     tray: storeView(stores.tray, {
       activate: (bus: string, path: string) =>

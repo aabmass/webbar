@@ -77,6 +77,12 @@ pub fn spawn(send: SendEvent) {
             match run_session(&send, &mut publisher) {
                 SessionEnd::Unavailable(err) => {
                     eprintln!("webbar: Sway IPC disabled: {err}");
+                    send(BridgeEvent::SwayState(Box::new(SwayState {
+                        available: false,
+                        tree: None,
+                        workspaces: Vec::new(),
+                        mode: "default".into(),
+                    })));
                     return;
                 }
                 SessionEnd::Lost(err) => {
@@ -203,7 +209,8 @@ impl Publisher {
 
 fn fetch_state(conn: &mut Connection) -> Fallible<SwayState> {
     Ok(SwayState {
-        tree: conn.get_tree()?,
+        available: true,
+        tree: Some(conn.get_tree()?),
         workspaces: conn.get_workspaces()?,
         mode: conn.get_binding_state()?,
     })
@@ -311,6 +318,7 @@ fn send_command_reply(send: &SendEvent, id: u32, result: CommandResult) {
 #[cfg(test)]
 pub fn test_state() -> SwayState {
     serde_json::from_value(serde_json::json!({
+        "available": true,
         "tree": {
             "id": 1, "name": "root", "type": "root", "border": "none",
             "current_border_width": 0, "layout": "splith", "orientation": "horizontal",

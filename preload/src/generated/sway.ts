@@ -70,7 +70,8 @@ export type SwayScratchpadState = "none" | "fresh" | "changed";
 export type SwayShellType = "xdg_shell" | "xwayland" | "unknown";
 
 export type SwayState = {
-  tree: SwayNode;
+  available: boolean;
+  tree: SwayNode | null;
   workspaces: Array<SwayWorkspace>;
   mode: string;
 };

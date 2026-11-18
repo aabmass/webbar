@@ -4,6 +4,7 @@ import type {
   BluetoothState,
   NetworkState,
   NotificationItem,
+  SwayNode,
   SwayState,
   TrayItem,
 } from "@webbar/types";
@@ -35,6 +36,16 @@ function updateClock(): void {
   });
 }
 
+function focusedTitle(tree: SwayNode): string {
+  const stack: SwayNode[] = [tree];
+  while (stack.length > 0) {
+    const node = stack.pop()!;
+    if (node.focused) return node.name ?? "";
+    stack.push(...node.nodes, ...node.floating_nodes);
+  }
+  return "";
+}
+
 function renderSway(state: SwayState): void {
   const visibleWorkspaces = targetOutput
     ? state.workspaces.filter((ws) => ws.output === targetOutput)
@@ -50,9 +61,10 @@ function renderSway(state: SwayState): void {
       btn.dataset.urgent = String(ws.urgent);
       btn.title = `${ws.output}: ${ws.name}`;
       btn.addEventListener("click", () => {
+        const escaped = ws.name.replace(/[\\"]/g, "\\$&");
         sway
-          .focusWorkspace(ws)
-          .catch((err) => console.warn("focusWorkspace failed:", err));
+          .command(`workspace "${escaped}"`)
+          .catch((err) => console.warn("workspace switch failed:", err));
       });
       return btn;
     }),
@@ -65,7 +77,7 @@ function renderSway(state: SwayState): void {
     modeEl.hidden = true;
   }
 
-  const title = sway.focusedTitle(state.tree);
+  const title = state.tree ? focusedTitle(state.tree) : "";
   focusedTitleEl.textContent = title;
   focusedTitleEl.title = title;
 }

@@ -4,9 +4,6 @@ import {
   SwayCommandError,
   createStore,
   createWebbarBridge,
-  swayFocusedTitle,
-  swayQuote,
-  swayWindowCounts,
 } from "../dist/preload.mjs";
 
 // Minimal Sway tree node; only the fields the helpers and reconcile look at.
@@ -97,6 +94,7 @@ test("all window.webbar stores follow snapshot + subscribe + onChange contract",
       store: api.sway,
       event: {
         type: "sway_state",
+        available: true,
         workspaces: [
           {
             id: 1,
@@ -113,7 +111,7 @@ test("all window.webbar stores follow snapshot + subscribe + onChange contract",
       },
       assertState: (s) => {
         assert.equal(s.workspaces.length, 1);
-        assert.equal(swayFocusedTitle(s.tree), "Alacritty");
+        assert.equal(s.tree.nodes[0].nodes[0].nodes[0].name, "Alacritty");
       },
     },
     {
@@ -423,6 +421,7 @@ test("stores preserve unchanged slice references and skip identical updates", ()
 
   receive({
     type: "sway_state",
+    available: true,
     workspaces: [makeWorkspace()],
     tree: swayTree("Alacritty"),
     mode: "default",
@@ -445,6 +444,7 @@ test("stores preserve unchanged slice references and skip identical updates", ()
   // Identical snapshot must not notify listeners or replace snapshot reference
   receive({
     type: "sway_state",
+    available: true,
     workspaces: [makeWorkspace()],
     tree: swayTree("Alacritty"),
     mode: "default",
@@ -456,13 +456,14 @@ test("stores preserve unchanged slice references and skip identical updates", ()
   // Changing only a window title must preserve workspaces array reference
   receive({
     type: "sway_state",
+    available: true,
     workspaces: [makeWorkspace()],
     tree: swayTree("Firefox"),
     mode: "default",
   });
   assert.equal(subCalls, 1);
   assert.equal(changeCalls, 2);
-  assert.equal(api.sway.focusedTitle(api.sway.get().tree), "Firefox");
+  assert.equal(api.sway.get().tree.nodes[0].nodes[0].nodes[0].name, "Firefox");
   assert.equal(Object.is(api.sway.get().workspaces, firstWorkspaces), true);
 });
 
@@ -643,78 +644,20 @@ test("sway tree updates keep identity of unchanged subtrees", () => {
   assert.equal(next[1].nodes.length, 1);
 });
 
-test("swayFocusedTitle finds tiled and floating focus", () => {
-  assert.equal(swayFocusedTitle(swayTree("Mozilla Firefox")), "Mozilla Firefox");
-  const floating = swayNode(1, "root", {
-    floating_nodes: [
-      swayNode(2, "floating_con", { name: "Picture-in-Picture", focused: true }),
-    ],
-  });
-  assert.equal(swayFocusedTitle(floating), "Picture-in-Picture");
-  assert.equal(swayFocusedTitle(swayNode(1, "root")), "");
-});
-
-test("swayWindowCounts counts tiled and floating leaves, skipping scratchpad", () => {
-  const tree = swayNode(1, "root", {
-    nodes: [
-      swayNode(2, "output", {
-        name: "__i3",
-        nodes: [
-          swayNode(3, "workspace", {
-            name: "__i3_scratch",
-            floating_nodes: [swayNode(4, "floating_con", { pid: 9 })],
-          }),
-        ],
-      }),
-      swayNode(5, "output", {
-        name: "eDP-1",
-        nodes: [
-          swayNode(6, "workspace", {
-            name: "1",
-            nodes: [
-              swayNode(7, "con", { pid: 1 }),
-              swayNode(8, "con", {
-                nodes: [swayNode(9, "con", { pid: 2 }), swayNode(10, "con", { pid: 3 })],
-              }),
-            ],
-            floating_nodes: [swayNode(11, "floating_con", { pid: 4 })],
-          }),
-          swayNode(12, "workspace", { name: "2" }),
-        ],
-      }),
-    ],
-  });
-  const counts = swayWindowCounts(tree);
-  assert.equal(counts.get("1"), 4);
-  assert.equal(counts.get("2"), 0);
-  assert.equal(counts.has("__i3_scratch"), false);
-});
-
-test("swayQuote escapes quotes and backslashes", () => {
-  assert.equal(swayQuote("1"), '"1"');
-  assert.equal(swayQuote('a "b" c'), '"a \\"b\\" c"');
-  assert.equal(swayQuote("back\\slash"), '"back\\\\slash"');
-});
-
 test("sway.command resolves on success and rejects with SwayCommandError", async () => {
   const sent = [];
   const { api, receive } = createWebbarBridge((json) => sent.push(JSON.parse(json)));
 
-  const ok = api.sway.focusWorkspace({ name: 'my "ws"' });
+  const ok = api.sway.command("workspace 1");
   assert.equal(sent[0].type, "sway_command");
-  assert.equal(sent[0].command, 'workspace "my \\"ws\\""');
+  assert.equal(sent[0].command, "workspace 1");
   receive({ type: "rpc_reply", id: sent[0].id, ok: true });
   await ok;
-
-  const focus = api.sway.focus({ id: 42 });
-  assert.equal(sent[1].command, "[con_id=42] focus");
-  receive({ type: "rpc_reply", id: sent[1].id, ok: true });
-  await focus;
 
   const bad = api.sway.command("nonsense");
   receive({
     type: "rpc_reply",
-    id: sent[2].id,
+    id: sent[1].id,
     ok: false,
     error: "Unknown/invalid command 'nonsense'",
     data: { message: "Unknown/invalid command 'nonsense'", parse_error: true },

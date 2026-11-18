@@ -11,8 +11,9 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SwayState {
+    pub available: bool,
     /// Full layout tree, as returned by `GET_TREE`.
-    pub tree: swayipc_types::Node,
+    pub tree: Option<swayipc_types::Node>,
     /// Workspaces, as returned by `GET_WORKSPACES`.
     pub workspaces: Vec<swayipc_types::Workspace>,
     /// Current binding mode, as returned by `GET_BINDING_STATE`.

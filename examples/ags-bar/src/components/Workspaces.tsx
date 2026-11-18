@@ -1,5 +1,31 @@
 import { useMemo, useSyncExternalStore } from "react";
-import type { SwayWorkspace } from "@webbar/types";
+import type { SwayNode, SwayWorkspace } from "@webbar/types";
+
+function countWorkspaceWindows(tree: SwayNode): Map<string, number> {
+  const counts = new Map<string, number>();
+
+  const countWindows = (node: SwayNode): number => {
+    const children = [...node.nodes, ...node.floating_nodes];
+    if (children.length === 0) {
+      const isCon = node.type === "con" || node.type === "floating_con";
+      return isCon && node.pid !== null ? 1 : 0;
+    }
+    return children.reduce((sum, child) => sum + countWindows(child), 0);
+  };
+
+  const walk = (node: SwayNode): void => {
+    if (node.type === "workspace") {
+      if (node.name !== null && node.name !== "__i3_scratch") {
+        counts.set(node.name, countWindows(node));
+      }
+      return;
+    }
+    node.nodes.forEach(walk);
+  };
+
+  walk(tree);
+  return counts;
+}
 
 type WorkspaceSlot = {
   row: 1 | 2;
@@ -49,7 +75,8 @@ export function Workspaces() {
   );
 
   const windowCounts = useMemo(
-    () => window.webbar.sway.windowCounts(swayState.tree),
+    () =>
+      swayState.tree ? countWorkspaceWindows(swayState.tree) : new Map<string, number>(),
     [swayState.tree],
   );
 
@@ -132,9 +159,10 @@ export function Workspaces() {
                   : `Workspace ${ws.name}`
               }
               onClick={() => {
+                const escaped = ws.name.replace(/[\\"]/g, "\\$&");
                 window.webbar.sway
-                  .focusWorkspace({ name: ws.name })
-                  .catch((err) => console.warn("focusWorkspace failed:", err));
+                  .command(`workspace "${escaped}"`)
+                  .catch((err) => console.warn("workspace switch failed:", err));
               }}
             >
               {ws.name}
