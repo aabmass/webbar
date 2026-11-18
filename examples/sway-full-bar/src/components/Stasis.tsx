@@ -254,7 +254,7 @@ export function Stasis() {
   const isManuallyPaused = Boolean(status?.manually_paused);
   const blockers = extractBlockers(blame);
   const hasExternalInhibitor = Boolean(
-    status?.paused || blame?.progression_blocked || blockers.length > 0,
+    status?.paused || blockers.length > 0,
   );
   const isInhibited = isManuallyPaused || hasExternalInhibitor;
 

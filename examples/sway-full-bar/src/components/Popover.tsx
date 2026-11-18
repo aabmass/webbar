@@ -99,10 +99,11 @@ export function Popover({
 
   if (!open) return null;
 
-  const rect = anchorRef.current?.getBoundingClientRect();
+  const anchorEl = anchorRef.current;
+  const rect = anchorEl?.getBoundingClientRect();
   // Open just below the bar (not the button) so the caret has room to show.
   const barBottom =
-    anchorRef.current?.closest(".centerbox")?.getBoundingClientRect().bottom ??
+    anchorEl?.closest(".centerbox")?.getBoundingClientRect().bottom ??
     rect?.bottom ??
     80;
   const top = Math.round(barBottom + 10);
@@ -113,9 +114,12 @@ export function Popover({
       left: Math.round(rect.left + rect.width / 2),
       transform: "translateX(-50%)",
     };
-  } else if (rect) {
-    const right = Math.max(8, Math.round(window.innerWidth - rect.right));
+  } else if (anchorEl && rect) {
+    // Derive the right edge from offsetWidth around the center so CSS :active
+    // scale() on the anchor button doesn't shift the popover between clicks.
     const anchorCenter = rect.left + rect.width / 2;
+    const unscaledRight = anchorCenter + anchorEl.offsetWidth / 2;
+    const right = Math.max(8, Math.round(window.innerWidth - unscaledRight));
     const caretRight = window.innerWidth - right - anchorCenter;
     style = {
       top,
