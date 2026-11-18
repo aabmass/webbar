@@ -37,6 +37,7 @@ type WorkspaceItem = {
   urgent: boolean;
   virtual: boolean;
   output: string;
+  windows: number;
   row: number;
   col: number;
 };
@@ -64,6 +65,7 @@ export function Workspaces() {
           urgent: ws.urgent,
           virtual: false,
           output: ws.output,
+          windows: ws.window_count,
           row: cfg.row,
           col: cfg.col,
         });
@@ -75,6 +77,7 @@ export function Workspaces() {
           urgent: false,
           virtual: true,
           output: "",
+          windows: 0,
           row: cfg.row,
           col: cfg.col,
         });
@@ -92,6 +95,7 @@ export function Workspaces() {
           urgent: ws.urgent,
           virtual: false,
           output: ws.output,
+          windows: ws.window_count,
           row: 1,
           col: extraCol++,
         });
@@ -117,13 +121,24 @@ export function Workspaces() {
               type="button"
               className={classes.join(" ")}
               style={{ gridRow: ws.row, gridColumn: ws.col }}
-              title={ws.output ? `${ws.name} (${ws.output})` : `Workspace ${ws.name}`}
+              title={
+                ws.output
+                  ? `${ws.name} (${ws.output}) — ${ws.windows} window(s)`
+                  : `Workspace ${ws.name}`
+              }
               onClick={() => {
                 const escaped = ws.name.replace(/"/g, '\\"');
                 window.webbar.sway.command(`workspace "${escaped}"`);
               }}
             >
               {ws.name}
+              {ws.windows > 0 && (
+                <span className="ws-dots" aria-hidden="true">
+                  {Array.from({ length: Math.min(3, ws.windows) }, (_, i) => (
+                    <i key={i} />
+                  ))}
+                </span>
+              )}
             </button>
           );
         })}
