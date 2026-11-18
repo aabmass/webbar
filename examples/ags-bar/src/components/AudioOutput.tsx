@@ -1,6 +1,7 @@
 import { useCallback, useRef, useState, useSyncExternalStore } from "react";
 import type { AudioDevice } from "@webbar/types";
 import { SpeakerIcon } from "./Icons";
+import { LevelReadout } from "./LevelReadout";
 import { Popover } from "./Popover";
 
 export function AudioOutput() {
@@ -24,7 +25,7 @@ export function AudioOutput() {
       <button
         ref={btnRef}
         type="button"
-        className={`bar-btn icon-btn${muted ? " is-muted" : ""}${open ? " is-open" : ""}`}
+        className={`bar-btn level-btn${muted ? " is-muted" : ""}${open ? " is-open" : ""}`}
         title={
           speaker
             ? `${speaker.description}: ${muted ? "Muted" : `${pct}%`} (click for slider, right-click to mute, scroll to adjust)`
@@ -44,7 +45,10 @@ export function AudioOutput() {
           void window.webbar.audio.setVolume(speaker.id, next);
         }}
       >
-        <SpeakerIcon volume={volume} muted={muted} />
+        <LevelReadout
+          icon={<SpeakerIcon volume={volume} muted={muted} />}
+          percent={speaker ? pct : null}
+        />
       </button>
 
       <Popover open={open} onClose={close} anchorRef={btnRef} align="end">

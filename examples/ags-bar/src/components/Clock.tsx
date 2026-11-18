@@ -11,7 +11,8 @@ function clockParts(date: Date) {
   }).formatToParts(date);
   const get = (type: Intl.DateTimeFormatPartTypes) =>
     parts.find((p) => p.type === type)?.value ?? "";
-  const time = `${get("hour")}:${get("minute")}:${get("second")}`;
+  const time = `${get("hour")}:${get("minute")}`;
+  const seconds = `:${get("second")}`;
   const date_ = date.toLocaleDateString("en-US", {
     weekday: "long",
     month: "long",
@@ -20,6 +21,7 @@ function clockParts(date: Date) {
   });
   return {
     time,
+    seconds,
     ampm: get("dayPeriod"),
     tz: get("timeZoneName"),
     date: date_,
@@ -123,6 +125,7 @@ export function Clock() {
       >
         <span className="clock-time">
           {parts.time}
+          <span className="clock-seconds">{parts.seconds}</span>
           <span className="clock-ampm">{parts.ampm}</span>
           <span className="clock-tz">{parts.tz}</span>
         </span>

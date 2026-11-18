@@ -1,5 +1,6 @@
 import { useCallback, useRef, useState, useSyncExternalStore } from "react";
 import { DisplayIcon } from "./Icons";
+import { LevelReadout } from "./LevelReadout";
 import { Popover } from "./Popover";
 
 export function MonitorBacklight() {
@@ -20,7 +21,7 @@ export function MonitorBacklight() {
       <button
         ref={btnRef}
         type="button"
-        className={`bar-btn icon-btn${error || !available ? " is-dimmed" : ""}${open ? " is-open" : ""}`}
+        className={`bar-btn level-btn${error || !available ? " is-dimmed" : ""}${open ? " is-open" : ""}`}
         title={
           error
             ? `Monitor brightness unavailable: ${error}`
@@ -34,7 +35,7 @@ export function MonitorBacklight() {
           applyBrightness(brightness + step);
         }}
       >
-        <DisplayIcon />
+        <LevelReadout icon={<DisplayIcon />} percent={brightness} />
       </button>
 
       <Popover open={open} onClose={close} anchorRef={btnRef} align="end">
