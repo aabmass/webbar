@@ -21,7 +21,7 @@
               ./package-lock.json
               ./preload
               ./web
-              ./examples/ags-bar
+              ./examples/sway-full-bar
               ./examples/react-tray
             ];
           };
@@ -85,9 +85,9 @@
             workspace = "web";
           };
 
-          agsBarUi = mkWorkspaceUi {
-            pname = "webbar-ags-bar";
-            workspace = "examples/ags-bar";
+          swayFullBarUi = mkWorkspaceUi {
+            pname = "webbar-sway-full-bar";
+            workspace = "examples/sway-full-bar";
           };
 
           reactTrayUi = mkWorkspaceUi {
@@ -155,16 +155,16 @@
         {
           packages = {
             default = webbarPkg;
-            ags-bar-ui = agsBarUi;
-            ags-bar = pkgs.writeShellScriptBin "webbar-ags-bar" ''
-              exec ${webbarPkg}/bin/webbar --dir ${agsBarUi} --height 86 "$@"
+            sway-full-bar-ui = swayFullBarUi;
+            sway-full-bar = pkgs.writeShellScriptBin "webbar-sway-full-bar" ''
+              exec ${webbarPkg}/bin/webbar --dir ${swayFullBarUi} --height 86 "$@"
             '';
-            ags-bar-dev = pkgs.writeShellApplication {
-              name = "webbar-ags-bar-dev";
+            sway-full-bar-dev = pkgs.writeShellApplication {
+              name = "webbar-sway-full-bar-dev";
               runtimeInputs = [ pkgs.nodejs pkgs.curl ];
               text = ''
-                if [ ! -f examples/ags-bar/package.json ]; then
-                  echo "webbar-ags-bar-dev: run from the webbar repository root" >&2
+                if [ ! -f examples/sway-full-bar/package.json ]; then
+                  echo "webbar-sway-full-bar-dev: run from the webbar repository root" >&2
                   exit 1
                 fi
 
@@ -172,7 +172,7 @@
                   npm install
                 fi
 
-                npm --workspace=examples/ags-bar run dev -- --port 5173 --strictPort &
+                npm --workspace=examples/sway-full-bar run dev -- --port 5173 --strictPort &
                 VITE_PID=$!
                 trap 'kill "$VITE_PID" 2>/dev/null || true' EXIT INT TERM
 
@@ -186,12 +186,12 @@
                 ${webbarPkg}/bin/webbar --url http://localhost:5173 --height 86 --replace "$@"
               '';
             };
-            ags-bar-browser-dev = pkgs.writeShellApplication {
-              name = "webbar-ags-bar-browser-dev";
+            sway-full-bar-browser-dev = pkgs.writeShellApplication {
+              name = "webbar-sway-full-bar-browser-dev";
               runtimeInputs = [ pkgs.nodejs pkgs.curl pkgs.coreutils ];
               text = ''
-                if [ ! -f examples/ags-bar/package.json ]; then
-                  echo "webbar-ags-bar-browser-dev: run from the webbar repository root" >&2
+                if [ ! -f examples/sway-full-bar/package.json ]; then
+                  echo "webbar-sway-full-bar-browser-dev: run from the webbar repository root" >&2
                   exit 1
                 fi
 
@@ -218,17 +218,17 @@
                 }
                 trap cleanup EXIT INT TERM
 
-                npm --workspace=examples/ags-bar run dev -- --port "$VITE_PORT" --strictPort &
+                npm --workspace=examples/sway-full-bar run dev -- --port "$VITE_PORT" --strictPort &
                 VITE_PID=$!
 
                 ready=0
                 for _ in $(seq 1 100); do
                   if ! kill -0 "$WS_PID" 2>/dev/null; then
-                    echo "webbar-ags-bar-browser-dev: ws-bridge exited early" >&2
+                    echo "webbar-sway-full-bar-browser-dev: ws-bridge exited early" >&2
                     exit 1
                   fi
                   if ! kill -0 "$VITE_PID" 2>/dev/null; then
-                    echo "webbar-ags-bar-browser-dev: vite exited early" >&2
+                    echo "webbar-sway-full-bar-browser-dev: vite exited early" >&2
                     exit 1
                   fi
                   if curl -fsS "http://localhost:$VITE_PORT" >/dev/null 2>&1; then
@@ -239,11 +239,11 @@
                 done
 
                 if [ "$ready" -ne 1 ]; then
-                  echo "webbar-ags-bar-browser-dev: timed out waiting for Vite on port $VITE_PORT" >&2
+                  echo "webbar-sway-full-bar-browser-dev: timed out waiting for Vite on port $VITE_PORT" >&2
                   exit 1
                 fi
 
-                echo "webbar-ags-bar-browser-dev: open http://localhost:$VITE_PORT?wsPort=$WS_PORT&wsToken=$WS_TOKEN"
+                echo "webbar-sway-full-bar-browser-dev: open http://localhost:$VITE_PORT?wsPort=$WS_PORT&wsToken=$WS_TOKEN"
                 wait "$VITE_PID"
               '';
             };
@@ -271,7 +271,7 @@
             });
             preload-test = preloadPkg;
             web-ui = webUi;
-            ags-bar-ui = agsBarUi;
+            sway-full-bar-ui = swayFullBarUi;
             react-tray-ui = reactTrayUi;
           };
         };

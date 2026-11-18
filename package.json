@@ -5,7 +5,7 @@
   "workspaces": [
     "preload",
     "web",
-    "examples/ags-bar",
+    "examples/sway-full-bar",
     "examples/react-tray"
   ]
 }

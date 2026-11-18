@@ -9,7 +9,7 @@ Let users build a Sway status bar in plain HTML, CSS, and TypeScript/React—wit
 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
-│  User Bar UI (web/, examples/ags-bar/, or ~/.config/webbar/)         │
+│  User Bar UI (web/, examples/sway-full-bar/, or ~/.config/webbar/)   │
 │  HTML / CSS / TS / React using window.webbar.*                       │
 │  (sway, tray, notifications, audio, bluetooth, network, backlight)   │
 └─────────────────────────────────▲────────────────────────────────────┘

@@ -11,7 +11,7 @@ Pass either a directory containing `index.html` or a dev server URL, and optiona
 ```bash
 webbar --dir /path/to/dist
 webbar --url http://localhost:5173
-webbar --dir ./examples/ags-bar/dist --height 86
+webbar --dir ./examples/sway-full-bar/dist --height 86
 ```
 
 ## Running with Nix
@@ -23,8 +23,8 @@ nix run . -- --dir ./web/dist
 # Run with the React tray example
 nix run . -- --dir ./examples/react-tray/dist
 
-# Run the React AGS-style bar example (built by Nix)
-nix run .#ags-bar
+# Run the React Sway full bar example (built by Nix)
+nix run .#sway-full-bar
 
 # Enter a dev shell with Rust, Node, GTK4, gtk4-layer-shell, and WebKitGTK 6.0
 nix develop
@@ -43,19 +43,19 @@ npm --workspace=web run build
 cargo run -- --dir ./web/dist
 ```
 
-### Live Reload with Vite (`examples/ags-bar`)
+### Live Reload with Vite (`examples/sway-full-bar`)
 
 Run both the Vite dev server and `webbar` with a single command from the repo root:
 
 ```bash
-nix run .#ags-bar-dev
+nix run .#sway-full-bar-dev
 ```
 
 Or start them in two terminals manually (`--replace` swaps out any already-running `webbar` instance):
 
 ```bash
 # Terminal 1: start Vite dev server (inside nix develop if you don't have Node locally)
-cd examples/ags-bar
+cd examples/sway-full-bar
 npm install
 npm run dev
 
@@ -65,14 +65,14 @@ nix run . -- --url http://localhost:5173 --height 86 --replace
 # cargo run -- --url http://localhost:5173 --height 86 --replace
 ```
 
-Edits to `examples/ags-bar/src/` will hot-reload in the bar, and `webbar` automatically replays the latest system snapshots on reload.
+Edits to `examples/sway-full-bar/src/` will hot-reload in the bar, and `webbar` automatically replays the latest system snapshots on reload.
 
 #### External Browser Dev Mode (WebSocket Bridge)
 
-To iterate on `examples/ags-bar` in a standard browser (or an automated browser agent such as [Antigravity's browser subagent](https://antigravity.google/docs/ide/browser/)) with live `window.webbar` data and without replacing your running desktop bar:
+To iterate on `examples/sway-full-bar` in a standard browser (or an automated browser agent such as [Antigravity's browser subagent](https://antigravity.google/docs/ide/browser/)) with live `window.webbar` data and without replacing your running desktop bar:
 
 ```bash
-nix run .#ags-bar-browser-dev
+nix run .#sway-full-bar-browser-dev
 ```
 
 This starts a headless `webbar --ws-bridge 9123` backend alongside Vite on `http://localhost:5173` and prints a tokenized URL such as `http://localhost:5173?wsPort=9123&wsToken=...` (overrides: `WEBBAR_WS_PORT`, `WEBBAR_VITE_PORT`, `WEBBAR_WS_TOKEN`). Or run them separately:
@@ -83,7 +83,7 @@ nix run . -- --ws-bridge 9123
 
 # Terminal 2: build @webbar/types once, then start Vite
 npm --workspace=@webbar/types run build
-npm --workspace=examples/ags-bar run dev -- --port 5173 --strictPort
+npm --workspace=examples/sway-full-bar run dev -- --port 5173 --strictPort
 ```
 
 ### DevTools (WebKit Web Inspector)
@@ -120,7 +120,7 @@ npm install
 # Preload bridge (@webbar/types) build, typecheck, and contract tests
 npm --workspace=@webbar/types run build && npm --workspace=@webbar/types test
 
-# Typecheck and build all workspaces (preload, web, examples/ags-bar, examples/react-tray)
+# Typecheck and build all workspaces (preload, web, examples/sway-full-bar, examples/react-tray)
 npm run --workspaces typecheck
 npm run --workspaces build
 ```
