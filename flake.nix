@@ -14,17 +14,21 @@
 
       mkSystemOutputs = pkgs:
         let
-          npmWorkspaceSrc = pkgs.lib.fileset.toSource {
-            root = ./.;
-            fileset = pkgs.lib.fileset.unions [
-              ./package.json
-              ./package-lock.json
-              ./preload
-              ./web
-              ./examples/sway-full-bar
-              ./examples/react-tray
-            ];
-          };
+          mkNpmSrc = dirs:
+            pkgs.lib.fileset.toSource {
+              root = ./.;
+              fileset = pkgs.lib.fileset.unions ([
+                ./package.json
+                ./package-lock.json
+              ] ++ dirs);
+            };
+
+          npmWorkspaceSrc = mkNpmSrc [
+            ./preload
+            ./web
+            ./examples/sway-full-bar
+            ./examples/react-tray
+          ];
 
           npmDeps = pkgs.importNpmLock {
             npmRoot = npmWorkspaceSrc;
@@ -33,7 +37,7 @@
           preloadPkg = pkgs.buildNpmPackage {
             pname = "webbar-preload";
             inherit version npmDeps;
-            src = npmWorkspaceSrc;
+            src = mkNpmSrc [ ./preload ];
             npmConfigHook = pkgs.importNpmLock.npmConfigHook;
             npmWorkspace = "preload";
 
@@ -61,7 +65,7 @@
           mkWorkspaceUi = { pname, workspace }:
             pkgs.buildNpmPackage {
               inherit pname version npmDeps;
-              src = npmWorkspaceSrc;
+              src = mkNpmSrc [ ./preload (./. + "/${workspace}") ];
               npmConfigHook = pkgs.importNpmLock.npmConfigHook;
               npmWorkspace = workspace;
 
