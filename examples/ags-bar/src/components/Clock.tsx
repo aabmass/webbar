@@ -40,9 +40,15 @@ function Calendar({ today }: { today: Date }) {
   const firstDow = new Date(year, month, 1).getDay();
   const daysInMonth = new Date(year, month + 1, 0).getDate();
 
-  const cells: (number | null)[] = [];
-  for (let i = 0; i < firstDow; i++) cells.push(null);
-  for (let d = 1; d <= daysInMonth; d++) cells.push(d);
+  const prevMonthDays = new Date(year, month, 0).getDate();
+  const cells: { day: number; outside: boolean }[] = [];
+  for (let i = firstDow - 1; i >= 0; i--) {
+    cells.push({ day: prevMonthDays - i, outside: true });
+  }
+  for (let d = 1; d <= daysInMonth; d++) cells.push({ day: d, outside: false });
+  for (let d = 1; cells.length % 7 !== 0; d++) {
+    cells.push({ day: d, outside: true });
+  }
 
   const isToday = (d: number) =>
     d === today.getDate() &&
@@ -84,18 +90,17 @@ function Calendar({ today }: { today: Date }) {
             {wd}
           </span>
         ))}
-        {cells.map((day, idx) =>
-          day === null ? (
-            <span key={`empty-${idx}`} className="cal-empty" />
-          ) : (
-            <span
-              key={day}
-              className={`cal-day${isToday(day) ? " is-today" : ""}${isWeekend(idx) ? " is-weekend" : ""}`}
-            >
+        {cells.map(({ day, outside }, idx) => {
+          const classes = ["cal-day"];
+          if (outside) classes.push("is-outside");
+          else if (isToday(day)) classes.push("is-today");
+          if (isWeekend(idx)) classes.push("is-weekend");
+          return (
+            <span key={idx} className={classes.join(" ")}>
               {day}
             </span>
-          ),
-        )}
+          );
+        })}
       </div>
     </div>
   );

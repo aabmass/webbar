@@ -3,6 +3,15 @@ import type { BluetoothDevice } from "@webbar/types";
 import { BluetoothIcon } from "./Icons";
 import { Popover } from "./Popover";
 
+function BatteryGlyph({ percent }: { percent: number }) {
+  const level = percent > 50 ? "high" : percent > 20 ? "mid" : "low";
+  return (
+    <span className={`battery-glyph is-${level}`} aria-hidden="true">
+      <span style={{ width: `${Math.max(8, Math.min(100, percent))}%` }} />
+    </span>
+  );
+}
+
 export function Bluetooth() {
   const bt = useSyncExternalStore(
     window.webbar.bluetooth.subscribe,
@@ -16,6 +25,7 @@ export function Bluetooth() {
     () => new Set(),
   );
 
+  const adapter = bt.adapters[0];
   const pairedDevices = bt.devices.filter((d) => d.paired);
   const connectedCount = pairedDevices.filter((d) => d.connected).length;
 
@@ -60,7 +70,39 @@ export function Bluetooth() {
       </button>
 
       <Popover open={open} onClose={close} anchorRef={btnRef} align="end">
-        <div className="popover-title">Bluetooth</div>
+        <div className="qs-header">
+          <div className="qs-heading">
+            <span className="qs-title">
+              <BluetoothIcon /> Bluetooth
+            </span>
+            <span className="qs-subtitle">
+              {!bt.available
+                ? "Unavailable"
+                : adapter && !adapter.powered
+                  ? "Off"
+                  : connectedCount > 0
+                    ? `${connectedCount} connected`
+                    : "On"}
+            </span>
+          </div>
+          {adapter && (
+            <button
+              type="button"
+              role="switch"
+              aria-checked={adapter.powered}
+              aria-label="Bluetooth power"
+              className={`qs-switch${adapter.powered ? " is-on" : ""}`}
+              onClick={() => {
+                setError(null);
+                window.webbar.bluetooth
+                  .setPowered(adapter.path, !adapter.powered)
+                  .catch((err: unknown) =>
+                    setError(err instanceof Error ? err.message : String(err)),
+                  );
+              }}
+            />
+          )}
+        </div>
         <div className="bt-popover-list">
           {pairedDevices.length === 0 ? (
             <span className="drawer-empty">No paired devices</span>
@@ -83,7 +125,10 @@ export function Bluetooth() {
                   <span className="bt-dot" aria-hidden="true" />
                   <span className="bt-name">{device.name}</span>
                   {device.battery != null && (
-                    <span className="bt-battery">{device.battery}%</span>
+                    <span className="bt-battery">
+                      {device.battery}%
+                      <BatteryGlyph percent={device.battery} />
+                    </span>
                   )}
                 </button>
               );

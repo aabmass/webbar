@@ -470,6 +470,8 @@ button:focus-visible {
   position: fixed;
   inset: auto;
   margin: 0;
+  /* UA [popover] default is overflow:auto, which would clip the caret */
+  overflow: visible;
   background: var(--panel-bg);
   color: var(--fg-color);
   border: 1px solid var(--panel-border);
@@ -480,6 +482,28 @@ button:focus-visible {
     0 2px 6px var(--shadow-sm);
   transform-origin: top center;
   animation: popover-in var(--dur-med) var(--ease-out);
+}
+
+/* Caret pointing at the anchor button */
+.popover-panel.caret-end::before,
+.popover-panel.caret-center::before {
+  content: "";
+  position: absolute;
+  top: -6px;
+  width: 10px;
+  height: 10px;
+  background: var(--panel-bg);
+  border-left: 1px solid var(--panel-border);
+  border-top: 1px solid var(--panel-border);
+  rotate: 45deg;
+}
+
+.popover-panel.caret-end::before {
+  right: calc(var(--caret-right, 20px) - 6px);
+}
+
+.popover-panel.caret-center::before {
+  left: calc(50% - 5px);
 }
 
 .popover-panel::backdrop {
@@ -514,6 +538,109 @@ button:focus-visible {
 }
 
 /* Bluetooth */
+.qs-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 2px 4px 10px;
+}
+
+.qs-heading {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.qs-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.qs-title svg {
+  width: 16px;
+  height: 16px;
+}
+
+.qs-subtitle {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--fg-muted);
+}
+
+.qs-switch {
+  position: relative;
+  flex: none;
+  width: 34px;
+  height: 20px;
+  padding: 0;
+  border-radius: 999px;
+  background: var(--surface-active);
+}
+
+.qs-switch::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--fg-color);
+  transition: translate var(--dur-med) var(--ease-out);
+}
+
+.qs-switch.is-on {
+  background: var(--accent-color);
+}
+
+.qs-switch.is-on::after {
+  translate: 14px 0;
+}
+
+.battery-glyph {
+  position: relative;
+  display: inline-block;
+  width: 18px;
+  height: 9px;
+  margin-left: 6px;
+  vertical-align: -1px;
+  border: 1.5px solid var(--fg-muted);
+  border-radius: 2px;
+}
+
+.battery-glyph::after {
+  content: "";
+  position: absolute;
+  top: 1.5px;
+  right: -3.5px;
+  width: 2px;
+  height: 3px;
+  border-radius: 0 1px 1px 0;
+  background: var(--fg-muted);
+}
+
+.battery-glyph > span {
+  position: absolute;
+  top: 1px;
+  bottom: 1px;
+  left: 1px;
+  max-width: calc(100% - 2px);
+  border-radius: 1px;
+  background: var(--accent-green);
+}
+
+.battery-glyph.is-mid > span {
+  background: var(--accent-yellow);
+}
+
+.battery-glyph.is-low > span {
+  background: var(--accent-red);
+}
+
 .bt-popover-list {
   display: flex;
   flex-direction: column;
@@ -637,6 +764,11 @@ button:focus-visible {
 
 .cal-day.is-weekend {
   color: var(--fg-muted);
+}
+
+.cal-day.is-outside {
+  color: var(--fg-faint);
+  opacity: 0.55;
 }
 
 .cal-day.is-today {

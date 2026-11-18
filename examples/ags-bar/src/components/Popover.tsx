@@ -100,26 +100,37 @@ export function Popover({
   if (!open) return null;
 
   const rect = anchorRef.current?.getBoundingClientRect();
-  const top = rect ? Math.round(rect.bottom + 8) : 88;
-  const style: React.CSSProperties =
-    align === "center" && rect
-      ? {
-          top,
-          left: Math.round(rect.left + rect.width / 2),
-          transform: "translateX(-50%)",
-        }
-      : rect
-        ? {
-            top,
-            right: Math.max(8, Math.round(window.innerWidth - rect.right)),
-          }
-        : { top, right: 12 };
+  // Open just below the bar (not the button) so the caret has room to show.
+  const barBottom =
+    anchorRef.current?.closest(".centerbox")?.getBoundingClientRect().bottom ??
+    rect?.bottom ??
+    80;
+  const top = Math.round(barBottom + 10);
+  let style: React.CSSProperties;
+  if (align === "center" && rect) {
+    style = {
+      top,
+      left: Math.round(rect.left + rect.width / 2),
+      transform: "translateX(-50%)",
+    };
+  } else if (rect) {
+    const right = Math.max(8, Math.round(window.innerWidth - rect.right));
+    const anchorCenter = rect.left + rect.width / 2;
+    const caretRight = window.innerWidth - right - anchorCenter;
+    style = {
+      top,
+      right,
+      ["--caret-right" as string]: `${Math.max(12, Math.round(caretRight))}px`,
+    };
+  } else {
+    style = { top, right: 12 };
+  }
 
   return (
     <div
       ref={panelRef}
       popover="manual"
-      className="popover-panel"
+      className={`popover-panel caret-${rect ? align : "none"}`}
       style={style}
       role="dialog"
     >
