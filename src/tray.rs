@@ -53,8 +53,14 @@ pub struct TrayMenuItem {
 }
 
 #[derive(Clone)]
+struct TrayEntry {
+    item: TrayItem,
+    unique_bus: String,
+}
+
+#[derive(Clone)]
 struct TrayStore {
-    items: Arc<Mutex<Vec<TrayItem>>>,
+    items: Arc<Mutex<Vec<TrayEntry>>>,
     send: SendEvent,
 }
 
@@ -66,27 +72,79 @@ impl TrayStore {
         }
     }
 
-    fn upsert(&self, item: TrayItem) {
+    fn snapshot_locked(entries: &[TrayEntry]) -> Vec<TrayItem> {
+        entries.iter().map(|e| e.item.clone()).collect()
+    }
+
+    fn upsert(&self, item: TrayItem, unique_bus: String) {
         let mut guard = self.items.lock().unwrap();
         if let Some(existing) = guard
             .iter_mut()
-            .find(|i| i.bus == item.bus && i.path == item.path)
+            .find(|e| e.item.bus == item.bus && e.item.path == item.path)
         {
-            *existing = item;
+            existing.item = item;
+            if !unique_bus.is_empty() {
+                existing.unique_bus = unique_bus;
+            }
         } else {
-            guard.push(item);
+            guard.push(TrayEntry { item, unique_bus });
         }
-        let snapshot = guard.clone();
+        let snapshot = Self::snapshot_locked(&guard);
         drop(guard);
         (self.send)(BridgeEvent::Tray { items: snapshot });
+    }
+
+    fn update_if_present(
+        &self,
+        bus: &str,
+        path: &str,
+        title: String,
+        icon_name: String,
+        icon_url: String,
+        menu_path: String,
+    ) -> bool {
+        let mut guard = self.items.lock().unwrap();
+        let Some(existing) = guard
+            .iter_mut()
+            .find(|e| e.item.bus == bus && e.item.path == path)
+        else {
+            return false;
+        };
+
+        if existing.item.title == title
+            && existing.item.icon_name == icon_name
+            && existing.item.icon_url == icon_url
+            && existing.item.menu_path == menu_path
+        {
+            return false;
+        }
+
+        existing.item.title = title;
+        existing.item.icon_name = icon_name;
+        existing.item.icon_url = icon_url;
+        existing.item.menu_path = menu_path;
+
+        let snapshot = Self::snapshot_locked(&guard);
+        drop(guard);
+        (self.send)(BridgeEvent::Tray { items: snapshot });
+        true
+    }
+
+    fn find_target(&self, sender: &str, path: &str) -> Option<(String, String)> {
+        self.items
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|e| (e.item.bus == sender || e.unique_bus == sender) && e.item.path == path)
+            .map(|e| (e.item.bus.clone(), e.item.path.clone()))
     }
 
     fn remove_by_bus(&self, bus: &str) -> Vec<String> {
         let mut guard = self.items.lock().unwrap();
         let mut removed = Vec::new();
-        guard.retain(|item| {
-            if item.bus == bus {
-                removed.push(format!("{}{}", item.bus, item.path));
+        guard.retain(|entry| {
+            if entry.item.bus == bus || entry.unique_bus == bus {
+                removed.push(format!("{}{}", entry.item.bus, entry.item.path));
                 false
             } else {
                 true
@@ -95,7 +153,7 @@ impl TrayStore {
         if removed.is_empty() {
             return removed;
         }
-        let snapshot = guard.clone();
+        let snapshot = Self::snapshot_locked(&guard);
         drop(guard);
         (self.send)(BridgeEvent::Tray { items: snapshot });
         removed
@@ -106,7 +164,7 @@ impl TrayStore {
             .lock()
             .unwrap()
             .iter()
-            .map(|i| format!("{}{}", i.bus, i.path))
+            .map(|e| format!("{}{}", e.item.bus, e.item.path))
             .collect()
     }
 }
@@ -118,12 +176,12 @@ struct StatusNotifierWatcher {
 #[interface(name = "org.kde.StatusNotifierWatcher")]
 impl StatusNotifierWatcher {
     fn register_status_notifier_item(&self, service: &str, #[zbus(header)] header: Header<'_>) {
+        let sender = header
+            .sender()
+            .map(|s| s.to_string())
+            .unwrap_or_default();
         let (bus, path) = if service.starts_with('/') {
-            let sender = header
-                .sender()
-                .map(|s| s.to_string())
-                .unwrap_or_default();
-            (sender, service.to_string())
+            (sender.clone(), service.to_string())
         } else {
             (service.to_string(), "/StatusNotifierItem".to_string())
         };
@@ -132,17 +190,26 @@ impl StatusNotifierWatcher {
             return;
         }
 
+        let unique_bus = if bus.starts_with(':') {
+            bus.clone()
+        } else {
+            sender
+        };
+
         let store = self.store.clone();
         thread::spawn(move || {
             let (title, icon_name, icon_url, menu_path) = fetch_item_properties(&bus, &path);
-            store.upsert(TrayItem {
-                bus,
-                path,
-                title,
-                icon_name,
-                icon_url,
-                menu_path,
-            });
+            store.upsert(
+                TrayItem {
+                    bus,
+                    path,
+                    title,
+                    icon_name,
+                    icon_url,
+                    menu_path,
+                },
+                unique_bus,
+            );
         });
     }
 
@@ -325,6 +392,34 @@ fn handle_name_owner_changed(store: &TrayStore, name: &str, new_owner: &str) -> 
     store.remove_by_bus(name)
 }
 
+fn should_refresh_sni_signal(msg: &zbus::Message) -> bool {
+    let header = msg.header();
+    let iface = header.interface().map(|i| i.as_str());
+    let member = header.member().map(|m| m.as_str());
+
+    match (iface, member) {
+        (
+            Some("org.kde.StatusNotifierItem"),
+            Some("NewIcon" | "NewAttentionIcon" | "NewOverlayIcon" | "NewTitle" | "NewStatus"),
+        ) => true,
+        (Some("org.freedesktop.DBus.Properties"), Some("PropertiesChanged")) => {
+            matches!(
+                msg.body()
+                    .deserialize::<(String, HashMap<String, OwnedValue>, Vec<String>)>(),
+                Ok((changed_iface, _, _)) if changed_iface == "org.kde.StatusNotifierItem"
+            )
+        }
+        _ => false,
+    }
+}
+
+fn spawn_item_refresh(store: TrayStore, bus: String, path: String) {
+    thread::spawn(move || {
+        let (title, icon_name, icon_url, menu_path) = fetch_item_properties(&bus, &path);
+        store.update_if_present(&bus, &path, title, icon_name, icon_url, menu_path);
+    });
+}
+
 pub fn spawn_server(send: SendEvent) {
     thread::spawn(move || {
         let store = TrayStore::new(send);
@@ -346,7 +441,7 @@ pub fn spawn_server(send: SendEvent) {
             }
         };
 
-        let Ok(rule) = MatchRule::builder()
+        let Ok(name_owner_rule) = MatchRule::builder()
             .msg_type(zbus::message::Type::Signal)
             .sender("org.freedesktop.DBus")
             .and_then(|b| b.path("/org/freedesktop/DBus"))
@@ -359,30 +454,84 @@ pub fn spawn_server(send: SendEvent) {
             }
         };
 
+        let sni_rule = MatchRule::builder()
+            .msg_type(zbus::message::Type::Signal)
+            .interface("org.kde.StatusNotifierItem")
+            .map(|b| b.build())
+            .ok();
+
+        let props_rule = MatchRule::builder()
+            .msg_type(zbus::message::Type::Signal)
+            .interface("org.freedesktop.DBus.Properties")
+            .and_then(|b| b.member("PropertiesChanged"))
+            .and_then(|b| b.arg(0, "org.kde.StatusNotifierItem"))
+            .map(|b| b.build())
+            .ok();
+
         async_io::block_on(async {
-            let Ok(mut stream) = MessageStream::for_match_rule(rule, conn.inner(), Some(64)).await
+            let mut streams = Vec::new();
+            let Ok(name_stream) =
+                MessageStream::for_match_rule(name_owner_rule, conn.inner(), Some(64)).await
             else {
                 return;
             };
+            streams.push(name_stream);
 
-            while let Some(Ok(msg)) = stream.next().await {
-                if let Ok((name, _old_owner, new_owner)) =
-                    msg.body().deserialize::<(String, String, String)>()
+            if let Some(rule) = sni_rule {
+                if let Ok(stream) =
+                    MessageStream::for_match_rule(rule, conn.inner(), Some(64)).await
                 {
-                    let removed = handle_name_owner_changed(&store, &name, &new_owner);
-                    if !removed.is_empty() {
-                        if let Ok(iface) = conn
-                            .object_server()
-                            .interface::<_, StatusNotifierWatcher>("/StatusNotifierWatcher")
-                        {
-                            for service in removed {
-                                let _ = StatusNotifierWatcher::status_notifier_item_unregistered(
-                                    iface.signal_emitter(),
-                                    &service,
-                                )
-                                .await;
+                    streams.push(stream);
+                }
+            }
+
+            if let Some(rule) = props_rule {
+                if let Ok(stream) =
+                    MessageStream::for_match_rule(rule, conn.inner(), Some(64)).await
+                {
+                    streams.push(stream);
+                }
+            }
+
+            let mut combined = futures_util::stream::select_all(streams);
+
+            while let Some(Ok(msg)) = combined.next().await {
+                let header = msg.header();
+                if header.interface().map(|i| i.as_str()) == Some("org.freedesktop.DBus")
+                    && header.member().map(|m| m.as_str()) == Some("NameOwnerChanged")
+                {
+                    if let Ok((name, _old_owner, new_owner)) =
+                        msg.body().deserialize::<(String, String, String)>()
+                    {
+                        let removed = handle_name_owner_changed(&store, &name, &new_owner);
+                        if !removed.is_empty() {
+                            if let Ok(iface) = conn
+                                .object_server()
+                                .interface::<_, StatusNotifierWatcher>("/StatusNotifierWatcher")
+                            {
+                                for service in removed {
+                                    let _ =
+                                        StatusNotifierWatcher::status_notifier_item_unregistered(
+                                            iface.signal_emitter(),
+                                            &service,
+                                        )
+                                        .await;
+                                }
                             }
                         }
+                    }
+                    continue;
+                }
+
+                if should_refresh_sni_signal(&msg) {
+                    let Some(sender) = header.sender().map(|s| s.as_str()) else {
+                        continue;
+                    };
+                    let Some(path) = header.path().map(|p| p.as_str()) else {
+                        continue;
+                    };
+                    if let Some((bus, item_path)) = store.find_target(sender, path) {
+                        spawn_item_refresh(store.clone(), bus, item_path);
                     }
                 }
             }
@@ -566,22 +715,28 @@ mod tests {
         });
         let store = TrayStore::new(send);
 
-        store.upsert(TrayItem {
-            bus: ":1.42".to_string(),
-            path: "/StatusNotifierItem".to_string(),
-            title: "Stasis".to_string(),
-            icon_name: "stasis".to_string(),
-            icon_url: String::new(),
-            menu_path: "/MenuBar".to_string(),
-        });
-        store.upsert(TrayItem {
-            bus: ":1.99".to_string(),
-            path: "/org/ayatana/NotificationItem/foo/Menu".to_string(),
-            title: "Other".to_string(),
-            icon_name: "other".to_string(),
-            icon_url: String::new(),
-            menu_path: String::new(),
-        });
+        store.upsert(
+            TrayItem {
+                bus: ":1.42".to_string(),
+                path: "/StatusNotifierItem".to_string(),
+                title: "Stasis".to_string(),
+                icon_name: "stasis".to_string(),
+                icon_url: String::new(),
+                menu_path: "/MenuBar".to_string(),
+            },
+            ":1.42".to_string(),
+        );
+        store.upsert(
+            TrayItem {
+                bus: ":1.99".to_string(),
+                path: "/org/ayatana/NotificationItem/foo/Menu".to_string(),
+                title: "Other".to_string(),
+                icon_name: "other".to_string(),
+                icon_url: String::new(),
+                menu_path: String::new(),
+            },
+            ":1.99".to_string(),
+        );
         assert_eq!(events.lock().unwrap().len(), 2);
 
         // Non-empty new_owner (ownership acquired or transferred) must not remove items.
@@ -611,5 +766,91 @@ mod tests {
         // Repeating for an unknown/already-removed bus is a no-op with no extra event.
         assert!(handle_name_owner_changed(&store, ":1.42", "").is_empty());
         assert_eq!(events.lock().unwrap().len(), 3);
+    }
+
+    #[test]
+    fn finds_and_updates_existing_tray_item_without_resurrecting_removed_ones() {
+        let events: Arc<Mutex<Vec<BridgeEvent>>> = Arc::new(Mutex::new(Vec::new()));
+        let events_clone = events.clone();
+        let send: SendEvent = Arc::new(move |ev| {
+            events_clone.lock().unwrap().push(ev);
+        });
+        let store = TrayStore::new(send);
+
+        store.upsert(
+            TrayItem {
+                bus: "org.kde.StatusNotifierItem-100-1".to_string(),
+                path: "/StatusNotifierItem".to_string(),
+                title: "NetworkManager Applet".to_string(),
+                icon_name: "nm-no-connection".to_string(),
+                icon_url: "data:image/png;base64,AAA".to_string(),
+                menu_path: "/org/ayatana/NotificationItem/nm_applet/Menu".to_string(),
+            },
+            ":1.55".to_string(),
+        );
+        assert_eq!(events.lock().unwrap().len(), 1);
+
+        // Matches by either unique sender (:1.55) or registered bus name.
+        assert_eq!(
+            store.find_target(":1.55", "/StatusNotifierItem"),
+            Some((
+                "org.kde.StatusNotifierItem-100-1".to_string(),
+                "/StatusNotifierItem".to_string()
+            ))
+        );
+        assert_eq!(
+            store.find_target("org.kde.StatusNotifierItem-100-1", "/StatusNotifierItem"),
+            Some((
+                "org.kde.StatusNotifierItem-100-1".to_string(),
+                "/StatusNotifierItem".to_string()
+            ))
+        );
+        assert_eq!(store.find_target(":1.55", "/OtherPath"), None);
+
+        // No-op update does not emit a duplicate event.
+        assert!(!store.update_if_present(
+            "org.kde.StatusNotifierItem-100-1",
+            "/StatusNotifierItem",
+            "NetworkManager Applet".to_string(),
+            "nm-no-connection".to_string(),
+            "data:image/png;base64,AAA".to_string(),
+            "/org/ayatana/NotificationItem/nm_applet/Menu".to_string(),
+        ));
+        assert_eq!(events.lock().unwrap().len(), 1);
+
+        // Icon update emits a new snapshot with the updated icon.
+        assert!(store.update_if_present(
+            "org.kde.StatusNotifierItem-100-1",
+            "/StatusNotifierItem",
+            "NetworkManager Applet".to_string(),
+            "nm-signal-75".to_string(),
+            "data:image/png;base64,BBB".to_string(),
+            "/org/ayatana/NotificationItem/nm_applet/Menu".to_string(),
+        ));
+        assert_eq!(events.lock().unwrap().len(), 2);
+        match events.lock().unwrap().last().unwrap() {
+            BridgeEvent::Tray { items } => {
+                assert_eq!(items.len(), 1);
+                assert_eq!(items[0].icon_name, "nm-signal-75");
+                assert_eq!(items[0].icon_url, "data:image/png;base64,BBB");
+            }
+            other => panic!("expected BridgeEvent::Tray, got {other:?}"),
+        }
+
+        // Removing by unique_bus also removes well-known-name items, and
+        // update_if_present must not resurrect removed items.
+        assert_eq!(
+            handle_name_owner_changed(&store, ":1.55", ""),
+            vec!["org.kde.StatusNotifierItem-100-1/StatusNotifierItem".to_string()]
+        );
+        assert!(!store.update_if_present(
+            "org.kde.StatusNotifierItem-100-1",
+            "/StatusNotifierItem",
+            "NetworkManager Applet".to_string(),
+            "nm-signal-100".to_string(),
+            "data:image/png;base64,CCC".to_string(),
+            "/org/ayatana/NotificationItem/nm_applet/Menu".to_string(),
+        ));
+        assert!(store.registered_items().is_empty());
     }
 }
