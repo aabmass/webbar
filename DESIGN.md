@@ -52,3 +52,8 @@ Let users build a Sway status bar in plain HTML, CSS, and TypeScript/React—wit
 4. **Explicit UI source (`--dir` / `--url`) + Nix**
    - `webbar` takes either `--dir <path>` (served over a custom `webbar://app/...` URI scheme) or `--url <url>` (e.g., a Vite dev server for live reload).
    - `flake.nix` provides both a reproducible `devShell` and `packages.default` (which installs the sample `web/dist` into `$out/share/webbar`).
+
+5. **Tray & DBusMenu icons resolved in Rust to `data:` URLs (`src/tray.rs`)**
+   - Tray apps expose icons over D-Bus in multiple formats: theme icon names (`IconName` / `icon-name`), file paths, raw ARGB32 pixmaps (`IconPixmap`), or raw PNG bytes (`icon-data`).
+   - Rust resolves all of these on the host (using GTK4's `IconTheme` for theme names and `gdk_pixbuf` for ARGB pixmaps) and sends the frontend a ready-to-render base64 `data:` URL in `icon_url`.
+   - `icon_name` is also passed through so frontends can identify freedesktop `-symbolic` icons and recolor them with CSS `mask-image` to match the bar theme.

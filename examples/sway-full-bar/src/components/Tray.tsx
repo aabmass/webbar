@@ -29,6 +29,20 @@ function normalizeMenuItems(items: TrayMenuItem[]): TrayMenuItem[] {
   return result;
 }
 
+function endsWithEllipsis(label: string): boolean {
+  const trimmed = label.trimEnd();
+  return trimmed.endsWith("...") || trimmed.endsWith("…");
+}
+
+function isPlainDisabled(entry: TrayMenuItem): boolean {
+  return (
+    !entry.enabled &&
+    entry.children.length === 0 &&
+    !entry.toggle_type &&
+    !entry.icon_url
+  );
+}
+
 function ChevronIcon({ expanded }: { expanded: boolean }) {
   return (
     <svg
@@ -48,13 +62,26 @@ function ChevronIcon({ expanded }: { expanded: boolean }) {
   );
 }
 
-function isPlainDisabled(entry: TrayMenuItem): boolean {
-  return (
-    !entry.enabled &&
-    entry.children.length === 0 &&
-    !entry.toggle_type &&
-    !entry.icon_url
-  );
+function MenuIcon({
+  iconUrl,
+  iconName,
+  className,
+}: {
+  iconUrl: string;
+  iconName?: string;
+  className: string;
+}) {
+  const isSymbolic = Boolean(iconName) && iconName!.endsWith("-symbolic");
+  if (isSymbolic) {
+    return (
+      <span
+        className={`${className} is-symbolic`}
+        style={{ ["--icon-src" as string]: `url("${iconUrl}")` }}
+        aria-hidden="true"
+      />
+    );
+  }
+  return <img className={className} src={iconUrl} alt="" aria-hidden="true" />;
 }
 
 function MenuList({
@@ -68,11 +95,13 @@ function MenuList({
   // nm-applet destroy and recreate menu items with fresh ids on LayoutUpdated.
   const [expandedLabel, setExpandedLabel] = useState<string | null>(null);
   const normalized = normalizeMenuItems(items);
+  let prevWasSectionHeader = false;
 
   return (
     <div className="tray-menu-list" role="menu">
       {normalized.map((entry, idx) => {
         if (entry.item_type === "separator") {
+          prevWasSectionHeader = false;
           return (
             <div
               key={`sep-${entry.id}-${idx}`}
@@ -83,10 +112,15 @@ function MenuList({
         }
 
         const prev = idx > 0 ? normalized[idx - 1] : null;
+        const next = idx + 1 < normalized.length ? normalized[idx + 1] : null;
         const isGroupStart = !prev || prev.item_type === "separator";
+        const hasNextInGroup = Boolean(next && next.item_type !== "separator");
 
         if (isPlainDisabled(entry)) {
-          if (isGroupStart) {
+          const isSectionHeader =
+            isGroupStart && hasNextInGroup && !endsWithEllipsis(entry.label);
+          if (isSectionHeader) {
+            prevWasSectionHeader = true;
             return (
               <div
                 key={entry.id}
@@ -97,24 +131,28 @@ function MenuList({
               </div>
             );
           }
-          return (
-            <div
-              key={entry.id}
-              className="tray-menu-status"
-              title={entry.accessible_desc || undefined}
-            >
-              {entry.label}
-            </div>
-          );
+
+          if (prevWasSectionHeader || normalized.length === 1) {
+            prevWasSectionHeader = false;
+            return (
+              <div
+                key={entry.id}
+                className="tray-menu-status"
+                title={entry.accessible_desc || undefined}
+              >
+                {entry.label}
+              </div>
+            );
+          }
         }
+
+        prevWasSectionHeader = false;
 
         const hasChildren = entry.children.length > 0;
         const isExpanded = expandedLabel === entry.label;
         const isCheckmark = entry.toggle_type === "checkmark";
         const isRadio = entry.toggle_type === "radio";
         const isChecked = entry.toggle_state === 1;
-        const isSymbolicIcon =
-          Boolean(entry.icon_name) && entry.icon_name.endsWith("-symbolic");
 
         return (
           <div key={entry.id} className="tray-menu-entry">
@@ -154,23 +192,13 @@ function MenuList({
                     aria-hidden="true"
                   />
                 )}
-                {entry.icon_url &&
-                  (isSymbolicIcon ? (
-                    <span
-                      className="tray-menu-icon is-symbolic"
-                      style={{
-                        ["--icon-src" as string]: `url("${entry.icon_url}")`,
-                      }}
-                      aria-hidden="true"
-                    />
-                  ) : (
-                    <img
-                      className="tray-menu-icon"
-                      src={entry.icon_url}
-                      alt=""
-                      aria-hidden="true"
-                    />
-                  ))}
+                {entry.icon_url && (
+                  <MenuIcon
+                    iconUrl={entry.icon_url}
+                    iconName={entry.icon_name}
+                    className="tray-menu-icon"
+                  />
+                )}
                 <span className="tray-menu-label">{entry.label}</span>
               </span>
 
@@ -211,11 +239,10 @@ function TrayMenu({
     <div className="tray-menu">
       <div className="tray-menu-header">
         {item.icon_url && (
-          <img
+          <MenuIcon
+            iconUrl={item.icon_url}
+            iconName={item.icon_name}
             className="tray-menu-header-icon"
-            src={item.icon_url}
-            alt=""
-            aria-hidden="true"
           />
         )}
         <span className="tray-menu-header-title">{label}</span>
@@ -261,7 +288,11 @@ function TrayButton({ item }: { item: TrayItem }) {
         }}
       >
         {item.icon_url ? (
-          <img className="tray-icon" src={item.icon_url} alt={label} />
+          <MenuIcon
+            iconUrl={item.icon_url}
+            iconName={item.icon_name}
+            className="tray-icon"
+          />
         ) : (
           trayShortLabel(item)
         )}

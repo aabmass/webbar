@@ -834,6 +834,18 @@ button:focus-visible {
     scale var(--dur-fast) var(--ease-out);
 }
 
+.tray-icon.is-symbolic {
+  background-color: var(--fg-color);
+  -webkit-mask-image: var(--icon-src);
+  mask-image: var(--icon-src);
+  -webkit-mask-size: contain;
+  mask-size: contain;
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+  -webkit-mask-position: center;
+  mask-position: center;
+}
+
 .tray-item:hover .tray-icon,
 .tray-item.is-open .tray-icon {
   opacity: 1;
@@ -842,8 +854,7 @@ button:focus-visible {
 .tray-menu {
   display: flex;
   flex-direction: column;
-  min-width: 264px;
-  max-width: 340px;
+  width: 304px;
   margin: -4px;
 }
 
@@ -861,6 +872,18 @@ button:focus-visible {
   height: 16px;
   object-fit: contain;
   flex: none;
+}
+
+.tray-menu-header-icon.is-symbolic {
+  background-color: var(--fg-color);
+  -webkit-mask-image: var(--icon-src);
+  mask-image: var(--icon-src);
+  -webkit-mask-size: contain;
+  mask-size: contain;
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+  -webkit-mask-position: center;
+  mask-position: center;
 }
 
 .tray-menu-header-title {
@@ -928,7 +951,7 @@ button:focus-visible {
   font-weight: 500;
   color: var(--fg-muted);
   opacity: 0.72;
-  padding: 2px 8px 4px;
+  padding: 4px 8px 6px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -939,14 +962,15 @@ button:focus-visible {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
+  gap: 10px;
   min-height: 30px;
-  padding: 5px 8px;
+  padding: 6px 8px;
   border-radius: var(--radius-sm);
   background: transparent;
   color: var(--fg-color);
   font-size: 13px;
   font-weight: 500;
+  line-height: 1.3;
   text-align: left;
 }
 
@@ -1014,9 +1038,9 @@ button:focus-visible {
 }
 
 .tray-menu-label {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  min-width: 0;
+  overflow-wrap: break-word;
+  white-space: normal;
 }
 
 .tray-menu-chevron {
@@ -1029,6 +1053,14 @@ button:focus-visible {
 
 .tray-menu-chevron.is-expanded {
   rotate: 90deg;
+  color: var(--accent-color);
+}
+
+.tray-menu-item:hover:not(.is-disabled) .tray-menu-chevron {
+  color: var(--fg-color);
+}
+
+.tray-menu-item.is-expanded .tray-menu-chevron {
   color: var(--accent-color);
 }
 
@@ -1094,8 +1126,8 @@ button:focus-visible {
 }
 
 .tray-menu-sub {
-  margin: 3px 0 4px 10px;
-  padding: 4px 4px 4px 8px;
+  margin: 2px 0 4px 8px;
+  padding: 3px 3px 3px 6px;
   border-left: 2px solid color-mix(in srgb, var(--accent-color) 35%, transparent);
   border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
   background: color-mix(in srgb, var(--surface-color) 55%, transparent);
