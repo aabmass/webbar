@@ -1,5 +1,7 @@
 import type { AudioDevice } from "./generated/AudioDevice";
+import type { AudioDeviceKind } from "./generated/AudioDeviceKind";
 import type { AudioState } from "./generated/AudioState";
+import type { AudioStream } from "./generated/AudioStream";
 import type { BacklightState } from "./generated/BacklightState";
 import type { BluetoothAdapter } from "./generated/BluetoothAdapter";
 import type { BluetoothDevice } from "./generated/BluetoothDevice";
@@ -31,7 +33,9 @@ export class SwayCommandError extends Error {
 
 export type {
   AudioDevice,
+  AudioDeviceKind,
   AudioState,
+  AudioStream,
   BacklightState,
   BluetoothAdapter,
   BluetoothDevice,
@@ -120,9 +124,19 @@ export type WebbarApi = {
     clearAll: () => void;
   };
   audio: Store<AudioState> & {
-    setVolume: (deviceId: number, volume: number) => Promise<void>;
-    setMuted: (deviceId: number, muted: boolean) => Promise<void>;
-    setDefault: (deviceId: number) => Promise<void>;
+    setVolume: (
+      deviceId: number,
+      volume: number,
+      kind?: AudioDeviceKind,
+    ) => Promise<void>;
+    setMuted: (
+      deviceId: number,
+      muted: boolean,
+      kind?: AudioDeviceKind,
+    ) => Promise<void>;
+    setDefault: (deviceId: number, kind?: AudioDeviceKind) => Promise<void>;
+    setStreamVolume: (streamId: number, volume: number) => Promise<void>;
+    setStreamMuted: (streamId: number, muted: boolean) => Promise<void>;
   };
   bluetooth: Store<BluetoothState> & {
     setPowered: (path: string, powered: boolean) => Promise<void>;
@@ -435,6 +449,7 @@ export function createWebbarBridge(
       available: false,
       outputs: [],
       inputs: [],
+      streams: [],
     }),
     bluetooth: createStore<BluetoothState>({
       available: false,
@@ -547,6 +562,7 @@ export function createWebbarBridge(
         available: Boolean(e.available),
         outputs: (e.outputs as AudioDevice[]) ?? [],
         inputs: (e.inputs as AudioDevice[]) ?? [],
+        streams: (e.streams as AudioStream[]) ?? [],
       }),
     bluetooth_state: (e) =>
       stores.bluetooth._update({
@@ -745,12 +761,27 @@ export function createWebbarBridge(
       clearAll: () => send({ type: "clear_notifications" }),
     }),
     audio: storeView(stores.audio, {
-      setVolume: (deviceId: number, volume: number) =>
-        rpc("audio_set_volume", { device_id: deviceId, volume }),
-      setMuted: (deviceId: number, muted: boolean) =>
-        rpc("audio_set_muted", { device_id: deviceId, muted }),
-      setDefault: (deviceId: number) =>
-        rpc("audio_set_default", { device_id: deviceId }),
+      setVolume: (deviceId: number, volume: number, kind?: AudioDeviceKind) =>
+        rpc("audio_set_volume", {
+          device_id: deviceId,
+          volume,
+          ...(kind ? { kind } : {}),
+        }),
+      setMuted: (deviceId: number, muted: boolean, kind?: AudioDeviceKind) =>
+        rpc("audio_set_muted", {
+          device_id: deviceId,
+          muted,
+          ...(kind ? { kind } : {}),
+        }),
+      setDefault: (deviceId: number, kind?: AudioDeviceKind) =>
+        rpc("audio_set_default", {
+          device_id: deviceId,
+          ...(kind ? { kind } : {}),
+        }),
+      setStreamVolume: (streamId: number, volume: number) =>
+        rpc("audio_set_stream_volume", { stream_id: streamId, volume }),
+      setStreamMuted: (streamId: number, muted: boolean) =>
+        rpc("audio_set_stream_muted", { stream_id: streamId, muted }),
     }),
     bluetooth: storeView(stores.bluetooth, {
       setPowered: (path: string, powered: boolean) =>

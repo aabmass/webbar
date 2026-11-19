@@ -259,19 +259,40 @@ impl HostServices {
                 id,
                 device_id,
                 volume,
+                kind,
             } => self
                 .audio
-                .set_volume(id, device_id, volume, reply_send.clone()),
+                .set_volume(id, device_id, volume, kind, reply_send.clone()),
             BridgeRequest::AudioSetMuted {
                 id,
                 device_id,
                 muted,
+                kind,
             } => self
                 .audio
-                .set_muted(id, device_id, muted, reply_send.clone()),
-            BridgeRequest::AudioSetDefault { id, device_id } => {
-                self.audio.set_default(id, device_id, reply_send.clone());
+                .set_muted(id, device_id, muted, kind, reply_send.clone()),
+            BridgeRequest::AudioSetDefault {
+                id,
+                device_id,
+                kind,
+            } => {
+                self.audio
+                    .set_default(id, device_id, kind, reply_send.clone());
             }
+            BridgeRequest::AudioSetStreamVolume {
+                id,
+                stream_id,
+                volume,
+            } => self
+                .audio
+                .set_stream_volume(id, stream_id, volume, reply_send.clone()),
+            BridgeRequest::AudioSetStreamMuted {
+                id,
+                stream_id,
+                muted,
+            } => self
+                .audio
+                .set_stream_muted(id, stream_id, muted, reply_send.clone()),
             BridgeRequest::BluetoothSetPowered { id, path, powered } => {
                 self.bluetooth
                     .set_powered(id, path, powered, reply_send.clone());

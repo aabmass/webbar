@@ -208,7 +208,8 @@
       audio: createStore({
         available: false,
         outputs: [],
-        inputs: []
+        inputs: [],
+        streams: []
       }),
       bluetooth: createStore({
         available: false,
@@ -302,7 +303,8 @@
       audio_state: (e) => stores.audio._update({
         available: Boolean(e.available),
         outputs: e.outputs ?? [],
-        inputs: e.inputs ?? []
+        inputs: e.inputs ?? [],
+        streams: e.streams ?? []
       }),
       bluetooth_state: (e) => stores.bluetooth._update({
         available: Boolean(e.available),
@@ -491,9 +493,22 @@
         clearAll: () => send({ type: "clear_notifications" })
       }),
       audio: storeView(stores.audio, {
-        setVolume: (deviceId, volume) => rpc("audio_set_volume", { device_id: deviceId, volume }),
-        setMuted: (deviceId, muted) => rpc("audio_set_muted", { device_id: deviceId, muted }),
-        setDefault: (deviceId) => rpc("audio_set_default", { device_id: deviceId })
+        setVolume: (deviceId, volume, kind) => rpc("audio_set_volume", {
+          device_id: deviceId,
+          volume,
+          ...kind ? { kind } : {}
+        }),
+        setMuted: (deviceId, muted, kind) => rpc("audio_set_muted", {
+          device_id: deviceId,
+          muted,
+          ...kind ? { kind } : {}
+        }),
+        setDefault: (deviceId, kind) => rpc("audio_set_default", {
+          device_id: deviceId,
+          ...kind ? { kind } : {}
+        }),
+        setStreamVolume: (streamId, volume) => rpc("audio_set_stream_volume", { stream_id: streamId, volume }),
+        setStreamMuted: (streamId, muted) => rpc("audio_set_stream_muted", { stream_id: streamId, muted })
       }),
       bluetooth: storeView(stores.bluetooth, {
         setPowered: (path, powered) => rpc("bluetooth_set_powered", { path, powered }),

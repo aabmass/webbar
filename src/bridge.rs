@@ -39,6 +39,7 @@ pub struct AudioState {
     pub available: bool,
     pub outputs: Vec<crate::audio::AudioDevice>,
     pub inputs: Vec<crate::audio::AudioDevice>,
+    pub streams: Vec<crate::audio::AudioStream>,
 }
 
 #[cfg(test)]
@@ -121,15 +122,31 @@ pub enum BridgeRequest {
         id: u32,
         device_id: u32,
         volume: f64,
+        #[serde(default)]
+        kind: Option<crate::audio::AudioDeviceKind>,
     },
     AudioSetMuted {
         id: u32,
         device_id: u32,
         muted: bool,
+        #[serde(default)]
+        kind: Option<crate::audio::AudioDeviceKind>,
     },
     AudioSetDefault {
         id: u32,
         device_id: u32,
+        #[serde(default)]
+        kind: Option<crate::audio::AudioDeviceKind>,
+    },
+    AudioSetStreamVolume {
+        id: u32,
+        stream_id: u32,
+        volume: f64,
+    },
+    AudioSetStreamMuted {
+        id: u32,
+        stream_id: u32,
+        muted: bool,
     },
     BluetoothSetPowered {
         id: u32,
@@ -237,6 +254,7 @@ pub enum BridgeEvent {
         available: bool,
         outputs: Vec<crate::audio::AudioDevice>,
         inputs: Vec<crate::audio::AudioDevice>,
+        streams: Vec<crate::audio::AudioStream>,
     },
     BluetoothState {
         available: bool,
@@ -398,10 +416,12 @@ mod tests {
                 id,
                 device_id,
                 volume,
+                kind,
             } => {
                 assert_eq!(id, 42);
                 assert_eq!(device_id, 7);
                 assert!((volume - 0.75).abs() < f64::EPSILON);
+                assert_eq!(kind, None);
             }
             other => panic!("unexpected variant: {other:?}"),
         }

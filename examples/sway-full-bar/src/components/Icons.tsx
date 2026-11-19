@@ -101,3 +101,43 @@ export function IdleIcon({ inhibited }: { inhibited: boolean }) {
     </svg>
   );
 }
+
+export function MicIcon({ muted }: { muted: boolean }) {
+  return (
+    <svg
+      width="16"
+      height="16"
+      viewBox="0 0 16 16"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.5"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <rect x="5.5" y="2" width="5" height="7.5" rx="2.5" />
+      <path d="M3.5 7.5a4.5 4.5 0 0 0 9 0M8 12v2.2M5.5 14.2h5" />
+      {muted && <path d="M2.5 13.5l11-11" strokeWidth="1.6" />}
+    </svg>
+  );
+}
+
+export function MixerIcon() {
+  return (
+    <svg
+      width="14"
+      height="14"
+      viewBox="0 0 16 16"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.5"
+      strokeLinecap="round"
+      aria-hidden="true"
+    >
+      <path d="M3 4h10M3 8h10M3 12h10" />
+      <circle cx="5.5" cy="4" r="1.5" fill="currentColor" />
+      <circle cx="10.5" cy="8" r="1.5" fill="currentColor" />
+      <circle cx="7" cy="12" r="1.5" fill="currentColor" />
+    </svg>
+  );
+}
