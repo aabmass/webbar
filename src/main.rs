@@ -181,6 +181,8 @@ impl HostServices {
             notifications::spawn_server(notifications.clone());
             inhibit::spawn_server();
             tray::spawn_server(send_event.clone());
+        } else {
+            tray::spawn_observer(send_event.clone());
         }
         sway_ipc::spawn(send_event.clone());
         let audio = audio::spawn(send_event.clone());
@@ -388,6 +390,7 @@ fn main() {
     };
 
     if config.source.is_none() {
+        let _ = gtk4::init();
         let _ = start_ws_bridge(&config, false);
         let main_loop = glib::MainLoop::new(None, false);
         main_loop.run();

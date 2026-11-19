@@ -59,6 +59,9 @@ function entry(label: string, extra: Partial<TrayMenuItem> = {}): TrayMenuItem {
     item_type: "standard",
     toggle_type: "",
     toggle_state: 0,
+    icon_name: "",
+    icon_url: "",
+    accessible_desc: "",
     children: [],
     ...extra,
   };

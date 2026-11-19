@@ -50,6 +50,9 @@ pub struct TrayMenuItem {
     pub item_type: String,
     pub toggle_type: String,
     pub toggle_state: i32,
+    pub icon_name: String,
+    pub icon_url: String,
+    pub accessible_desc: String,
     pub children: Vec<TrayMenuItem>,
 }
 
@@ -264,12 +267,23 @@ fn fetch_item_properties(bus: &str, path: &str) -> (String, String, String, Stri
         .get("Id")
         .and_then(|v| String::try_from(v.clone()).ok())
         .unwrap_or_default();
+    let tooltip_title = props
+        .get("ToolTip")
+        .and_then(|v| {
+            <(String, Vec<(i32, i32, Vec<u8>)>, String, String)>::try_from(v.clone()).ok()
+        })
+        .map(|(_, _, t, _)| t)
+        .unwrap_or_default();
     let mut title = props
         .get("Title")
         .and_then(|v| String::try_from(v.clone()).ok())
         .unwrap_or_default();
     if title.is_empty() {
-        title = id;
+        title = if !tooltip_title.is_empty() {
+            tooltip_title
+        } else {
+            id
+        };
     }
     let icon_name = props
         .get("IconName")
@@ -359,6 +373,9 @@ fn file_to_data_url(path: &Path) -> Option<String> {
 }
 
 fn lookup_theme_icon_data_url(icon_name: &str, icon_theme_path: &str) -> Option<String> {
+    if !gtk4::is_initialized() {
+        return None;
+    }
     let (tx, rx) = mpsc::sync_channel(1);
     let name = icon_name.to_string();
     let theme_path = icon_theme_path.to_string();
@@ -544,6 +561,174 @@ pub fn spawn_server(send: SendEvent) {
     });
 }
 
+fn split_registered_service(service: &str) -> (String, String) {
+    if let Some((bus, rest)) = service.split_once('/') {
+        (bus.to_string(), format!("/{rest}"))
+    } else {
+        (service.to_string(), "/StatusNotifierItem".to_string())
+    }
+}
+
+fn resolve_unique_bus(conn: &Connection, bus: &str) -> String {
+    if bus.starts_with(':') {
+        return bus.to_string();
+    }
+    conn.call_method(
+        Some("org.freedesktop.DBus"),
+        "/org/freedesktop/DBus",
+        Some("org.freedesktop.DBus"),
+        "GetNameOwner",
+        &(bus,),
+    )
+    .ok()
+    .and_then(|msg| msg.body().deserialize::<String>().ok())
+    .unwrap_or_default()
+}
+
+fn spawn_observed_item_fetch(store: TrayStore, service: String) {
+    let (bus, path) = split_registered_service(&service);
+    if bus.is_empty() {
+        return;
+    }
+    thread::spawn(move || {
+        let unique_bus = Connection::session()
+            .ok()
+            .map(|c| resolve_unique_bus(&c, &bus))
+            .unwrap_or_default();
+        let (title, icon_name, icon_url, menu_path) = fetch_item_properties(&bus, &path);
+        store.upsert(
+            TrayItem {
+                bus,
+                path,
+                title,
+                icon_name,
+                icon_url,
+                menu_path,
+            },
+            unique_bus,
+        );
+    });
+}
+
+/// Observe an existing `org.kde.StatusNotifierWatcher` on the session bus
+/// without claiming the well-known name. Used in headless `--ws-bridge` mode
+/// so browser dev previews receive live tray items alongside a running bar.
+pub fn spawn_observer(send: SendEvent) {
+    thread::spawn(move || {
+        let store = TrayStore::new(send);
+        let Ok(conn) = Connection::session() else {
+            return;
+        };
+
+        if let Ok(reply) = conn.call_method(
+            Some("org.kde.StatusNotifierWatcher"),
+            "/StatusNotifierWatcher",
+            Some("org.freedesktop.DBus.Properties"),
+            "Get",
+            &(
+                "org.kde.StatusNotifierWatcher",
+                "RegisteredStatusNotifierItems",
+            ),
+        ) {
+            if let Ok(val) = reply.body().deserialize::<OwnedValue>() {
+                if let Ok(items) = Vec::<String>::try_from(val) {
+                    for service in items {
+                        spawn_observed_item_fetch(store.clone(), service);
+                    }
+                }
+            }
+        }
+
+        let watcher_rule = MatchRule::builder()
+            .msg_type(zbus::message::Type::Signal)
+            .interface("org.kde.StatusNotifierWatcher")
+            .map(|b| b.build())
+            .ok();
+
+        let name_owner_rule = MatchRule::builder()
+            .msg_type(zbus::message::Type::Signal)
+            .sender("org.freedesktop.DBus")
+            .and_then(|b| b.path("/org/freedesktop/DBus"))
+            .and_then(|b| b.interface("org.freedesktop.DBus"))
+            .and_then(|b| b.member("NameOwnerChanged"))
+            .map(|b| b.build())
+            .ok();
+
+        let sni_rule = MatchRule::builder()
+            .msg_type(zbus::message::Type::Signal)
+            .interface("org.kde.StatusNotifierItem")
+            .map(|b| b.build())
+            .ok();
+
+        let props_rule = MatchRule::builder()
+            .msg_type(zbus::message::Type::Signal)
+            .interface("org.freedesktop.DBus.Properties")
+            .and_then(|b| b.member("PropertiesChanged"))
+            .and_then(|b| b.arg(0, "org.kde.StatusNotifierItem"))
+            .map(|b| b.build())
+            .ok();
+
+        async_io::block_on(async {
+            let mut streams = Vec::new();
+            for rule in [watcher_rule, name_owner_rule, sni_rule, props_rule]
+                .into_iter()
+                .flatten()
+            {
+                if let Ok(stream) =
+                    MessageStream::for_match_rule(rule, conn.inner(), Some(64)).await
+                {
+                    streams.push(stream);
+                }
+            }
+            if streams.is_empty() {
+                return;
+            }
+            let mut combined = futures_util::stream::select_all(streams);
+
+            while let Some(Ok(msg)) = combined.next().await {
+                let header = msg.header();
+                let iface = header.interface().map(|i| i.as_str());
+                let member = header.member().map(|m| m.as_str());
+
+                if iface == Some("org.kde.StatusNotifierWatcher") {
+                    if member == Some("StatusNotifierItemRegistered") {
+                        if let Ok(service) = msg.body().deserialize::<String>() {
+                            spawn_observed_item_fetch(store.clone(), service);
+                        }
+                    } else if member == Some("StatusNotifierItemUnregistered") {
+                        if let Ok(service) = msg.body().deserialize::<String>() {
+                            let (bus, _path) = split_registered_service(&service);
+                            store.remove_by_bus(&bus);
+                        }
+                    }
+                    continue;
+                }
+
+                if iface == Some("org.freedesktop.DBus") && member == Some("NameOwnerChanged") {
+                    if let Ok((name, _old_owner, new_owner)) =
+                        msg.body().deserialize::<(String, String, String)>()
+                    {
+                        handle_name_owner_changed(&store, &name, &new_owner);
+                    }
+                    continue;
+                }
+
+                if should_refresh_sni_signal(&msg) {
+                    let Some(sender) = header.sender().map(|s| s.as_str()) else {
+                        continue;
+                    };
+                    let Some(path) = header.path().map(|p| p.as_str()) else {
+                        continue;
+                    };
+                    if let Some((bus, item_path)) = store.find_target(sender, path) {
+                        spawn_item_refresh(store.clone(), bus, item_path);
+                    }
+                }
+            }
+        });
+    });
+}
+
 pub fn activate(bus: String, path: String) {
     thread::spawn(move || {
         let conn = match Connection::session() {
@@ -600,6 +785,25 @@ fn parse_menu_node(node: RawMenuNode) -> TrayMenuItem {
         .get("toggle-state")
         .and_then(|v| i32::try_from(v.clone()).ok())
         .unwrap_or(-1);
+    let icon_name = props
+        .get("icon-name")
+        .and_then(|v| String::try_from(v.clone()).ok())
+        .unwrap_or_default();
+    let icon_data = props
+        .get("icon-data")
+        .and_then(|v| Vec::<u8>::try_from(v.clone()).ok())
+        .unwrap_or_default();
+    let icon_url = if !icon_data.is_empty() {
+        format!("data:image/png;base64,{}", BASE64.encode(&icon_data))
+    } else if !icon_name.is_empty() {
+        resolve_icon_url(&icon_name, "", Vec::new())
+    } else {
+        String::new()
+    };
+    let accessible_desc = props
+        .get("accessible-desc")
+        .and_then(|v| String::try_from(v.clone()).ok())
+        .unwrap_or_default();
 
     let children = raw_children
         .into_iter()
@@ -616,6 +820,9 @@ fn parse_menu_node(node: RawMenuNode) -> TrayMenuItem {
         item_type,
         toggle_type,
         toggle_state,
+        icon_name,
+        icon_url,
+        accessible_desc,
         children,
     }
 }
@@ -1117,5 +1324,54 @@ mod tests {
 
         // Extra unwatch is a safe no-op.
         watcher.unwatch(&key.0, &key.1);
+    }
+
+    #[test]
+    fn parses_menu_icon_data_icon_name_and_accessible_desc() {
+        let mut props = HashMap::new();
+        props.insert("label".to_string(), OwnedValue::from(zbus::zvariant::Str::from("MyWiFi")));
+        props.insert(
+            "icon-data".to_string(),
+            OwnedValue::try_from(Value::from(vec![137u8, 80, 78, 71])).unwrap(),
+        );
+        props.insert(
+            "icon-name".to_string(),
+            OwnedValue::from(zbus::zvariant::Str::from("network-wireless-symbolic")),
+        );
+        props.insert(
+            "accessible-desc".to_string(),
+            OwnedValue::from(zbus::zvariant::Str::from("MyWiFi: 80%, secure.")),
+        );
+
+        let item = parse_menu_node((7, props, Vec::new()));
+        assert_eq!(item.label, "MyWiFi");
+        assert_eq!(item.icon_name, "network-wireless-symbolic");
+        assert_eq!(item.icon_url, "data:image/png;base64,iVBORw==");
+        assert_eq!(item.accessible_desc, "MyWiFi: 80%, secure.");
+    }
+
+    #[test]
+    fn splits_registered_status_notifier_service_strings() {
+        assert_eq!(
+            split_registered_service(":1.7/org/ayatana/NotificationItem/nm_applet"),
+            (
+                ":1.7".to_string(),
+                "/org/ayatana/NotificationItem/nm_applet".to_string()
+            )
+        );
+        assert_eq!(
+            split_registered_service("org.kde.StatusNotifierItem-100-1/StatusNotifierItem"),
+            (
+                "org.kde.StatusNotifierItem-100-1".to_string(),
+                "/StatusNotifierItem".to_string()
+            )
+        );
+        assert_eq!(
+            split_registered_service("org.kde.StatusNotifierItem-100-1"),
+            (
+                "org.kde.StatusNotifierItem-100-1".to_string(),
+                "/StatusNotifierItem".to_string()
+            )
+        );
     }
 }

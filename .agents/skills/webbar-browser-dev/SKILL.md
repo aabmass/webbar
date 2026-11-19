@@ -7,7 +7,7 @@ description: Use when a coding agent or developer needs to preview and inspect t
 
 Use this workflow to visually inspect `examples/sway-full-bar` in a browser (with real `sway`, `stasis`, `audio`, `bluetooth`, and `backlight` data) without replacing the user's running desktop bar. In Antigravity, pair this with the `browser` subagent (`/browser`).
 
-> Note: Headless `--ws-bridge` mode does not claim `org.kde.StatusNotifierWatcher` or `org.freedesktop.Notifications` on D-Bus, so `tray` and `notifications` remain empty when running alongside your live bar.
+> Note: Headless `--ws-bridge` mode does not claim `org.kde.StatusNotifierWatcher` or `org.freedesktop.Notifications` on D-Bus, so `tray` and `notifications` remain empty when running alongside your live bar. Append `&mockTray` to the dev URL to populate mock tray items/menus (`examples/sway-full-bar/src/devMocks.ts`) when inspecting tray styling or popovers.
 
 ## 1. Start the Dev Stack
 
