@@ -74,6 +74,7 @@ export type DbusWatchOptions = {
   path?: string;
   interface?: string;
   member?: string;
+  onClose?: (error?: Error) => void;
   signal?: AbortSignal;
 };
 
@@ -156,8 +157,14 @@ function idOf(item: unknown): Id | undefined {
   if (item === null || typeof item !== "object" || Array.isArray(item)) {
     return undefined;
   }
-  const id = (item as { id?: unknown }).id;
-  return typeof id === "number" || typeof id === "string" ? id : undefined;
+  const obj = item as { id?: unknown; bus?: unknown; path?: unknown };
+  if (typeof obj.id === "number" || typeof obj.id === "string") {
+    return obj.id;
+  }
+  if (typeof obj.path === "string") {
+    return typeof obj.bus === "string" ? `${obj.bus}${obj.path}` : obj.path;
+  }
+  return undefined;
 }
 
 /** Map of id -> item if every item is an object with a unique id, else null. */
@@ -311,6 +318,8 @@ export function createWebbarBridge(
   api: WebbarApi;
   receive: (event: Record<string, unknown>) => void;
   notifyOverlayChange: () => void;
+  onConnect: () => void;
+  onDisconnect: () => void;
 } {
   let nextId = 1;
   let explicitOverlayCount = 0;
@@ -331,6 +340,7 @@ export function createWebbarBridge(
       resolveStart?: (val: { stop: () => void }) => void;
       rejectStart?: (err: Error) => void;
       onSignal: (sig: DbusSignalEvent) => void;
+      onClose?: (error?: Error) => void;
       cleanup?: () => void;
     }
   >();
@@ -520,8 +530,12 @@ export function createWebbarBridge(
           );
           return;
         }
-        watch.resolveStart?.({
+        const resolveStart = watch.resolveStart;
+        watch.resolveStart = undefined;
+        watch.rejectStart = undefined;
+        resolveStart?.({
           stop: () => {
+            if (!dbusWatches.has(id)) return;
             watch.cleanup?.();
             dbusWatches.delete(id);
             send({ type: "dbus_unwatch", id });
@@ -545,8 +559,17 @@ export function createWebbarBridge(
       case "dbus_match_ended": {
         const id = event.id as number;
         const watch = dbusWatches.get(id);
-        watch?.cleanup?.();
+        if (!watch) break;
+        watch.cleanup?.();
         dbusWatches.delete(id);
+        const errMsg = typeof event.error === "string" ? event.error : undefined;
+        if (watch.rejectStart) {
+          watch.rejectStart(
+            new Error(errMsg ?? "D-Bus match ended before starting"),
+          );
+        } else {
+          watch.onClose?.(errMsg ? new Error(errMsg) : undefined);
+        }
         break;
       }
       case "process_stream_started": {
@@ -708,6 +731,7 @@ export function createWebbarBridge(
             resolveStart: resolve,
             rejectStart: reject,
             onSignal,
+            onClose: opts.onClose,
             cleanup,
           });
           send({
@@ -772,7 +796,50 @@ export function createWebbarBridge(
     },
   };
 
-  return { api, receive, notifyOverlayChange: syncOverlay };
+  function onDisconnect(): void {
+    const disconnectErr = () => new Error("Webbar bridge disconnected");
+    for (const entry of pending.values()) {
+      entry.cleanup?.();
+      entry.reject(disconnectErr());
+    }
+    pending.clear();
+
+    for (const watch of dbusWatches.values()) {
+      watch.cleanup?.();
+      if (watch.rejectStart) {
+        watch.rejectStart(disconnectErr());
+      } else {
+        watch.onClose?.(disconnectErr());
+      }
+    }
+    dbusWatches.clear();
+
+    for (const stream of processStreams.values()) {
+      stream.cleanup?.();
+      if (stream.rejectStart) {
+        stream.rejectStart(disconnectErr());
+      } else {
+        stream.onExit?.({ code: null, signal: null });
+      }
+    }
+    processStreams.clear();
+  }
+
+  // Always send the current overlay state: the server may still hold a stale
+  // value from before the disconnect (or from a previous page load).
+  function onConnect(): void {
+    deactivateScheduled = false;
+    sentOverlayActive = computeOverlayActive();
+    send({ type: "set_overlay", active: sentOverlayActive });
+  }
+
+  return {
+    api,
+    receive,
+    notifyOverlayChange: syncOverlay,
+    onConnect,
+    onDisconnect,
+  };
 }
 
 declare global {

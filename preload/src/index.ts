@@ -18,7 +18,8 @@ if (!window.webbar) {
   let ws: WebSocket | null = null;
   let delay = 500;
 
-  const { api, receive, notifyOverlayChange } = createWebbarBridge(
+  const { api, receive, notifyOverlayChange, onConnect, onDisconnect } =
+    createWebbarBridge(
     (json) => {
       if (ws?.readyState === WebSocket.OPEN) {
         ws.send(json);
@@ -53,6 +54,7 @@ if (!window.webbar) {
       while (pending.length > 0 && socket.readyState === WebSocket.OPEN) {
         socket.send(pending.shift()!);
       }
+      onConnect();
     });
     socket.addEventListener("message", (ev) => {
       if (typeof ev.data === "string") {
@@ -62,6 +64,7 @@ if (!window.webbar) {
     socket.addEventListener("close", () => {
       if (ws === socket) ws = null;
       pending.length = 0;
+      onDisconnect();
       window.setTimeout(connect, delay);
       delay = Math.min(delay * 2, 5000);
     });

@@ -10,10 +10,37 @@ use futures_util::select;
 use futures_util::stream::StreamExt;
 use zbus::blocking::Connection as BlockingConnection;
 use zbus::zvariant::{Signature, Structure, StructureBuilder};
-use zbus::{Connection as AsyncConnection, MessageStream};
+use zbus::{Connection as AsyncConnection, MatchRule, MessageStream};
 
 use crate::bridge::{reply_data, reply_err, BridgeEvent, Bus, SendEvent};
 use crate::dbus_json;
+
+#[derive(Debug, Default, Clone)]
+pub struct MatchCriteria {
+    pub sender: Option<String>,
+    pub path: Option<String>,
+    pub interface: Option<String>,
+    pub member: Option<String>,
+}
+
+/// Build a signal match rule with zbus's validating builder, so client-supplied
+/// values cannot inject extra match terms.
+pub fn build_match_rule(criteria: &MatchCriteria) -> Result<MatchRule<'static>, String> {
+    let mut builder = MatchRule::builder().msg_type(zbus::message::Type::Signal);
+    if let Some(sender) = criteria.sender.as_deref() {
+        builder = builder.sender(sender).map_err(|e| e.to_string())?;
+    }
+    if let Some(path) = criteria.path.as_deref() {
+        builder = builder.path(path).map_err(|e| e.to_string())?;
+    }
+    if let Some(iface) = criteria.interface.as_deref() {
+        builder = builder.interface(iface).map_err(|e| e.to_string())?;
+    }
+    if let Some(member) = criteria.member.as_deref() {
+        builder = builder.member(member).map_err(|e| e.to_string())?;
+    }
+    Ok(builder.build().into_owned())
+}
 
 #[derive(Default)]
 struct MatchState {
@@ -92,35 +119,28 @@ impl DbusBridge {
         });
     }
 
-    pub fn match_signals(
-        &self,
-        id: u32,
-        bus: Bus,
-        sender: Option<String>,
-        path: Option<String>,
-        interface: Option<String>,
-        member: Option<String>,
-    ) {
+    pub fn match_signals(&self, id: u32, bus: Bus, criteria: MatchCriteria) {
         if self.matches.lock().unwrap().closed {
             return;
         }
+        let rule = match build_match_rule(&criteria) {
+            Ok(r) => r,
+            Err(err) => {
+                (self.send)(BridgeEvent::DbusMatchStarted {
+                    id,
+                    ok: false,
+                    error: Some(err),
+                });
+                return;
+            }
+        };
         let matches = self.matches.clone();
         let send = self.send.clone();
         thread::spawn(move || {
-            let rule = [
-                ("sender", sender),
-                ("path", path),
-                ("interface", interface),
-                ("member", member),
-            ]
-            .into_iter()
-            .filter_map(|(field, value)| value.map(|v| format!(",{field}='{v}'")))
-            .fold("type='signal'".to_string(), |acc, field| acc + &field);
-
             async_io::block_on(async move {
                 let setup = async {
                     let conn = connect_async(bus).await.map_err(|e| e.to_string())?;
-                    let signals = MessageStream::for_match_rule(rule.as_str(), &conn, None)
+                    let signals = MessageStream::for_match_rule(rule, &conn, None)
                         .await
                         .map_err(|e| e.to_string())?;
                     Ok::<_, String>((conn, signals))
@@ -272,4 +292,72 @@ fn body_of(message: &zbus::Message) -> zbus::Result<(String, serde_json::Value)>
         _ => body.deserialize::<Structure>()?.into_fields(),
     };
     Ok((signature.to_string_no_parens(), dbus_json::written_value(&values)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn builds_match_rule_with_all_fields() {
+        let rule = build_match_rule(&MatchCriteria {
+            sender: Some("org.freedesktop.login1".into()),
+            path: Some("/org/freedesktop/login1".into()),
+            interface: Some("org.freedesktop.DBus.Properties".into()),
+            member: Some("PropertiesChanged".into()),
+        })
+        .expect("valid match rule");
+
+        let s = rule.to_string();
+        assert!(s.contains("type='signal'"));
+        assert!(s.contains("sender='org.freedesktop.login1'"));
+        assert!(s.contains("path='/org/freedesktop/login1'"));
+        assert!(s.contains("interface='org.freedesktop.DBus.Properties'"));
+        assert!(s.contains("member='PropertiesChanged'"));
+    }
+
+    #[test]
+    fn rejects_invalid_match_criteria_and_emits_error() {
+        // Invalid object path
+        assert!(build_match_rule(&MatchCriteria {
+            path: Some("not_a_path".into()),
+            ..Default::default()
+        })
+        .is_err());
+
+        // Quote injection rejected
+        assert!(build_match_rule(&MatchCriteria {
+            sender: Some("org.foo',eavesdrop='true".into()),
+            ..Default::default()
+        })
+        .is_err());
+        assert!(build_match_rule(&MatchCriteria {
+            member: Some("Sig',eavesdrop='true".into()),
+            ..Default::default()
+        })
+        .is_err());
+
+        // match_signals emits DbusMatchStarted(ok: false) immediately on invalid criteria
+        let sent = Arc::new(Mutex::new(Vec::new()));
+        let sink = sent.clone();
+        let bridge = DbusBridge::new(Arc::new(move |ev| sink.lock().unwrap().push(ev)));
+        bridge.match_signals(
+            7,
+            Bus::Session,
+            MatchCriteria {
+                path: Some("not_a_path".into()),
+                ..Default::default()
+            },
+        );
+        let events = sent.lock().unwrap();
+        assert_eq!(events.len(), 1);
+        assert!(matches!(
+            &events[0],
+            BridgeEvent::DbusMatchStarted {
+                id: 7,
+                ok: false,
+                error: Some(_),
+            }
+        ));
+    }
 }

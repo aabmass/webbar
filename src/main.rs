@@ -221,7 +221,16 @@ impl HostServices {
                 path,
                 interface,
                 member,
-            } => dbus.match_signals(id, bus, sender, path, interface, member),
+            } => dbus.match_signals(
+                id,
+                bus,
+                crate::dbus_bridge::MatchCriteria {
+                    sender,
+                    path,
+                    interface,
+                    member,
+                },
+            ),
             BridgeRequest::DbusUnwatch { id } => dbus.unwatch(id),
             BridgeRequest::DismissNotification { id } => {
                 self.notifications.dismiss(id);

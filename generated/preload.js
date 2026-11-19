@@ -13,8 +13,14 @@
     if (item === null || typeof item !== "object" || Array.isArray(item)) {
       return void 0;
     }
-    const id = item.id;
-    return typeof id === "number" || typeof id === "string" ? id : void 0;
+    const obj = item;
+    if (typeof obj.id === "number" || typeof obj.id === "string") {
+      return obj.id;
+    }
+    if (typeof obj.path === "string") {
+      return typeof obj.bus === "string" ? `${obj.bus}${obj.path}` : obj.path;
+    }
+    return void 0;
   }
   function indexById(items) {
     if (items.length === 0) return null;
@@ -288,8 +294,12 @@
             );
             return;
           }
-          watch.resolveStart?.({
+          const resolveStart = watch.resolveStart;
+          watch.resolveStart = void 0;
+          watch.rejectStart = void 0;
+          resolveStart?.({
             stop: () => {
+              if (!dbusWatches.has(id)) return;
               watch.cleanup?.();
               dbusWatches.delete(id);
               send({ type: "dbus_unwatch", id });
@@ -313,8 +323,17 @@
         case "dbus_match_ended": {
           const id = event.id;
           const watch = dbusWatches.get(id);
-          watch?.cleanup?.();
+          if (!watch) break;
+          watch.cleanup?.();
           dbusWatches.delete(id);
+          const errMsg = typeof event.error === "string" ? event.error : void 0;
+          if (watch.rejectStart) {
+            watch.rejectStart(
+              new Error(errMsg ?? "D-Bus match ended before starting")
+            );
+          } else {
+            watch.onClose?.(errMsg ? new Error(errMsg) : void 0);
+          }
           break;
         }
         case "process_stream_started": {
@@ -464,6 +483,7 @@
               resolveStart: resolve,
               rejectStart: reject,
               onSignal,
+              onClose: opts.onClose,
               cleanup
             });
             send({
@@ -524,7 +544,44 @@
         });
       }
     };
-    return { api, receive, notifyOverlayChange: syncOverlay };
+    function onDisconnect() {
+      const disconnectErr = () => new Error("Webbar bridge disconnected");
+      for (const entry of pending.values()) {
+        entry.cleanup?.();
+        entry.reject(disconnectErr());
+      }
+      pending.clear();
+      for (const watch of dbusWatches.values()) {
+        watch.cleanup?.();
+        if (watch.rejectStart) {
+          watch.rejectStart(disconnectErr());
+        } else {
+          watch.onClose?.(disconnectErr());
+        }
+      }
+      dbusWatches.clear();
+      for (const stream of processStreams.values()) {
+        stream.cleanup?.();
+        if (stream.rejectStart) {
+          stream.rejectStart(disconnectErr());
+        } else {
+          stream.onExit?.({ code: null, signal: null });
+        }
+      }
+      processStreams.clear();
+    }
+    function onConnect() {
+      deactivateScheduled = false;
+      sentOverlayActive = computeOverlayActive();
+      send({ type: "set_overlay", active: sentOverlayActive });
+    }
+    return {
+      api,
+      receive,
+      notifyOverlayChange: syncOverlay,
+      onConnect,
+      onDisconnect
+    };
   }
 
   // src/index.ts
@@ -541,7 +598,7 @@
     const pending = [];
     let ws = null;
     let delay = 500;
-    const { api, receive, notifyOverlayChange } = createWebbarBridge(
+    const { api, receive, notifyOverlayChange, onConnect, onDisconnect } = createWebbarBridge(
       (json) => {
         if (ws?.readyState === WebSocket.OPEN) {
           ws.send(json);
@@ -574,6 +631,7 @@
         while (pending.length > 0 && socket.readyState === WebSocket.OPEN) {
           socket.send(pending.shift());
         }
+        onConnect();
       });
       socket.addEventListener("message", (ev) => {
         if (typeof ev.data === "string") {
@@ -583,6 +641,7 @@
       socket.addEventListener("close", () => {
         if (ws === socket) ws = null;
         pending.length = 0;
+        onDisconnect();
         window.setTimeout(connect, delay);
         delay = Math.min(delay * 2, 5e3);
       });

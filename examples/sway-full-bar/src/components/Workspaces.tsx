@@ -27,6 +27,23 @@ function countWorkspaceWindows(tree: SwayNode): Map<string, number> {
   return counts;
 }
 
+let prevTree: SwayNode | null = null;
+let prevCounts = new Map<string, number>();
+
+function getWindowCounts(): Map<string, number> {
+  const tree = window.webbar.sway.get().tree;
+  if (tree === prevTree) return prevCounts;
+  prevTree = tree;
+  const next = tree ? countWorkspaceWindows(tree) : new Map<string, number>();
+  if (
+    next.size !== prevCounts.size ||
+    [...next].some(([k, v]) => prevCounts.get(k) !== v)
+  ) {
+    prevCounts = next;
+  }
+  return prevCounts;
+}
+
 type WorkspaceSlot = {
   row: 1 | 2;
   col: number;
@@ -69,20 +86,14 @@ type WorkspaceItem = {
 };
 
 export function Workspaces() {
-  const swayState = useSyncExternalStore(
-    window.webbar.sway.subscribe,
-    window.webbar.sway.get,
-  );
-
-  const windowCounts = useMemo(
-    () =>
-      swayState.tree ? countWorkspaceWindows(swayState.tree) : new Map<string, number>(),
-    [swayState.tree],
-  );
+  const { subscribe, get } = window.webbar.sway;
+  const workspaces = useSyncExternalStore(subscribe, () => get().workspaces);
+  const mode = useSyncExternalStore(subscribe, () => get().mode);
+  const windowCounts = useSyncExternalStore(subscribe, getWindowCounts);
 
   const items = useMemo<WorkspaceItem[]>(() => {
     const byName = new Map<string, SwayWorkspace>();
-    for (const ws of swayState.workspaces) {
+    for (const ws of workspaces) {
       byName.set(ws.name, ws);
     }
 
@@ -118,7 +129,7 @@ export function Workspaces() {
 
     // Any extra workspaces not in WORKSPACE_CONFIG get appended on row 1
     let extraCol = 11;
-    for (const ws of swayState.workspaces) {
+    for (const ws of workspaces) {
       if (!WORKSPACE_CONFIG[ws.name]) {
         result.push({
           name: ws.name,
@@ -135,7 +146,7 @@ export function Workspaces() {
     }
 
     return result;
-  }, [swayState.workspaces, windowCounts]);
+  }, [workspaces, windowCounts]);
 
   return (
     <div className="workspaces-wrap">
@@ -177,9 +188,9 @@ export function Workspaces() {
           );
         })}
       </div>
-      {swayState.mode && swayState.mode !== "default" && (
-        <span className="sway-mode" title={`Sway mode: ${swayState.mode}`}>
-          {swayState.mode}
+      {mode && mode !== "default" && (
+        <span className="sway-mode" title={`Sway mode: ${mode}`}>
+          {mode}
         </span>
       )}
     </div>

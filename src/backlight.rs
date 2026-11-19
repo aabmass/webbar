@@ -40,11 +40,13 @@ pub fn percent_to_vcp(percent: u8, max: u16) -> u16 {
 pub fn spawn(send: SendEvent) -> BacklightController {
     let (tx, rx) = mpsc::channel::<(u32, u8, SendEvent)>();
     let max_vcp = Arc::new(Mutex::new(100u16));
+    let current_brightness = Arc::new(Mutex::new(None::<u8>));
 
     // Watcher thread: initial GetVcp + VcpValueChanged signal stream
     {
         let send = send.clone();
         let max_vcp = max_vcp.clone();
+        let current_brightness = current_brightness.clone();
         thread::spawn(move || {
             async_io::block_on(async move {
                 let conn = match Connection::session().await {
@@ -82,10 +84,12 @@ pub fn spawn(send: SendEvent) -> BacklightController {
                                 });
                             } else {
                                 let resolved_max = if max > 0 { max } else { 100 };
+                                let pct = vcp_to_percent(current, resolved_max);
                                 *max_vcp.lock().unwrap() = resolved_max;
+                                *current_brightness.lock().unwrap() = Some(pct);
                                 send(BridgeEvent::BacklightState {
                                     available: true,
-                                    brightness: Some(vcp_to_percent(current, resolved_max)),
+                                    brightness: Some(pct),
                                     error: None,
                                 });
                             }
@@ -123,9 +127,11 @@ pub fn spawn(send: SendEvent) -> BacklightController {
                     {
                         if vcp_code == VCP_BRIGHTNESS {
                             let max = *max_vcp.lock().unwrap();
+                            let pct = vcp_to_percent(new_val, max);
+                            *current_brightness.lock().unwrap() = Some(pct);
                             send(BridgeEvent::BacklightState {
                                 available: true,
-                                brightness: Some(vcp_to_percent(new_val, max)),
+                                brightness: Some(pct),
                                 error: None,
                             });
                         }
@@ -139,6 +145,7 @@ pub fn spawn(send: SendEvent) -> BacklightController {
     {
         let send = send.clone();
         let max_vcp = max_vcp.clone();
+        let current_brightness = current_brightness.clone();
         thread::spawn(move || {
             let conn = match zbus::blocking::Connection::session() {
                 Ok(c) => c,
@@ -185,25 +192,27 @@ pub fn spawn(send: SendEvent) -> BacklightController {
                 match result {
                     Ok(reply) => {
                         match reply.body().deserialize::<(i32, String)>() {
-                            Ok((0, _)) => {
-                                send(BridgeEvent::BacklightState {
-                                    available: true,
-                                    brightness: Some(clamped_pct),
-                                    error: None,
-                                });
-                                for (id, reply_send) in pending_reqs {
-                                    reply_ok(&reply_send, id);
-                                }
-                            }
                             Ok((status, msg)) => {
-                                let err = format!("ddcutil SetVcp ({status}): {msg}");
+                                // On failure keep reporting the last known brightness
+                                // rather than the target that was never applied.
+                                let mut current = current_brightness.lock().unwrap();
+                                let result = if status == 0 {
+                                    *current = Some(clamped_pct);
+                                    Ok(())
+                                } else {
+                                    Err(format!("ddcutil SetVcp ({status}): {msg}"))
+                                };
                                 send(BridgeEvent::BacklightState {
                                     available: true,
-                                    brightness: Some(clamped_pct),
-                                    error: Some(err.clone()),
+                                    brightness: *current,
+                                    error: result.clone().err(),
                                 });
+                                drop(current);
                                 for (id, reply_send) in pending_reqs {
-                                    reply_err(&reply_send, id, &err);
+                                    match &result {
+                                        Ok(()) => reply_ok(&reply_send, id),
+                                        Err(err) => reply_err(&reply_send, id, err),
+                                    }
                                 }
                             }
                             Err(err) => {

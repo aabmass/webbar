@@ -4,13 +4,18 @@
 use std::fs::File;
 use std::io::{ErrorKind, Read};
 use std::net::{TcpListener, TcpStream};
-use std::sync::{mpsc, Arc, Mutex};
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
+use async_io::Async;
+use futures_channel::mpsc;
+use futures_util::future::FutureExt;
+use futures_util::select;
+use futures_util::stream::StreamExt;
 use tungstenite::handshake::server::{ErrorResponse, Request, Response};
 use tungstenite::http::StatusCode;
-use tungstenite::{accept_hdr, Error as WsError, Message};
+use tungstenite::{accept_hdr, Error as WsError, Message, WebSocket};
 
 use crate::bridge::{BridgeEvent, BridgeRequest, SendEvent, SnapshotCache};
 use crate::dbus_bridge::DbusBridge;
@@ -23,7 +28,7 @@ type RequestHandler =
 
 #[derive(Clone, Default)]
 pub struct WsBroadcaster {
-    clients: Arc<Mutex<Vec<mpsc::SyncSender<String>>>>,
+    clients: Arc<Mutex<Vec<mpsc::Sender<String>>>>,
 }
 
 impl WsBroadcaster {
@@ -32,15 +37,16 @@ impl WsBroadcaster {
     }
 
     pub fn broadcast_json(&self, json: &str) {
-        self.clients.lock().unwrap().retain(|tx| {
-            !matches!(
-                tx.try_send(json.to_string()),
-                Err(mpsc::TrySendError::Disconnected(_))
-            )
-        });
+        self.clients
+            .lock()
+            .unwrap()
+            .retain_mut(|tx| match tx.try_send(json.to_string()) {
+                Ok(()) => true,
+                Err(err) => !err.is_disconnected(),
+            });
     }
 
-    fn push(&self, tx: mpsc::SyncSender<String>) {
+    fn push(&self, tx: mpsc::Sender<String>) {
         self.clients.lock().unwrap().push(tx);
     }
 }
@@ -103,6 +109,9 @@ fn handle_client(
     snapshots: SnapshotCache,
     on_request: &RequestHandler,
 ) {
+    let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
+    let _ = stream.set_write_timeout(Some(Duration::from_secs(5)));
+
     let mut client_output: Option<String> = None;
     let Ok(mut ws) = accept_hdr(stream, |req: &Request, resp: Response| {
         if let Some(origin) = req.headers().get("origin").and_then(|v| v.to_str().ok()) {
@@ -120,16 +129,21 @@ fn handle_client(
         return;
     };
 
-    let _ = ws
-        .get_ref()
-        .set_read_timeout(Some(Duration::from_millis(25)));
+    let _ = ws.get_ref().set_read_timeout(None);
+    let _ = ws.get_ref().set_write_timeout(None);
+    // Async::new puts the cloned fd in non-blocking mode. The clone shares the
+    // open file description with `ws`'s stream, so `ws` reads/writes now return
+    // WouldBlock instead of blocking, which the helpers below rely on.
+    let Ok(watcher) = ws.get_ref().try_clone().and_then(Async::new) else {
+        return;
+    };
 
-    let (tx, rx) = mpsc::sync_channel::<String>(CLIENT_CHANNEL_CAPACITY);
+    let (tx, mut rx) = mpsc::channel::<String>(CLIENT_CHANNEL_CAPACITY);
     let client_send: SendEvent = {
-        let tx = tx.clone();
+        let tx = Mutex::new(tx.clone());
         Arc::new(move |event: BridgeEvent| {
             if let Ok(json) = serde_json::to_string(&event) {
-                let _ = tx.try_send(json);
+                let _ = tx.lock().unwrap().try_send(json);
             }
         })
     };
@@ -141,29 +155,115 @@ fn handle_client(
     let client_dbus = DbusBridge::new(client_send.clone());
     let client_procs = ProcessBridge::new(client_send.clone());
 
-    loop {
+    async_io::block_on(async move {
         while let Ok(json) = rx.try_recv() {
-            if ws.send(Message::Text(json)).is_err() {
+            if !send_ws_text(&mut ws, &watcher, json).await {
                 return;
             }
         }
 
+        if !drain_ws_reads(
+            &mut ws,
+            &watcher,
+            client_output.as_deref(),
+            on_request,
+            &client_dbus,
+            &client_procs,
+            &client_send,
+        )
+        .await
+        {
+            return;
+        }
+
+        loop {
+            select! {
+                maybe_json = rx.next().fuse() => {
+                    let Some(json) = maybe_json else { break; };
+                    if !send_ws_text(&mut ws, &watcher, json).await {
+                        break;
+                    }
+                    while let Ok(more) = rx.try_recv() {
+                        if !send_ws_text(&mut ws, &watcher, more).await {
+                            return;
+                        }
+                    }
+                }
+                readable = watcher.readable().fuse() => {
+                    if readable.is_err() {
+                        break;
+                    }
+                    if !drain_ws_reads(
+                        &mut ws,
+                        &watcher,
+                        client_output.as_deref(),
+                        on_request,
+                        &client_dbus,
+                        &client_procs,
+                        &client_send,
+                    )
+                    .await
+                    {
+                        break;
+                    }
+                }
+            }
+        }
+    });
+}
+
+async fn flush_ws(ws: &mut WebSocket<TcpStream>, watcher: &Async<TcpStream>) -> bool {
+    loop {
+        match ws.flush() {
+            Ok(()) => return true,
+            Err(WsError::Io(err)) if err.kind() == ErrorKind::WouldBlock => {
+                if watcher.writable().await.is_err() {
+                    return false;
+                }
+            }
+            Err(_) => return false,
+        }
+    }
+}
+
+async fn send_ws_text(
+    ws: &mut WebSocket<TcpStream>,
+    watcher: &Async<TcpStream>,
+    json: String,
+) -> bool {
+    match ws.write(Message::Text(json)) {
+        Ok(()) => flush_ws(ws, watcher).await,
+        Err(WsError::Io(err)) if err.kind() == ErrorKind::WouldBlock => {
+            flush_ws(ws, watcher).await
+        }
+        Err(_) => false,
+    }
+}
+
+async fn drain_ws_reads(
+    ws: &mut WebSocket<TcpStream>,
+    watcher: &Async<TcpStream>,
+    client_output: Option<&str>,
+    on_request: &RequestHandler,
+    client_dbus: &DbusBridge,
+    client_procs: &ProcessBridge,
+    client_send: &SendEvent,
+) -> bool {
+    loop {
         match ws.read() {
             Ok(Message::Text(text)) => match serde_json::from_str::<BridgeRequest>(&text) {
-                Ok(req) => on_request(
-                    client_output.as_deref(),
-                    req,
-                    &client_dbus,
-                    &client_procs,
-                    &client_send,
-                ),
+                Ok(req) => on_request(client_output, req, client_dbus, client_procs, client_send),
                 Err(err) => eprintln!("webbar: ws-bridge invalid request: {err}"),
             },
-            Ok(Message::Close(_)) => break,
+            Ok(Message::Close(_)) => {
+                let _ = flush_ws(ws, watcher).await;
+                return false;
+            }
             Ok(_) => {}
-            Err(WsError::Io(err))
-                if matches!(err.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut) => {}
-            Err(_) => break,
+            Err(WsError::Io(err)) if err.kind() == ErrorKind::WouldBlock => {
+                return flush_ws(ws, watcher).await;
+            }
+            Err(_) => return false,
         }
     }
 }
@@ -248,5 +348,87 @@ mod tests {
         assert!(!has_valid_token(Some("token=%ZZ"), "abc123"));
         assert!(!has_valid_token(Some("token=wrong"), "abc123"));
         assert!(!has_valid_token(None, "abc123"));
+    }
+
+    #[test]
+    fn replays_snapshots_dispatches_requests_and_broadcasts_events() {
+        let snapshots = SnapshotCache::new();
+        snapshots.record(&BridgeEvent::BacklightState {
+            available: true,
+            brightness: Some(42),
+            error: None,
+        });
+
+        let broadcaster = WsBroadcaster::new();
+        let port = spawn(
+            0,
+            false,
+            "secret-token".to_string(),
+            broadcaster.clone(),
+            snapshots,
+            |output, req, _dbus, _procs, client_send| {
+                assert_eq!(output, Some("DP-1"));
+                match req {
+                    BridgeRequest::BacklightSet { id, percent } => {
+                        assert_eq!(id, 9);
+                        assert!((percent - 55.0).abs() < f64::EPSILON);
+                        crate::bridge::reply_ok(client_send, id);
+                    }
+                    other => panic!("unexpected request: {other:?}"),
+                }
+            },
+        )
+        .expect("spawn ws_bridge");
+
+        // Invalid token is rejected with 401 Unauthorized during handshake
+        let bad_stream = TcpStream::connect(("127.0.0.1", port)).unwrap();
+        bad_stream
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
+        let bad_err = tungstenite::client(
+            format!("ws://127.0.0.1:{port}/?token=wrong"),
+            bad_stream,
+        )
+        .expect_err("invalid token must fail handshake");
+        assert!(matches!(
+            bad_err,
+            tungstenite::HandshakeError::Failure(WsError::Http(resp))
+                if resp.status() == StatusCode::UNAUTHORIZED
+        ));
+
+        // Valid connection receives snapshot, rpc reply, and broadcast push immediately
+        let stream = TcpStream::connect(("127.0.0.1", port)).unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
+        let (mut ws, _resp) = tungstenite::client(
+            format!("ws://127.0.0.1:{port}/?token=secret-token&output=DP-1"),
+            stream,
+        )
+        .expect("valid ws handshake");
+
+        let snap_msg = ws.read().expect("initial snapshot");
+        let snap: serde_json::Value = serde_json::from_str(snap_msg.to_text().unwrap()).unwrap();
+        assert_eq!(snap["type"], "backlight_state");
+        assert_eq!(snap["brightness"], 42);
+
+        ws.send(Message::Text(
+            r#"{"type":"backlight_set","id":9,"percent":55}"#.into(),
+        ))
+        .unwrap();
+        let reply_msg = ws.read().expect("rpc reply");
+        let reply: serde_json::Value = serde_json::from_str(reply_msg.to_text().unwrap()).unwrap();
+        assert_eq!(reply["type"], "rpc_reply");
+        assert_eq!(reply["id"], 9);
+        assert_eq!(reply["ok"], true);
+
+        broadcaster.broadcast_json(r#"{"type":"tray","items":[]}"#);
+        let broadcast_msg = ws.read().expect("broadcast push");
+        let broadcast: serde_json::Value =
+            serde_json::from_str(broadcast_msg.to_text().unwrap()).unwrap();
+        assert_eq!(broadcast["type"], "tray");
+        assert_eq!(broadcast["items"], serde_json::json!([]));
+
+        let _ = ws.close(None);
     }
 }

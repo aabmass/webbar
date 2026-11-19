@@ -132,42 +132,77 @@ fn prop_bytes(props: &HashMap<String, OwnedValue>, key: &str) -> Option<Vec<u8>>
     })
 }
 
-async fn fetch_network_state(conn: &Connection) -> Option<(Connectivity, NetworkLink)> {
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct TrackedPaths {
+    primary_connection: Option<String>,
+    access_point: Option<String>,
+}
+
+fn normalize_dbus_path(raw: Option<String>) -> Option<String> {
+    raw.filter(|p| !p.is_empty() && p != "/")
+}
+
+fn is_relevant_nm_path(signal_path: Option<&str>, tracked: &TrackedPaths) -> bool {
+    let Some(path) = signal_path else {
+        return true;
+    };
+    path == NM_PATH
+        || tracked.primary_connection.as_deref() == Some(path)
+        || tracked.access_point.as_deref() == Some(path)
+}
+
+async fn fetch_network_state(
+    conn: &Connection,
+) -> Option<(Connectivity, NetworkLink, TrackedPaths)> {
     let nm_props = get_all_props(conn, NM_PATH, NM_IFACE).await?;
     let connectivity = map_connectivity(prop_u32(&nm_props, "Connectivity").unwrap_or(0));
-    let primary = prop_path(&nm_props, "PrimaryConnection").unwrap_or_default();
+    let primary_connection = normalize_dbus_path(prop_path(&nm_props, "PrimaryConnection"));
 
-    if primary.is_empty() || primary == "/" {
-        return Some((connectivity, NetworkLink::None));
-    }
+    let Some(ref primary) = primary_connection else {
+        return Some((connectivity, NetworkLink::None, TrackedPaths::default()));
+    };
 
-    let Some(ac_props) = get_all_props(conn, &primary, ACTIVE_CONN_IFACE).await else {
-        return Some((connectivity, NetworkLink::None));
+    let Some(ac_props) = get_all_props(conn, primary, ACTIVE_CONN_IFACE).await else {
+        return Some((
+            connectivity,
+            NetworkLink::None,
+            TrackedPaths {
+                primary_connection,
+                access_point: None,
+            },
+        ));
     };
 
     let conn_type = prop_str(&ac_props, "Type");
     let conn_name = prop_str(&ac_props, "Id");
 
-    let (ssid, strength) = if conn_type.as_deref() == Some("802-11-wireless") {
-        let ap_path = prop_path(&ac_props, "SpecificObject").unwrap_or_default();
-        if !ap_path.is_empty() && ap_path != "/" {
-            if let Some(ap_props) = get_all_props(conn, &ap_path, AP_IFACE).await {
+    let (ssid, strength, access_point) = if conn_type.as_deref() == Some("802-11-wireless") {
+        let ap_path = normalize_dbus_path(prop_path(&ac_props, "SpecificObject"));
+        if let Some(ref ap) = ap_path {
+            if let Some(ap_props) = get_all_props(conn, ap, AP_IFACE).await {
                 let ssid = prop_bytes(&ap_props, "Ssid")
                     .map(|bytes| String::from_utf8_lossy(&bytes).into_owned());
                 let strength = prop_u8(&ap_props, "Strength");
-                (ssid, strength)
+                (ssid, strength, ap_path)
             } else {
-                (None, None)
+                (None, None, ap_path)
             }
         } else {
-            (None, None)
+            (None, None, None)
         }
     } else {
-        (None, None)
+        (None, None, None)
     };
 
     let link = map_link(conn_type.as_deref(), conn_name, ssid, strength);
-    Some((connectivity, link))
+    Some((
+        connectivity,
+        link,
+        TrackedPaths {
+            primary_connection,
+            access_point,
+        },
+    ))
 }
 
 pub fn spawn(send: SendEvent) {
@@ -216,18 +251,29 @@ pub fn spawn(send: SendEvent) {
                 });
             };
 
-            if let Some((connectivity, link)) = fetch_network_state(&conn).await {
+            let mut tracked = if let Some((connectivity, link, next_tracked)) =
+                fetch_network_state(&conn).await
+            {
                 emit(true, connectivity, link);
+                next_tracked
             } else {
                 emit(false, Connectivity::Unknown, NetworkLink::None);
-            }
+                TrackedPaths::default()
+            };
 
             let Some(ref mut stream) = stream else {
                 return;
             };
 
-            while let Some(Ok(_msg)) = stream.next().await {
-                if let Some((connectivity, link)) = fetch_network_state(&conn).await {
+            while let Some(Ok(msg)) = stream.next().await {
+                let header = msg.header();
+                let sig_path = header.path().map(|p| p.as_str());
+                if !is_relevant_nm_path(sig_path, &tracked) {
+                    continue;
+                }
+                if let Some((connectivity, link, next_tracked)) = fetch_network_state(&conn).await
+                {
+                    tracked = next_tracked;
                     emit(true, connectivity, link);
                 }
             }
@@ -270,5 +316,63 @@ mod tests {
             }
         );
         assert_eq!(map_link(None, None, None, None), NetworkLink::None);
+    }
+
+    #[test]
+    fn normalizes_empty_and_root_dbus_paths() {
+        assert_eq!(normalize_dbus_path(None), None);
+        assert_eq!(normalize_dbus_path(Some(String::new())), None);
+        assert_eq!(normalize_dbus_path(Some("/".into())), None);
+        assert_eq!(
+            normalize_dbus_path(Some("/org/freedesktop/NetworkManager/ActiveConnection/3".into())),
+            Some("/org/freedesktop/NetworkManager/ActiveConnection/3".into())
+        );
+    }
+
+    #[test]
+    fn filters_nm_signals_to_manager_primary_and_active_ap_paths() {
+        let wifi_tracked = TrackedPaths {
+            primary_connection: Some("/org/freedesktop/NetworkManager/ActiveConnection/3".into()),
+            access_point: Some("/org/freedesktop/NetworkManager/AccessPoint/42".into()),
+        };
+
+        assert!(is_relevant_nm_path(Some(NM_PATH), &wifi_tracked));
+        assert!(is_relevant_nm_path(
+            Some("/org/freedesktop/NetworkManager/ActiveConnection/3"),
+            &wifi_tracked
+        ));
+        assert!(is_relevant_nm_path(
+            Some("/org/freedesktop/NetworkManager/AccessPoint/42"),
+            &wifi_tracked
+        ));
+        assert!(is_relevant_nm_path(None, &wifi_tracked));
+
+        // Neighboring AP scans, other active connections, and device traffic stats are ignored
+        assert!(!is_relevant_nm_path(
+            Some("/org/freedesktop/NetworkManager/AccessPoint/99"),
+            &wifi_tracked
+        ));
+        assert!(!is_relevant_nm_path(
+            Some("/org/freedesktop/NetworkManager/ActiveConnection/4"),
+            &wifi_tracked
+        ));
+        assert!(!is_relevant_nm_path(
+            Some("/org/freedesktop/NetworkManager/Devices/2"),
+            &wifi_tracked
+        ));
+
+        let wired_tracked = TrackedPaths {
+            primary_connection: Some("/org/freedesktop/NetworkManager/ActiveConnection/1".into()),
+            access_point: None,
+        };
+        assert!(is_relevant_nm_path(Some(NM_PATH), &wired_tracked));
+        assert!(is_relevant_nm_path(
+            Some("/org/freedesktop/NetworkManager/ActiveConnection/1"),
+            &wired_tracked
+        ));
+        assert!(!is_relevant_nm_path(
+            Some("/org/freedesktop/NetworkManager/AccessPoint/42"),
+            &wired_tracked
+        ));
     }
 }

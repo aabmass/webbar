@@ -670,3 +670,229 @@ test("sway.command resolves on success and rejects with SwayCommandError", async
     return true;
   });
 });
+
+test("reconcile matches Bluetooth paths and Tray bus+path items by stable identity", () => {
+  const { api, receive } = createWebbarBridge(() => {});
+
+  // Bluetooth devices (keyed by path)
+  const devA = {
+    path: "/org/bluez/hci0/dev_AA",
+    name: "Headphones",
+    address: "AA:AA:AA:AA:AA:AA",
+    paired: true,
+    connected: true,
+    battery: 80,
+  };
+  const devB = {
+    path: "/org/bluez/hci0/dev_BB",
+    name: "Keyboard",
+    address: "BB:BB:BB:BB:BB:BB",
+    paired: true,
+    connected: false,
+    battery: null,
+  };
+  receive({
+    type: "bluetooth_state",
+    available: true,
+    adapters: [{ path: "/org/bluez/hci0", name: "hci0", powered: true }],
+    devices: [devA, devB],
+  });
+  const [prevA, prevB] = api.bluetooth.get().devices;
+
+  // Insert new device at start and swap order: prevA and prevB keep identity
+  receive({
+    type: "bluetooth_state",
+    available: true,
+    adapters: [{ path: "/org/bluez/hci0", name: "hci0", powered: true }],
+    devices: [
+      {
+        path: "/org/bluez/hci0/dev_CC",
+        name: "Mouse",
+        address: "CC:CC:CC:CC:CC:CC",
+        paired: true,
+        connected: true,
+        battery: 95,
+      },
+      { ...devB },
+      { ...devA },
+    ],
+  });
+  const devices = api.bluetooth.get().devices;
+  assert.equal(Object.is(devices[1], prevB), true);
+  assert.equal(Object.is(devices[2], prevA), true);
+
+  // Tray items (keyed by bus + path so two buses sharing /StatusNotifierItem stay distinct)
+  const tray1 = {
+    bus: ":1.10",
+    path: "/StatusNotifierItem",
+    title: "App1",
+    icon_name: "app1",
+    icon_url: "",
+    menu_path: "",
+  };
+  const tray2 = {
+    bus: ":1.20",
+    path: "/StatusNotifierItem",
+    title: "App2",
+    icon_name: "app2",
+    icon_url: "",
+    menu_path: "",
+  };
+  receive({ type: "tray", items: [tray1, tray2] });
+  const [prevTray1, prevTray2] = api.tray.get();
+
+  // Reorder and insert at front
+  receive({
+    type: "tray",
+    items: [{ ...tray2 }, { ...tray1 }],
+  });
+  const trays = api.tray.get();
+  assert.equal(Object.is(trays[0], prevTray2), true);
+  assert.equal(Object.is(trays[1], prevTray1), true);
+});
+
+test("dbus.watch reports errors via onClose", async () => {
+  const sent = [];
+  const { api, receive } = createWebbarBridge((json) => {
+    sent.push(JSON.parse(json));
+  });
+
+  const closedEvents = [];
+  const watchP = api.dbus.watch(
+    {
+      bus: "system",
+      sender: "org.freedesktop.login1",
+      path: "/org/freedesktop/login1",
+      interface: "org.freedesktop.DBus.Properties",
+      member: "PropertiesChanged",
+      onClose: (err) => closedEvents.push(err),
+    },
+    () => {},
+  );
+
+  assert.equal(sent[0].type, "dbus_match");
+  assert.equal(sent[0].path, "/org/freedesktop/login1");
+
+  receive({ type: "dbus_match_started", id: sent[0].id, ok: true, error: null });
+  const watcher = await watchP;
+
+  // Match ending with error calls onClose(Error)
+  receive({ type: "dbus_match_ended", id: sent[0].id, error: "stream failed" });
+  assert.equal(closedEvents.length, 1);
+  assert.ok(closedEvents[0] instanceof Error);
+  assert.match(closedEvents[0].message, /stream failed/);
+
+  // Explicit stop() must NOT trigger onClose, nor send duplicate unwatch
+  const closedEvents2 = [];
+  const watch2P = api.dbus.watch(
+    { interface: "org.example.Test", onClose: (err) => closedEvents2.push(err) },
+    () => {},
+  );
+  receive({ type: "dbus_match_started", id: sent[1].id, ok: true, error: null });
+  const watcher2 = await watch2P;
+  watcher2.stop();
+  watcher2.stop();
+  assert.equal(sent.filter((m) => m.type === "dbus_unwatch").length, 1);
+  receive({ type: "dbus_match_ended", id: sent[1].id, error: null });
+  assert.equal(closedEvents2.length, 0);
+
+  // Server-initiated clean end (error: null) calls onClose(undefined)
+  const closedEvents3 = [];
+  const watch3P = api.dbus.watch(
+    { interface: "org.example.Test", onClose: (err) => closedEvents3.push(err) },
+    () => {},
+  );
+  receive({ type: "dbus_match_started", id: sent[3].id, ok: true, error: null });
+  await watch3P;
+  receive({ type: "dbus_match_ended", id: sent[3].id, error: null });
+  assert.deepEqual(closedEvents3, [undefined]);
+  void watcher;
+});
+
+test("onDisconnect cleans up pending RPCs, watches, streams, and onConnect re-syncs overlay", async () => {
+  const sent = [];
+  const { api, receive, onConnect, onDisconnect } = createWebbarBridge((json) => {
+    sent.push(JSON.parse(json));
+  });
+
+  // Acquire an overlay lease before disconnect
+  const releaseOverlay = api.acquireOverlay();
+  assert.deepEqual(sent[0], { type: "set_overlay", active: true });
+
+  // In-flight RPC
+  const rpcP = api.exec(["echo", "hi"]);
+
+  // Unstarted dbus.watch
+  const unstartedWatchP = api.dbus.watch(
+    { interface: "org.example.Unstarted" },
+    () => {},
+  );
+
+  // Started dbus.watch
+  const watchCloseErrs = [];
+  const startedWatchP = api.dbus.watch(
+    {
+      interface: "org.example.Started",
+      onClose: (err) => watchCloseErrs.push(err),
+    },
+    () => {},
+  );
+  const startedWatchId = sent[3].id;
+  receive({ type: "dbus_match_started", id: startedWatchId, ok: true, error: null });
+  await startedWatchP;
+
+  // Unstarted execStream
+  const unstartedStreamP = api.execStream(["sleep", "5"]);
+
+  // Started execStream
+  const exits = [];
+  const startedStreamP = api.execStream(["stasis", "watch"], {
+    onExit: (res) => exits.push(res),
+  });
+  const startedStreamId = sent[5].id;
+  receive({
+    type: "process_stream_started",
+    id: startedStreamId,
+    ok: true,
+    error: null,
+  });
+  await startedStreamP;
+
+  // Simulate socket close
+  onDisconnect();
+
+  await assert.rejects(rpcP, /disconnected/i);
+  await assert.rejects(unstartedWatchP, /disconnected/i);
+  await assert.rejects(unstartedStreamP, /disconnected/i);
+  assert.equal(watchCloseErrs.length, 1);
+  assert.ok(watchCloseErrs[0] instanceof Error);
+  assert.deepEqual(exits, [{ code: null, signal: null }]);
+
+  // Simulate reconnect: overlay lease is still held so set_overlay(true) re-sends
+  sent.length = 0;
+  onConnect();
+  assert.deepEqual(sent, [{ type: "set_overlay", active: true }]);
+
+  releaseOverlay();
+  await Promise.resolve();
+  assert.deepEqual(sent[1], { type: "set_overlay", active: false });
+});
+
+test("onConnect sends overlay=false if the lease was released while disconnected", async () => {
+  const sent = [];
+  const { api, onConnect, onDisconnect } = createWebbarBridge((json) => {
+    sent.push(JSON.parse(json));
+  });
+
+  const releaseOverlay = api.acquireOverlay();
+  assert.deepEqual(sent, [{ type: "set_overlay", active: true }]);
+
+  onDisconnect();
+  releaseOverlay();
+  await Promise.resolve();
+
+  // The server still believes overlay is active; reconnect must correct it.
+  sent.length = 0;
+  onConnect();
+  assert.deepEqual(sent, [{ type: "set_overlay", active: false }]);
+});
