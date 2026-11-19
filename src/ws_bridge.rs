@@ -357,6 +357,7 @@ mod tests {
             available: true,
             brightness: Some(42),
             error: None,
+            displays: Vec::new(),
         });
 
         let broadcaster = WsBroadcaster::new();
@@ -369,9 +370,14 @@ mod tests {
             |output, req, _dbus, _procs, client_send| {
                 assert_eq!(output, Some("DP-1"));
                 match req {
-                    BridgeRequest::BacklightSet { id, percent } => {
+                    BridgeRequest::BacklightSet {
+                        id,
+                        percent,
+                        display_id,
+                    } => {
                         assert_eq!(id, 9);
                         assert!((percent - 55.0).abs() < f64::EPSILON);
+                        assert_eq!(display_id, None);
                         crate::bridge::reply_ok(client_send, id);
                     }
                     other => panic!("unexpected request: {other:?}"),

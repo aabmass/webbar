@@ -224,7 +224,8 @@
       backlight: createStore({
         available: false,
         brightness: null,
-        error: null
+        error: null,
+        displays: []
       })
     };
     const menuStores = /* @__PURE__ */ new Map();
@@ -319,7 +320,8 @@
       backlight_state: (e) => stores.backlight._update({
         available: Boolean(e.available),
         brightness: typeof e.brightness === "number" ? e.brightness : null,
-        error: typeof e.error === "string" ? e.error : null
+        error: typeof e.error === "string" ? e.error : null,
+        displays: e.displays ?? []
       })
     };
     function receive(event) {
@@ -517,7 +519,10 @@
       }),
       network: storeView(stores.network, {}),
       backlight: storeView(stores.backlight, {
-        set: (percent) => rpc("backlight_set", { percent })
+        set: (percent, displayId) => rpc("backlight_set", {
+          percent,
+          ...displayId ? { display_id: displayId } : {}
+        })
       }),
       acquireOverlay: () => {
         explicitOverlayCount += 1;

@@ -4,7 +4,6 @@ mod bluetooth;
 mod bridge;
 mod dbus_bridge;
 mod dbus_json;
-mod inhibit;
 mod network;
 mod notifications;
 mod process_bridge;
@@ -16,7 +15,7 @@ mod ws_bridge;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Component, Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -179,7 +178,6 @@ impl HostServices {
         let tray_menus = tray::TrayMenuWatcher::new(send_event.clone());
         if claim_dbus_servers {
             notifications::spawn_server(notifications.clone());
-            inhibit::spawn_server();
             tray::spawn_server(send_event.clone());
         } else {
             tray::spawn_observer(send_event.clone());
@@ -303,9 +301,13 @@ impl HostServices {
             BridgeRequest::BluetoothDisconnect { id, path } => {
                 self.bluetooth.disconnect(id, path, reply_send.clone());
             }
-            BridgeRequest::BacklightSet { id, percent } => {
+            BridgeRequest::BacklightSet {
+                id,
+                percent,
+                display_id,
+            } => {
                 self.backlight
-                    .set_brightness(id, percent, reply_send.clone());
+                    .set_brightness(id, percent, display_id, reply_send.clone());
             }
             BridgeRequest::SwayCommand { id, command } => {
                 self.sway.run(id, command, reply_send.clone());
@@ -520,29 +522,37 @@ fn open_devtools_first() {
     });
 }
 
+#[derive(Debug, PartialEq, Eq)]
+enum AssetError {
+    Forbidden,
+    NotFound,
+}
+
 fn register_webbar_scheme(dir: PathBuf) {
     let Some(context) = WebContext::default() else {
         return;
     };
+    let base_dir = fs::canonicalize(&dir).unwrap_or(dir);
     context.register_uri_scheme("webbar", move |request| {
         let uri = request.uri().map(|u| u.to_string()).unwrap_or_default();
-        let path_part = uri
-            .strip_prefix("webbar://app/")
-            .unwrap_or("index.html")
-            .split('?')
-            .next()
-            .unwrap_or("index.html");
-        let rel = if path_part.is_empty() {
-            "index.html"
-        } else {
-            path_part
+        let (disk_path, mime) = match resolve_asset_path(&base_dir, &uri) {
+            Ok(resolved) => resolved,
+            Err(AssetError::Forbidden) => {
+                let stream = MemoryInputStream::from_bytes(&glib::Bytes::from_static(b"Forbidden"));
+                request.finish(&stream, -1, Some("text/plain"));
+                return;
+            }
+            Err(AssetError::NotFound) => {
+                let stream = MemoryInputStream::from_bytes(&glib::Bytes::from_static(b"Not Found"));
+                request.finish(&stream, -1, Some("text/plain"));
+                return;
+            }
         };
 
-        let disk_path = dir.join(rel);
         match fs::read(&disk_path) {
             Ok(bytes) => {
                 let stream = MemoryInputStream::from_bytes(&glib::Bytes::from_owned(bytes));
-                request.finish(&stream, -1, Some(mime_for(rel)));
+                request.finish(&stream, -1, Some(mime));
             }
             Err(err) => {
                 eprintln!("webbar: failed to read {}: {err}", disk_path.display());
@@ -553,17 +563,68 @@ fn register_webbar_scheme(dir: PathBuf) {
     });
 }
 
-fn mime_for(rel: &str) -> &'static str {
-    if rel.ends_with(".js") {
-        "application/javascript"
-    } else if rel.ends_with(".css") {
-        "text/css"
-    } else if rel.ends_with(".svg") {
-        "image/svg+xml"
-    } else if rel.ends_with(".png") {
-        "image/png"
+fn resolve_asset_path(
+    canonical_base: &Path,
+    uri: &str,
+) -> Result<(PathBuf, &'static str), AssetError> {
+    let path_part = uri
+        .strip_prefix("webbar://app/")
+        .unwrap_or("index.html")
+        .split(['?', '#'])
+        .next()
+        .unwrap_or("index.html");
+    let rel = if path_part.is_empty() {
+        "index.html"
     } else {
-        "text/html"
+        path_part
+    };
+
+    let rel_path = Path::new(rel);
+    if rel_path.components().any(|c| {
+        matches!(
+            c,
+            Component::ParentDir | Component::RootDir | Component::Prefix(_)
+        )
+    }) {
+        return Err(AssetError::Forbidden);
+    }
+
+    let joined = canonical_base.join(rel_path);
+    let canonical = fs::canonicalize(&joined).map_err(|err| {
+        if err.kind() == std::io::ErrorKind::NotFound {
+            AssetError::NotFound
+        } else {
+            AssetError::Forbidden
+        }
+    })?;
+    if !canonical.starts_with(canonical_base) {
+        return Err(AssetError::Forbidden);
+    }
+    Ok((canonical, mime_for(rel)))
+}
+
+fn mime_for(rel: &str) -> &'static str {
+    let ext = Path::new(rel)
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|s| s.to_ascii_lowercase());
+    match ext.as_deref() {
+        Some("html" | "htm") => "text/html",
+        Some("js" | "mjs") => "application/javascript",
+        Some("css") => "text/css",
+        Some("json" | "map") => "application/json",
+        Some("svg") => "image/svg+xml",
+        Some("png") => "image/png",
+        Some("jpg" | "jpeg") => "image/jpeg",
+        Some("gif") => "image/gif",
+        Some("webp") => "image/webp",
+        Some("ico") => "image/x-icon",
+        Some("woff2") => "font/woff2",
+        Some("woff") => "font/woff",
+        Some("ttf") => "font/ttf",
+        Some("otf") => "font/otf",
+        Some("wasm") => "application/wasm",
+        _ => "application/octet-stream",
     }
 }
 
@@ -770,7 +831,16 @@ fn create_bar_window(
         &[],
     ));
 
-    let web_view = WebView::builder().user_content_manager(&ucm).build();
+    let related_view = WEB_VIEWS.with(|cell| {
+        let mut views = cell.borrow_mut();
+        views.retain(|weak| weak.upgrade().is_some());
+        views.first().and_then(|weak| weak.upgrade())
+    });
+    let mut web_view_builder = WebView::builder().user_content_manager(&ucm);
+    if let Some(related) = &related_view {
+        web_view_builder = web_view_builder.related_view(related);
+    }
+    let web_view = web_view_builder.build();
     if let Some(settings) = WebViewExt::settings(&web_view) {
         settings.set_enable_developer_extras(true);
     }
@@ -949,5 +1019,70 @@ mod tests {
         let next_h = state.update_monitor_geometry(3840, 2160);
         assert_eq!(next_h, 500);
         assert_eq!(state.rect_tuples(), vec![(0, 0, 3840, 500)]);
+    }
+
+    #[test]
+    fn mime_for_maps_common_web_assets_and_safe_default() {
+        assert_eq!(mime_for("index.html"), "text/html");
+        assert_eq!(mime_for("app.js"), "application/javascript");
+        assert_eq!(mime_for("mod.mjs"), "application/javascript");
+        assert_eq!(mime_for("styles.css"), "text/css");
+        assert_eq!(mime_for("data.json"), "application/json");
+        assert_eq!(mime_for("font.woff2"), "font/woff2");
+        assert_eq!(mime_for("icon.webp"), "image/webp");
+        assert_eq!(mime_for("core.wasm"), "application/wasm");
+        assert_eq!(mime_for("unknown.bin"), "application/octet-stream");
+    }
+
+    #[test]
+    fn resolve_asset_path_blocks_traversal_and_resolves_valid_assets() {
+        let dir = std::env::temp_dir().join(format!("webbar-asset-test-{}", std::process::id()));
+        let sub = dir.join("assets");
+        fs::create_dir_all(&sub).unwrap();
+        fs::write(dir.join("index.html"), b"ok").unwrap();
+        fs::write(sub.join("app.js"), b"console.log(1)").unwrap();
+
+        let base = fs::canonicalize(&dir).unwrap();
+
+        let (index_path, index_mime) =
+            resolve_asset_path(&base, "webbar://app/?output=DP-1#top").unwrap();
+        assert_eq!(index_path, base.join("index.html"));
+        assert_eq!(index_mime, "text/html");
+
+        let (js_path, js_mime) =
+            resolve_asset_path(&base, "webbar://app/assets/app.js?v=1").unwrap();
+        assert_eq!(js_path, base.join("assets/app.js"));
+        assert_eq!(js_mime, "application/javascript");
+
+        assert_eq!(
+            resolve_asset_path(&base, "webbar://app/../etc/passwd"),
+            Err(AssetError::Forbidden)
+        );
+        assert_eq!(
+            resolve_asset_path(&base, "webbar://app/assets/../../etc/passwd"),
+            Err(AssetError::Forbidden)
+        );
+        assert_eq!(
+            resolve_asset_path(&base, "webbar://app//etc/passwd"),
+            Err(AssetError::Forbidden)
+        );
+        assert_eq!(
+            resolve_asset_path(&base, "webbar://app/favicon.ico"),
+            Err(AssetError::NotFound)
+        );
+
+        let outside = std::env::temp_dir().join(format!("webbar-outside-{}.txt", std::process::id()));
+        fs::write(&outside, b"secret").unwrap();
+        let escape_link = dir.join("escape.txt");
+        let _ = fs::remove_file(&escape_link);
+        std::os::unix::fs::symlink(&outside, &escape_link).unwrap();
+
+        assert_eq!(
+            resolve_asset_path(&base, "webbar://app/escape.txt"),
+            Err(AssetError::Forbidden)
+        );
+
+        let _ = fs::remove_file(&outside);
+        let _ = fs::remove_dir_all(&dir);
     }
 }

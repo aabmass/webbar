@@ -2,6 +2,8 @@ import type { AudioDevice } from "./generated/AudioDevice";
 import type { AudioDeviceKind } from "./generated/AudioDeviceKind";
 import type { AudioState } from "./generated/AudioState";
 import type { AudioStream } from "./generated/AudioStream";
+import type { BacklightDisplay } from "./generated/BacklightDisplay";
+import type { BacklightKind } from "./generated/BacklightKind";
 import type { BacklightState } from "./generated/BacklightState";
 import type { BluetoothAdapter } from "./generated/BluetoothAdapter";
 import type { BluetoothDevice } from "./generated/BluetoothDevice";
@@ -36,6 +38,8 @@ export type {
   AudioDeviceKind,
   AudioState,
   AudioStream,
+  BacklightDisplay,
+  BacklightKind,
   BacklightState,
   BluetoothAdapter,
   BluetoothDevice,
@@ -145,7 +149,7 @@ export type WebbarApi = {
   };
   network: Store<NetworkState>;
   backlight: Store<BacklightState> & {
-    set: (percent: number) => Promise<void>;
+    set: (percent: number, displayId?: string) => Promise<void>;
   };
   acquireOverlay: () => () => void;
   setInputRegion: (rects: InputRect[]) => void;
@@ -465,6 +469,7 @@ export function createWebbarBridge(
       available: false,
       brightness: null,
       error: null,
+      displays: [],
     }),
   };
 
@@ -581,6 +586,7 @@ export function createWebbarBridge(
         available: Boolean(e.available),
         brightness: typeof e.brightness === "number" ? e.brightness : null,
         error: typeof e.error === "string" ? e.error : null,
+        displays: (e.displays as BacklightDisplay[]) ?? [],
       }),
   };
 
@@ -791,7 +797,11 @@ export function createWebbarBridge(
     }),
     network: storeView(stores.network, {}),
     backlight: storeView(stores.backlight, {
-      set: (percent: number) => rpc("backlight_set", { percent }),
+      set: (percent: number, displayId?: string) =>
+        rpc("backlight_set", {
+          percent,
+          ...(displayId ? { display_id: displayId } : {}),
+        }),
     }),
     acquireOverlay: () => {
       explicitOverlayCount += 1;

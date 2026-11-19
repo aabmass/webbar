@@ -217,10 +217,23 @@ test("all window.webbar stores follow snapshot + subscribe + onChange contract",
         available: true,
         brightness: 65,
         error: null,
+        displays: [
+          {
+            id: "ddc:1",
+            name: "Dell U2723QE",
+            kind: "ddc",
+            output: "DP-1",
+            brightness: 65,
+            available: true,
+            error: null,
+          },
+        ],
       },
       assertState: (s) => {
         assert.equal(s.available, true);
         assert.equal(s.brightness, 65);
+        assert.equal(s.displays.length, 1);
+        assert.equal(s.displays[0].output, "DP-1");
       },
     },
   ];
@@ -290,6 +303,25 @@ test("Promise actions resolve and reject with standard Error instances", async (
   });
   const menu = await pMenu;
   assert.equal(menu[0].label, "Quit");
+
+  const pBlDefault = api.backlight.set(70);
+  assert.deepEqual(sent[3], {
+    type: "backlight_set",
+    id: sent[3].id,
+    percent: 70,
+  });
+  receive({ type: "rpc_reply", id: sent[3].id, ok: true });
+  await pBlDefault;
+
+  const pBlTarget = api.backlight.set(45, "ddc:2");
+  assert.deepEqual(sent[4], {
+    type: "backlight_set",
+    id: sent[4].id,
+    percent: 45,
+    display_id: "ddc:2",
+  });
+  receive({ type: "rpc_reply", id: sent[4].id, ok: true });
+  await pBlTarget;
 });
 
 test("dbus and exec escape hatches follow Promise + Error contract", async () => {

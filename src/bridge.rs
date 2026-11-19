@@ -70,6 +70,7 @@ pub struct BacklightState {
     pub available: bool,
     pub brightness: Option<u8>,
     pub error: Option<String>,
+    pub displays: Vec<crate::backlight::BacklightDisplay>,
 }
 
 #[derive(Debug, Clone, Serialize, TS)]
@@ -164,6 +165,8 @@ pub enum BridgeRequest {
     BacklightSet {
         id: u32,
         percent: f64,
+        #[serde(default)]
+        display_id: Option<String>,
     },
     SetInputRegion {
         rects: Vec<InputRect>,
@@ -270,6 +273,7 @@ pub enum BridgeEvent {
         available: bool,
         brightness: Option<u8>,
         error: Option<String>,
+        displays: Vec<crate::backlight::BacklightDisplay>,
     },
     // Escape-hatch events
     DbusMatchStarted {
@@ -436,6 +440,30 @@ mod tests {
         assert_eq!(json["type"], "rpc_reply");
         assert_eq!(json["id"], 42);
         assert_eq!(json["ok"], true);
+
+        let bl_default: BridgeRequest =
+            serde_json::from_str(r#"{"type":"backlight_set","id":7,"percent":60}"#).unwrap();
+        assert!(matches!(
+            bl_default,
+            BridgeRequest::BacklightSet {
+                id: 7,
+                percent,
+                display_id: None,
+            } if (percent - 60.0).abs() < f64::EPSILON
+        ));
+
+        let bl_targeted: BridgeRequest = serde_json::from_str(
+            r#"{"type":"backlight_set","id":8,"percent":45,"display_id":"ddc:2"}"#,
+        )
+        .unwrap();
+        assert!(matches!(
+            bl_targeted,
+            BridgeRequest::BacklightSet {
+                id: 8,
+                percent,
+                display_id: Some(ref id),
+            } if (percent - 45.0).abs() < f64::EPSILON && id == "ddc:2"
+        ));
     }
 
     #[test]
@@ -445,11 +473,13 @@ mod tests {
             available: true,
             brightness: Some(50),
             error: None,
+            displays: Vec::new(),
         });
         cache.record(&BridgeEvent::BacklightState {
             available: true,
             brightness: Some(80),
             error: None,
+            displays: Vec::new(),
         });
         cache.record(&BridgeEvent::SwayState(Box::new(crate::sway_ipc::test_state())));
         cache.record(&BridgeEvent::RpcReply {

@@ -161,7 +161,7 @@
             default = webbarPkg;
             sway-full-bar-ui = swayFullBarUi;
             sway-full-bar = pkgs.writeShellScriptBin "webbar-sway-full-bar" ''
-              exec ${webbarPkg}/bin/webbar --dir ${swayFullBarUi} --height 86 "$@"
+              exec ${webbarPkg}/bin/webbar --dir ${swayFullBarUi} --height 86 --overlay-height 800 "$@"
             '';
             sway-full-bar-dev = pkgs.writeShellApplication {
               name = "webbar-sway-full-bar-dev";
@@ -187,7 +187,7 @@
                   sleep 0.15
                 done
 
-                ${webbarPkg}/bin/webbar --url http://localhost:5173 --height 86 --replace "$@"
+                ${webbarPkg}/bin/webbar --url http://localhost:5173 --height 86 --overlay-height 800 --replace "$@"
               '';
             };
             sway-full-bar-browser-dev = pkgs.writeShellApplication {

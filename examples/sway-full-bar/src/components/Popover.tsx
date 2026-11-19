@@ -2,6 +2,8 @@ import {
   useEffect,
   useLayoutEffect,
   useRef,
+  useState,
+  type CSSProperties,
   type ReactNode,
   type RefObject,
 } from "react";
@@ -14,10 +16,79 @@ type PopoverProps = {
   children: ReactNode;
 };
 
+type PositionState = {
+  style: CSSProperties;
+  caret: "center" | "end" | "none";
+};
+
+const VIEWPORT_MARGIN = 8;
+
 function focusedWorkspaceKey(): string {
   const s = window.webbar.sway.get();
   const focused = s.workspaces.find((w) => w.focused);
   return `${focused?.id ?? ""}:${s.mode}`;
+}
+
+function computePosition(
+  anchorEl: HTMLElement | null,
+  panelEl: HTMLElement | null,
+  align: "center" | "end",
+): PositionState {
+  const rect = anchorEl?.getBoundingClientRect();
+  // Open just below the bar (not the button) so the caret has room to show.
+  const barBottom =
+    anchorEl?.closest(".centerbox")?.getBoundingClientRect().bottom ??
+    rect?.bottom ??
+    80;
+  const top = Math.round(barBottom + 10);
+  const vw = window.innerWidth;
+  const panelWidth = panelEl?.getBoundingClientRect().width ?? 0;
+
+  if (align === "center" && rect) {
+    const anchorCenter = rect.left + rect.width / 2;
+    if (panelWidth > 0) {
+      const idealLeft = anchorCenter - panelWidth / 2;
+      const maxLeft = Math.max(VIEWPORT_MARGIN, vw - panelWidth - VIEWPORT_MARGIN);
+      const clampedLeft = Math.round(
+        Math.min(Math.max(VIEWPORT_MARGIN, idealLeft), maxLeft),
+      );
+      return {
+        caret: "center",
+        style: { top, left: clampedLeft },
+      };
+    }
+    return {
+      caret: "center",
+      style: {
+        top,
+        left: Math.round(anchorCenter),
+        transform: "translateX(-50%)",
+      },
+    };
+  }
+
+  if (anchorEl && rect) {
+    // Derive the right edge from offsetWidth around the center so CSS :active
+    // scale() on the anchor button doesn't shift the popover between clicks.
+    const anchorCenter = rect.left + rect.width / 2;
+    const unscaledRight = anchorCenter + anchorEl.offsetWidth / 2;
+    let right = Math.max(VIEWPORT_MARGIN, Math.round(vw - unscaledRight));
+    if (panelWidth > 0) {
+      const maxRight = Math.max(VIEWPORT_MARGIN, vw - panelWidth - VIEWPORT_MARGIN);
+      right = Math.min(right, Math.round(maxRight));
+    }
+    const caretRight = vw - right - anchorCenter;
+    return {
+      caret: "end",
+      style: {
+        top,
+        right,
+        ["--caret-right" as string]: `${Math.max(12, Math.round(caretRight))}px`,
+      },
+    };
+  }
+
+  return { caret: "none", style: { top, right: 12 } };
 }
 
 export function Popover({
@@ -28,6 +99,10 @@ export function Popover({
   children,
 }: PopoverProps) {
   const panelRef = useRef<HTMLDivElement>(null);
+  const [position, setPosition] = useState<PositionState>({
+    caret: "none",
+    style: { top: 90, right: 12 },
+  });
 
   useLayoutEffect(() => {
     if (!open) return;
@@ -38,7 +113,15 @@ export function Popover({
     } catch {
       // Ignore if already open in top layer
     }
+
+    const updatePosition = () => {
+      setPosition(computePosition(anchorRef.current, panelRef.current, align));
+    };
+    updatePosition();
+    window.addEventListener("resize", updatePosition);
+
     return () => {
+      window.removeEventListener("resize", updatePosition);
       try {
         if (panel.matches(":popover-open")) {
           panel.hidePopover();
@@ -47,7 +130,7 @@ export function Popover({
         // Ignore if already detached or hidden
       }
     };
-  }, [open]);
+  }, [open, anchorRef, align]);
 
   useEffect(() => {
     if (!open) return;
@@ -99,43 +182,12 @@ export function Popover({
 
   if (!open) return null;
 
-  const anchorEl = anchorRef.current;
-  const rect = anchorEl?.getBoundingClientRect();
-  // Open just below the bar (not the button) so the caret has room to show.
-  const barBottom =
-    anchorEl?.closest(".centerbox")?.getBoundingClientRect().bottom ??
-    rect?.bottom ??
-    80;
-  const top = Math.round(barBottom + 10);
-  let style: React.CSSProperties;
-  if (align === "center" && rect) {
-    style = {
-      top,
-      left: Math.round(rect.left + rect.width / 2),
-      transform: "translateX(-50%)",
-    };
-  } else if (anchorEl && rect) {
-    // Derive the right edge from offsetWidth around the center so CSS :active
-    // scale() on the anchor button doesn't shift the popover between clicks.
-    const anchorCenter = rect.left + rect.width / 2;
-    const unscaledRight = anchorCenter + anchorEl.offsetWidth / 2;
-    const right = Math.max(8, Math.round(window.innerWidth - unscaledRight));
-    const caretRight = window.innerWidth - right - anchorCenter;
-    style = {
-      top,
-      right,
-      ["--caret-right" as string]: `${Math.max(12, Math.round(caretRight))}px`,
-    };
-  } else {
-    style = { top, right: 12 };
-  }
-
   return (
     <div
       ref={panelRef}
       popover="manual"
-      className={`popover-panel caret-${rect ? align : "none"}`}
-      style={style}
+      className={`popover-panel caret-${position.caret}`}
+      style={position.style}
       role="dialog"
     >
       {children}

@@ -1,39 +1,55 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useRef, useState } from "react";
 import { Popover } from "./Popover";
 
+const TIME_FORMATTER = new Intl.DateTimeFormat("en-US", {
+  hour: "numeric",
+  minute: "2-digit",
+  second: "2-digit",
+  hour12: true,
+  timeZoneName: "short",
+});
+
+const DATE_FORMATTER = new Intl.DateTimeFormat("en-US", {
+  weekday: "long",
+  month: "long",
+  day: "numeric",
+  year: "numeric",
+});
+
+const MONTH_FORMATTER = new Intl.DateTimeFormat("en-US", {
+  month: "long",
+  year: "numeric",
+});
+
 function clockParts(date: Date) {
-  const parts = new Intl.DateTimeFormat("en-US", {
-    hour: "numeric",
-    minute: "2-digit",
-    second: "2-digit",
-    hour12: true,
-    timeZoneName: "short",
-  }).formatToParts(date);
+  const parts = TIME_FORMATTER.formatToParts(date);
   const get = (type: Intl.DateTimeFormatPartTypes) =>
     parts.find((p) => p.type === type)?.value ?? "";
   const time = `${get("hour")}:${get("minute")}`;
   const seconds = `:${get("second")}`;
-  const date_ = date.toLocaleDateString("en-US", {
-    weekday: "long",
-    month: "long",
-    day: "numeric",
-    year: "numeric",
-  });
   return {
     time,
     seconds,
     ampm: get("dayPeriod"),
     tz: get("timeZoneName"),
-    date: date_,
+    date: DATE_FORMATTER.format(date),
   };
 }
 
 const WEEKDAYS = ["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"];
 
-function Calendar({ today }: { today: Date }) {
-  const [view, setView] = useState(
-    () => new Date(today.getFullYear(), today.getMonth(), 1),
-  );
+type CalendarProps = {
+  todayYear: number;
+  todayMonth: number;
+  todayDay: number;
+};
+
+const Calendar = memo(function Calendar({
+  todayYear,
+  todayMonth,
+  todayDay,
+}: CalendarProps) {
+  const [view, setView] = useState(() => new Date(todayYear, todayMonth, 1));
 
   const year = view.getFullYear();
   const month = view.getMonth();
@@ -51,17 +67,12 @@ function Calendar({ today }: { today: Date }) {
   }
 
   const isToday = (d: number) =>
-    d === today.getDate() &&
-    month === today.getMonth() &&
-    year === today.getFullYear();
+    d === todayDay && month === todayMonth && year === todayYear;
 
   const isWeekend = (cellIdx: number) =>
     cellIdx % 7 === 0 || cellIdx % 7 === 6;
 
-  const monthLabel = view.toLocaleDateString("en-US", {
-    month: "long",
-    year: "numeric",
-  });
+  const monthLabel = MONTH_FORMATTER.format(view);
 
   return (
     <div className="calendar">
@@ -104,7 +115,7 @@ function Calendar({ today }: { today: Date }) {
       </div>
     </div>
   );
-}
+});
 
 export function Clock() {
   const [now, setNow] = useState(() => new Date());
@@ -137,7 +148,11 @@ export function Clock() {
         <span className="clock-date">{parts.date}</span>
       </button>
       <Popover open={open} onClose={close} anchorRef={btnRef} align="center">
-        <Calendar today={now} />
+        <Calendar
+          todayYear={now.getFullYear()}
+          todayMonth={now.getMonth()}
+          todayDay={now.getDate()}
+        />
       </Popover>
     </>
   );
