@@ -82,6 +82,15 @@ export function installDevMocks(): void {
   const params = new URLSearchParams(window.location.search);
   if (!params.has("mockTray")) return;
 
+  const mockMenuStore = {
+    get: () => MOCK_MENU,
+    subscribe: () => () => {},
+    onChange: (cb: (items: TrayMenuItem[]) => void) => {
+      cb(MOCK_MENU);
+      return () => {};
+    },
+  };
+
   const tray = window.webbar.tray;
   window.webbar.tray = {
     ...tray,
@@ -89,6 +98,7 @@ export function installDevMocks(): void {
     subscribe: () => () => {},
     activate: () => {},
     getMenu: async () => MOCK_MENU,
+    menu: () => mockMenuStore,
     menuEvent: () => {},
   };
 }

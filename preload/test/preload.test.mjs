@@ -896,3 +896,80 @@ test("onConnect sends overlay=false if the lease was released while disconnected
   onConnect();
   assert.deepEqual(sent, [{ type: "set_overlay", active: false }]);
 });
+
+test("tray.menu exposes a reactive store that watches/unwatches on subscribe", () => {
+  const sent = [];
+  const { api, receive, onConnect } = createWebbarBridge((json) => {
+    sent.push(JSON.parse(json));
+  });
+
+  const bus = ":1.7";
+  const menuPath = "/org/ayatana/NotificationItem/nm_applet/Menu";
+  const storeA = api.tray.menu(bus, menuPath);
+  const storeB = api.tray.menu(bus, menuPath);
+  assert.equal(storeA, storeB);
+  assert.deepEqual(storeA.get(), []);
+  assert.equal(sent.length, 0);
+
+  let notifications = 0;
+  const unsub1 = storeA.subscribe(() => {
+    notifications += 1;
+  });
+  assert.deepEqual(sent, [
+    { type: "tray_watch_menu", bus, menu_path: menuPath },
+  ]);
+
+  // Second subscriber reuses the existing watch without sending a duplicate.
+  const observed = [];
+  const unsub2 = storeB.onChange((items) => observed.push(items));
+  assert.equal(sent.length, 1);
+  assert.deepEqual(observed, [[]]);
+
+  const initialItems = [
+    {
+      id: 2513,
+      label: "Connection Information",
+      enabled: true,
+      visible: true,
+      item_type: "standard",
+      toggle_type: "",
+      toggle_state: -1,
+      children: [],
+    },
+  ];
+  receive({ type: "tray_menu", bus, menu_path: menuPath, items: initialItems });
+  assert.equal(notifications, 1);
+  assert.deepEqual(storeA.get(), initialItems);
+  assert.deepEqual(observed[observed.length - 1], initialItems);
+
+  // Subsequent LayoutUpdated push updates IDs reactively.
+  const refreshedItems = [{ ...initialItems[0], id: 2562 }];
+  receive({
+    type: "tray_menu",
+    bus,
+    menu_path: menuPath,
+    items: refreshedItems,
+  });
+  assert.equal(storeA.get()[0].id, 2562);
+
+  // Reconnecting re-sends tray_watch_menu for active stores.
+  onConnect();
+  assert.deepEqual(sent[sent.length - 1], {
+    type: "tray_watch_menu",
+    bus,
+    menu_path: menuPath,
+  });
+
+  // Unsubscribing one of two does not unwatch yet.
+  unsub1();
+  assert.equal(sent.filter((m) => m.type === "tray_unwatch_menu").length, 0);
+
+  // Unsubscribing the last subscriber unwatches and clears stale items.
+  unsub2();
+  unsub2(); // idempotent
+  assert.deepEqual(
+    sent.filter((m) => m.type === "tray_unwatch_menu"),
+    [{ type: "tray_unwatch_menu", bus, menu_path: menuPath }],
+  );
+  assert.deepEqual(storeA.get(), []);
+});

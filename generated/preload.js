@@ -226,6 +226,62 @@
         error: null
       })
     };
+    const menuStores = /* @__PURE__ */ new Map();
+    function trayMenuKey(bus, menuPath) {
+      return `${bus}\0${menuPath}`;
+    }
+    function trayMenuStore(bus, menuPath) {
+      const key = trayMenuKey(bus, menuPath);
+      const existing = menuStores.get(key);
+      if (existing) {
+        return existing.view;
+      }
+      const store = createStore([]);
+      const entry = {
+        bus,
+        menuPath,
+        store,
+        subCount: 0,
+        view: null
+      };
+      const retain = () => {
+        entry.subCount += 1;
+        if (entry.subCount === 1) {
+          send({ type: "tray_watch_menu", bus, menu_path: menuPath });
+        }
+        let released = false;
+        return () => {
+          if (released) return;
+          released = true;
+          entry.subCount = Math.max(0, entry.subCount - 1);
+          if (entry.subCount === 0) {
+            send({ type: "tray_unwatch_menu", bus, menu_path: menuPath });
+            entry.store._update([]);
+          }
+        };
+      };
+      entry.view = {
+        get: store.get,
+        subscribe: (listener) => {
+          const unsub = store.subscribe(listener);
+          const release = retain();
+          return () => {
+            unsub();
+            release();
+          };
+        },
+        onChange: (listener) => {
+          const unsub = store.onChange(listener);
+          const release = retain();
+          return () => {
+            unsub();
+            release();
+          };
+        }
+      };
+      menuStores.set(key, entry);
+      return entry.view;
+    }
     const stateHandlers = {
       sway_state: (e) => stores.sway._update({
         available: Boolean(e.available),
@@ -234,6 +290,14 @@
         mode: e.mode ?? "default"
       }),
       tray: (e) => stores.tray._update(e.items ?? []),
+      tray_menu: (e) => {
+        const bus = e.bus;
+        const menuPath = e.menu_path;
+        const entry = menuStores.get(trayMenuKey(bus, menuPath));
+        if (entry && entry.subCount > 0) {
+          entry.store._update(e.items ?? []);
+        }
+      },
       notifications: (e) => stores.notifications._update(e.items ?? []),
       audio_state: (e) => stores.audio._update({
         available: Boolean(e.available),
@@ -409,6 +473,7 @@
       tray: storeView(stores.tray, {
         activate: (bus, path) => send({ type: "tray_activate", bus, path }),
         getMenu: (bus, menuPath) => rpc("tray_get_menu", { bus, menu_path: menuPath }),
+        menu: trayMenuStore,
         menuEvent: (bus, menuPath, itemId) => send({
           type: "tray_menu_event",
           bus,
@@ -574,6 +639,15 @@
       deactivateScheduled = false;
       sentOverlayActive = computeOverlayActive();
       send({ type: "set_overlay", active: sentOverlayActive });
+      for (const entry of menuStores.values()) {
+        if (entry.subCount > 0) {
+          send({
+            type: "tray_watch_menu",
+            bus: entry.bus,
+            menu_path: entry.menuPath
+          });
+        }
+      }
     }
     return {
       api,

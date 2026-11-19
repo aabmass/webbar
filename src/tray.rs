@@ -17,7 +17,8 @@ use gtk4::glib;
 use gtk4::prelude::*;
 use gtk4::{IconLookupFlags, IconTheme, TextDirection};
 use serde::Serialize;
-use futures_util::StreamExt;
+use futures_channel::oneshot;
+use futures_util::{select, FutureExt, StreamExt};
 use zbus::blocking::connection::Builder as ConnectionBuilder;
 use zbus::blocking::Connection;
 use zbus::interface;
@@ -619,6 +620,231 @@ fn parse_menu_node(node: RawMenuNode) -> TrayMenuItem {
     }
 }
 
+fn fetch_menu_items_blocking(
+    conn: &Connection,
+    bus: &str,
+    menu_path: &str,
+    call_about_to_show: bool,
+) -> Result<Vec<TrayMenuItem>, String> {
+    if call_about_to_show {
+        let _ = conn.call_method(
+            Some(bus),
+            menu_path,
+            Some("com.canonical.dbusmenu"),
+            "AboutToShow",
+            &(0i32,),
+        );
+    }
+
+    let msg = conn
+        .call_method(
+            Some(bus),
+            menu_path,
+            Some("com.canonical.dbusmenu"),
+            "GetLayout",
+            &(0i32, -1i32, Vec::<&str>::new()),
+        )
+        .map_err(|err| err.to_string())?;
+
+    let (_rev, root): (u32, RawMenuNode) = msg
+        .body()
+        .deserialize()
+        .map_err(|err| err.to_string())?;
+
+    Ok(parse_menu_node(root).children)
+}
+
+async fn fetch_menu_items_async(
+    conn: &zbus::Connection,
+    bus: &str,
+    menu_path: &str,
+    call_about_to_show: bool,
+) -> Result<Vec<TrayMenuItem>, String> {
+    if call_about_to_show {
+        let _ = conn
+            .call_method(
+                Some(bus),
+                menu_path,
+                Some("com.canonical.dbusmenu"),
+                "AboutToShow",
+                &(0i32,),
+            )
+            .await;
+    }
+
+    let msg = conn
+        .call_method(
+            Some(bus),
+            menu_path,
+            Some("com.canonical.dbusmenu"),
+            "GetLayout",
+            &(0i32, -1i32, Vec::<&str>::new()),
+        )
+        .await
+        .map_err(|err| err.to_string())?;
+
+    let (_rev, root): (u32, RawMenuNode) = msg
+        .body()
+        .deserialize()
+        .map_err(|err| err.to_string())?;
+
+    Ok(parse_menu_node(root).children)
+}
+
+fn should_refresh_dbusmenu_signal(msg: &zbus::Message) -> bool {
+    let header = msg.header();
+    matches!(
+        (
+            header.interface().map(|i| i.as_str()),
+            header.member().map(|m| m.as_str()),
+        ),
+        (
+            Some("com.canonical.dbusmenu"),
+            Some("LayoutUpdated" | "ItemsPropertiesUpdated"),
+        )
+    )
+}
+
+struct MenuWatchEntry {
+    count: usize,
+    cancel: Option<oneshot::Sender<()>>,
+}
+
+#[derive(Clone)]
+pub struct TrayMenuWatcher {
+    watched: Arc<Mutex<HashMap<(String, String), MenuWatchEntry>>>,
+    send: SendEvent,
+}
+
+impl TrayMenuWatcher {
+    pub fn new(send: SendEvent) -> Self {
+        Self {
+            watched: Arc::new(Mutex::new(HashMap::new())),
+            send,
+        }
+    }
+
+    pub fn watch(&self, bus: String, menu_path: String) {
+        if bus.is_empty() || menu_path.is_empty() {
+            return;
+        }
+        let key = (bus.clone(), menu_path.clone());
+        let cancel_rx = {
+            let mut guard = self.watched.lock().unwrap();
+            if let Some(entry) = guard.get_mut(&key) {
+                entry.count += 1;
+                None
+            } else {
+                let (cancel_tx, cancel_rx) = oneshot::channel::<()>();
+                guard.insert(
+                    key.clone(),
+                    MenuWatchEntry {
+                        count: 1,
+                        cancel: Some(cancel_tx),
+                    },
+                );
+                Some(cancel_rx)
+            }
+        };
+
+        let send = self.send.clone();
+        let Some(cancel_rx) = cancel_rx else {
+            // Already watching this menu; still send a fresh snapshot for the new subscriber.
+            thread::spawn(move || {
+                if let Ok(conn) = Connection::session() {
+                    if let Ok(items) = fetch_menu_items_blocking(&conn, &bus, &menu_path, true) {
+                        send(BridgeEvent::TrayMenu {
+                            bus,
+                            menu_path,
+                            items,
+                        });
+                    }
+                }
+            });
+            return;
+        };
+
+        thread::spawn(move || {
+            async_io::block_on(async move {
+                let Ok(conn) = zbus::Connection::session().await else {
+                    return;
+                };
+
+                let rule = MatchRule::builder()
+                    .msg_type(zbus::message::Type::Signal)
+                    .sender(bus.as_str())
+                    .and_then(|b| b.path(menu_path.as_str()))
+                    .and_then(|b| b.interface("com.canonical.dbusmenu"))
+                    .map(|b| b.build());
+
+                let signals = match rule {
+                    Ok(r) => MessageStream::for_match_rule(r, &conn, Some(32)).await.ok(),
+                    Err(_) => None,
+                };
+
+                if let Ok(items) = fetch_menu_items_async(&conn, &bus, &menu_path, true).await {
+                    send(BridgeEvent::TrayMenu {
+                        bus: bus.clone(),
+                        menu_path: menu_path.clone(),
+                        items,
+                    });
+                }
+
+                let Some(mut signals) = signals else {
+                    return;
+                };
+
+                let mut cancel_rx = cancel_rx.fuse();
+                loop {
+                    select! {
+                        _ = cancel_rx => {
+                            return;
+                        }
+                        maybe_msg = signals.next().fuse() => {
+                            let Some(Ok(msg)) = maybe_msg else {
+                                return;
+                            };
+                            if should_refresh_dbusmenu_signal(&msg) {
+                                // Drain any additional queued signals before re-fetching to
+                                // coalesce rapid LayoutUpdated bursts.
+                                while let Some(Some(_)) = signals.next().now_or_never() {}
+                                if let Ok(items) =
+                                    fetch_menu_items_async(&conn, &bus, &menu_path, false).await
+                                {
+                                    send(BridgeEvent::TrayMenu {
+                                        bus: bus.clone(),
+                                        menu_path: menu_path.clone(),
+                                        items,
+                                    });
+                                }
+                            }
+                        }
+                    }
+                }
+            });
+        });
+    }
+
+    pub fn unwatch(&self, bus: &str, menu_path: &str) {
+        let cancel = {
+            let mut guard = self.watched.lock().unwrap();
+            let key = (bus.to_string(), menu_path.to_string());
+            let Some(entry) = guard.get_mut(&key) else {
+                return;
+            };
+            entry.count = entry.count.saturating_sub(1);
+            if entry.count == 0 {
+                guard.remove(&key).and_then(|e| e.cancel)
+            } else {
+                None
+            }
+        };
+        if let Some(tx) = cancel {
+            let _ = tx.send(());
+        }
+    }
+}
+
 pub fn get_menu(id: u32, bus: String, menu_path: String, send: SendEvent) {
     thread::spawn(move || {
         let send_err = |msg: String| {
@@ -630,34 +856,10 @@ pub fn get_menu(id: u32, bus: String, menu_path: String, send: SendEvent) {
             Err(err) => return send_err(err.to_string()),
         };
 
-        let _ = conn.call_method(
-            Some(bus.as_str()),
-            menu_path.as_str(),
-            Some("com.canonical.dbusmenu"),
-            "AboutToShow",
-            &(0i32,),
-        );
-
-        let reply = conn.call_method(
-            Some(bus.as_str()),
-            menu_path.as_str(),
-            Some("com.canonical.dbusmenu"),
-            "GetLayout",
-            &(0i32, -1i32, Vec::<&str>::new()),
-        );
-
-        let msg = match reply {
-            Ok(m) => m,
-            Err(err) => return send_err(err.to_string()),
-        };
-
-        let (_rev, root): (u32, RawMenuNode) = match msg.body().deserialize() {
-            Ok(parsed) => parsed,
-            Err(err) => return send_err(err.to_string()),
-        };
-
-        let parsed_root = parse_menu_node(root);
-        crate::bridge::reply_data(&send, id, parsed_root.children);
+        match fetch_menu_items_blocking(&conn, &bus, &menu_path, true) {
+            Ok(items) => crate::bridge::reply_data(&send, id, items),
+            Err(err) => send_err(err),
+        }
     });
 }
 
@@ -852,5 +1054,68 @@ mod tests {
             "/org/ayatana/NotificationItem/nm_applet/Menu".to_string(),
         ));
         assert!(store.registered_items().is_empty());
+    }
+
+    #[test]
+    fn dbusmenu_signal_filter_matches_layout_and_property_updates() {
+        let layout_msg = zbus::Message::signal(
+            "/org/ayatana/NotificationItem/nm_applet/Menu",
+            "com.canonical.dbusmenu",
+            "LayoutUpdated",
+        )
+        .unwrap()
+        .build(&(1u32, 0i32))
+        .unwrap();
+        assert!(should_refresh_dbusmenu_signal(&layout_msg));
+
+        let props_msg = zbus::Message::signal(
+            "/org/ayatana/NotificationItem/nm_applet/Menu",
+            "com.canonical.dbusmenu",
+            "ItemsPropertiesUpdated",
+        )
+        .unwrap()
+        .build(&())
+        .unwrap();
+        assert!(should_refresh_dbusmenu_signal(&props_msg));
+
+        let activation_msg = zbus::Message::signal(
+            "/org/ayatana/NotificationItem/nm_applet/Menu",
+            "com.canonical.dbusmenu",
+            "ItemActivationRequested",
+        )
+        .unwrap()
+        .build(&(1i32, 0u32))
+        .unwrap();
+        assert!(!should_refresh_dbusmenu_signal(&activation_msg));
+    }
+
+    #[test]
+    fn menu_watcher_refcounts_and_cancels_on_last_unwatch() {
+        let send: SendEvent = Arc::new(|_| {});
+        let watcher = TrayMenuWatcher::new(send);
+        let key = (
+            ":1.7".to_string(),
+            "/org/ayatana/NotificationItem/nm_applet/Menu".to_string(),
+        );
+
+        let (tx, mut rx) = oneshot::channel::<()>();
+        watcher.watched.lock().unwrap().insert(
+            key.clone(),
+            MenuWatchEntry {
+                count: 2,
+                cancel: Some(tx),
+            },
+        );
+
+        watcher.unwatch(&key.0, &key.1);
+        assert_eq!(watcher.watched.lock().unwrap().get(&key).unwrap().count, 1);
+        assert!(rx.try_recv().unwrap().is_none());
+
+        watcher.unwatch(&key.0, &key.1);
+        assert!(!watcher.watched.lock().unwrap().contains_key(&key));
+        assert_eq!(rx.try_recv().unwrap(), Some(()));
+
+        // Extra unwatch is a safe no-op.
+        watcher.unwatch(&key.0, &key.1);
     }
 }

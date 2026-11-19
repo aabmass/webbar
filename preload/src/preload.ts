@@ -111,6 +111,7 @@ export type WebbarApi = {
   tray: Store<TrayItem[]> & {
     activate: (bus: string, path: string) => void;
     getMenu: (bus: string, menuPath: string) => Promise<TrayMenuItem[]>;
+    menu: (bus: string, menuPath: string) => Store<TrayMenuItem[]>;
     menuEvent: (bus: string, menuPath: string, itemId: number) => void;
   };
   notifications: Store<NotificationItem[]> & {
@@ -452,6 +453,76 @@ export function createWebbarBridge(
     }),
   };
 
+  type MenuStoreEntry = {
+    bus: string;
+    menuPath: string;
+    store: InternalStore<TrayMenuItem[]>;
+    view: Store<TrayMenuItem[]>;
+    subCount: number;
+  };
+  const menuStores = new Map<string, MenuStoreEntry>();
+
+  function trayMenuKey(bus: string, menuPath: string): string {
+    return `${bus}\0${menuPath}`;
+  }
+
+  function trayMenuStore(bus: string, menuPath: string): Store<TrayMenuItem[]> {
+    const key = trayMenuKey(bus, menuPath);
+    const existing = menuStores.get(key);
+    if (existing) {
+      return existing.view;
+    }
+
+    const store = createStore<TrayMenuItem[]>([]);
+    const entry: MenuStoreEntry = {
+      bus,
+      menuPath,
+      store,
+      subCount: 0,
+      view: null as unknown as Store<TrayMenuItem[]>,
+    };
+
+    const retain = (): (() => void) => {
+      entry.subCount += 1;
+      if (entry.subCount === 1) {
+        send({ type: "tray_watch_menu", bus, menu_path: menuPath });
+      }
+      let released = false;
+      return () => {
+        if (released) return;
+        released = true;
+        entry.subCount = Math.max(0, entry.subCount - 1);
+        if (entry.subCount === 0) {
+          send({ type: "tray_unwatch_menu", bus, menu_path: menuPath });
+          entry.store._update([]);
+        }
+      };
+    };
+
+    entry.view = {
+      get: store.get,
+      subscribe: (listener) => {
+        const unsub = store.subscribe(listener);
+        const release = retain();
+        return () => {
+          unsub();
+          release();
+        };
+      },
+      onChange: (listener) => {
+        const unsub = store.onChange(listener);
+        const release = retain();
+        return () => {
+          unsub();
+          release();
+        };
+      },
+    };
+
+    menuStores.set(key, entry);
+    return entry.view;
+  }
+
   const stateHandlers: Record<string, (event: Record<string, unknown>) => void> = {
     sway_state: (e) =>
       stores.sway._update({
@@ -461,6 +532,14 @@ export function createWebbarBridge(
         mode: (e.mode as string) ?? "default",
       }),
     tray: (e) => stores.tray._update((e.items as TrayItem[]) ?? []),
+    tray_menu: (e) => {
+      const bus = e.bus as string;
+      const menuPath = e.menu_path as string;
+      const entry = menuStores.get(trayMenuKey(bus, menuPath));
+      if (entry && entry.subCount > 0) {
+        entry.store._update((e.items as TrayMenuItem[]) ?? []);
+      }
+    },
     notifications: (e) =>
       stores.notifications._update((e.items as NotificationItem[]) ?? []),
     audio_state: (e) =>
@@ -646,6 +725,7 @@ export function createWebbarBridge(
         send({ type: "tray_activate", bus, path }),
       getMenu: (bus: string, menuPath: string) =>
         rpc<TrayMenuItem[]>("tray_get_menu", { bus, menu_path: menuPath }),
+      menu: trayMenuStore,
       menuEvent: (bus: string, menuPath: string, itemId: number) =>
         send({
           type: "tray_menu_event",
@@ -831,6 +911,15 @@ export function createWebbarBridge(
     deactivateScheduled = false;
     sentOverlayActive = computeOverlayActive();
     send({ type: "set_overlay", active: sentOverlayActive });
+    for (const entry of menuStores.values()) {
+      if (entry.subCount > 0) {
+        send({
+          type: "tray_watch_menu",
+          bus: entry.bus,
+          menu_path: entry.menuPath,
+        });
+      }
+    }
   }
 
   return {

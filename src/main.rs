@@ -170,11 +170,13 @@ struct HostServices {
     bluetooth: BluetoothController,
     backlight: BacklightController,
     sway: sway_ipc::SwayCommands,
+    tray_menus: tray::TrayMenuWatcher,
 }
 
 impl HostServices {
     fn start(send_event: SendEvent, claim_dbus_servers: bool) -> Arc<Self> {
         let notifications = NotificationStore::new(send_event.clone());
+        let tray_menus = tray::TrayMenuWatcher::new(send_event.clone());
         if claim_dbus_servers {
             notifications::spawn_server(notifications.clone());
             inhibit::spawn_server();
@@ -192,6 +194,7 @@ impl HostServices {
             bluetooth,
             backlight,
             sway: sway_ipc::SwayCommands::spawn(),
+            tray_menus,
         })
     }
 
@@ -289,6 +292,12 @@ impl HostServices {
             }
             BridgeRequest::TrayGetMenu { id, bus, menu_path } => {
                 tray::get_menu(id, bus, menu_path, reply_send.clone());
+            }
+            BridgeRequest::TrayWatchMenu { bus, menu_path } => {
+                self.tray_menus.watch(bus, menu_path);
+            }
+            BridgeRequest::TrayUnwatchMenu { bus, menu_path } => {
+                self.tray_menus.unwatch(&bus, &menu_path);
             }
             BridgeRequest::TrayMenuEvent {
                 bus,

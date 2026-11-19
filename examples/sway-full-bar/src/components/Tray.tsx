@@ -14,7 +14,9 @@ function MenuList({
   items: TrayMenuItem[];
   onSelect: (id: number) => void;
 }) {
-  const [expandedId, setExpandedId] = useState<number | null>(null);
+  // Track expanded submenu by label rather than numeric id because apps like
+  // nm-applet destroy and recreate menu items with fresh ids on LayoutUpdated.
+  const [expandedLabel, setExpandedLabel] = useState<string | null>(null);
 
   return (
     <div className="tray-menu-list">
@@ -24,7 +26,7 @@ function MenuList({
         }
 
         const hasChildren = entry.children.length > 0;
-        const isExpanded = expandedId === entry.id;
+        const isExpanded = expandedLabel === entry.label;
         const checkPrefix =
           entry.toggle_type === "checkmark"
             ? entry.toggle_state === 1
@@ -44,7 +46,7 @@ function MenuList({
               disabled={!entry.enabled}
               onClick={() => {
                 if (hasChildren) {
-                  setExpandedId(isExpanded ? null : entry.id);
+                  setExpandedLabel(isExpanded ? null : entry.label);
                 } else {
                   onSelect(entry.id);
                 }
@@ -70,35 +72,39 @@ function MenuList({
   );
 }
 
+function TrayMenu({
+  bus,
+  menuPath,
+  onSelect,
+}: {
+  bus: string;
+  menuPath: string;
+  onSelect: (id: number) => void;
+}) {
+  const menuStore = window.webbar.tray.menu(bus, menuPath);
+  const items = useSyncExternalStore(menuStore.subscribe, menuStore.get);
+
+  return (
+    <div className="tray-menu">
+      <MenuList items={items} onSelect={onSelect} />
+    </div>
+  );
+}
+
 function TrayButton({ item }: { item: TrayItem }) {
   const [open, setOpen] = useState(false);
-  const [menuItems, setMenuItems] = useState<TrayMenuItem[]>([]);
   const btnRef = useRef<HTMLButtonElement>(null);
   const close = useCallback(() => setOpen(false), []);
 
   const label = item.title || item.icon_name || item.bus;
   const hasMenu = Boolean(item.menu_path);
 
-  async function handleClick() {
+  function handleClick() {
     if (!hasMenu || !item.menu_path) {
       window.webbar.tray.activate(item.bus, item.path);
       return;
     }
-
-    if (open) {
-      setOpen(false);
-      return;
-    }
-
-    try {
-      const items = await window.webbar.tray.getMenu(item.bus, item.menu_path);
-      setMenuItems(items);
-      setOpen(true);
-    } catch {
-      setMenuItems([]);
-      setOpen(false);
-      window.webbar.tray.activate(item.bus, item.path);
-    }
+    setOpen((prev) => !prev);
   }
 
   return (
@@ -108,7 +114,7 @@ function TrayButton({ item }: { item: TrayItem }) {
         type="button"
         className={`bar-btn tray-item${item.icon_url ? " icon-btn" : ""}${open ? " is-open" : ""}`}
         title={`${label} (${item.bus}${item.path})`}
-        onClick={() => void handleClick()}
+        onClick={handleClick}
         onContextMenu={(e) => {
           e.preventDefault();
           window.webbar.tray.activate(item.bus, item.path);
@@ -123,9 +129,10 @@ function TrayButton({ item }: { item: TrayItem }) {
 
       {hasMenu && (
         <Popover open={open} onClose={close} anchorRef={btnRef} align="end">
-          <div className="tray-menu">
-            <MenuList
-              items={menuItems}
+          {open && (
+            <TrayMenu
+              bus={item.bus}
+              menuPath={item.menu_path}
               onSelect={(itemId) => {
                 if (item.menu_path) {
                   window.webbar.tray.menuEvent(item.bus, item.menu_path, itemId);
@@ -133,7 +140,7 @@ function TrayButton({ item }: { item: TrayItem }) {
                 close();
               }}
             />
-          </div>
+          )}
         </Popover>
       )}
     </>

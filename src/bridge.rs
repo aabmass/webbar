@@ -96,6 +96,14 @@ pub enum BridgeRequest {
         bus: String,
         menu_path: String,
     },
+    TrayWatchMenu {
+        bus: String,
+        menu_path: String,
+    },
+    TrayUnwatchMenu {
+        bus: String,
+        menu_path: String,
+    },
     TrayMenuEvent {
         bus: String,
         menu_path: String,
@@ -216,6 +224,11 @@ pub enum BridgeEvent {
     SwayState(Box<crate::sway_state::SwayState>),
     Tray {
         items: Vec<crate::tray::TrayItem>,
+    },
+    TrayMenu {
+        bus: String,
+        menu_path: String,
+        items: Vec<crate::tray::TrayMenuItem>,
     },
     Notifications {
         items: Vec<crate::notifications::NotificationItem>,
