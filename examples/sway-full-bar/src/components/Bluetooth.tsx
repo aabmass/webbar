@@ -20,15 +20,20 @@ export function Bluetooth() {
   const [error, setError] = useState<string | null>(null);
   const [open, setOpen] = useState(false);
   const btnRef = useRef<HTMLButtonElement>(null);
-  const close = useCallback(() => setOpen(false), []);
   const [connectingPaths, setConnectingPaths] = useState<Set<string>>(
     () => new Set(),
   );
   const [syncing, setSyncing] = useState(false);
   const [syncStatus, setSyncStatus] = useState<{
+    id: number;
     kind: "ok" | "error";
     text: string;
   } | null>(null);
+
+  const close = useCallback(() => {
+    setOpen(false);
+    setSyncStatus(null);
+  }, []);
 
   const adapter = bt.adapters[0];
   const pairedDevices = bt.devices.filter((d) => d.paired);
@@ -50,16 +55,17 @@ export function Bluetooth() {
             .split("\n")
             .filter(Boolean)
             .at(-1) ?? "Synced from Windows";
-        setSyncStatus({ kind: "ok", text: summary });
+        setSyncStatus({ id: Date.now(), kind: "ok", text: summary });
       } else {
         const msg =
           res.stderr.trim() ||
           res.stdout.trim() ||
           `bt-win-sync exited with ${res.code ?? "error"}`;
-        setSyncStatus({ kind: "error", text: msg });
+        setSyncStatus({ id: Date.now(), kind: "error", text: msg });
       }
     } catch (err) {
       setSyncStatus({
+        id: Date.now(),
         kind: "error",
         text: err instanceof Error ? err.message : String(err),
       });
@@ -186,8 +192,14 @@ export function Bluetooth() {
           </button>
           {syncStatus && (
             <div
+              key={syncStatus.id}
               className={`bt-sync-status is-${syncStatus.kind}`}
               title={syncStatus.text}
+              onAnimationEnd={(e) => {
+                if (e.animationName === "bt-sync-fade") {
+                  setSyncStatus(null);
+                }
+              }}
             >
               {syncStatus.text}
             </div>
