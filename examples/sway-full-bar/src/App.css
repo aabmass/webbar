@@ -1057,6 +1057,48 @@ button:focus-visible {
   animation: pulse 700ms ease-in-out infinite;
 }
 
+.bt-popover-footer {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--panel-border);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.bt-sync-btn {
+  width: 100%;
+  height: 32px;
+  padding: 0 12px;
+  font-size: 12px;
+  color: var(--fg-muted);
+  border-radius: var(--radius-sm);
+  margin: 0;
+}
+
+.bt-sync-btn:hover:not(:disabled) {
+  color: var(--fg);
+}
+
+.bt-sync-btn:disabled {
+  opacity: 0.6;
+  cursor: wait;
+}
+
+.bt-sync-status {
+  font-size: 11px;
+  line-height: 1.3;
+  padding: 0 4px;
+  color: var(--fg-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bt-sync-status.is-error {
+  color: var(--accent-red);
+}
+
 /* Calendar */
 .calendar {
   width: 260px;

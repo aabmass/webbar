@@ -24,10 +24,49 @@ export function Bluetooth() {
   const [connectingPaths, setConnectingPaths] = useState<Set<string>>(
     () => new Set(),
   );
+  const [syncing, setSyncing] = useState(false);
+  const [syncStatus, setSyncStatus] = useState<{
+    kind: "ok" | "error";
+    text: string;
+  } | null>(null);
 
   const adapter = bt.adapters[0];
   const pairedDevices = bt.devices.filter((d) => d.paired);
   const connectedCount = pairedDevices.filter((d) => d.connected).length;
+
+  // TODO: Remove from the upstream example once sway-full-bar is moved into
+  // homemanager-config; assumes `bt-win-sync` is available on PATH.
+  async function syncFromWindows() {
+    if (syncing) return;
+    setSyncing(true);
+    setSyncStatus(null);
+    setError(null);
+    try {
+      const res = await window.webbar.exec(["bt-win-sync"]);
+      if (res.code === 0) {
+        const summary =
+          res.stdout
+            .trim()
+            .split("\n")
+            .filter(Boolean)
+            .at(-1) ?? "Synced from Windows";
+        setSyncStatus({ kind: "ok", text: summary });
+      } else {
+        const msg =
+          res.stderr.trim() ||
+          res.stdout.trim() ||
+          `bt-win-sync exited with ${res.code ?? "error"}`;
+        setSyncStatus({ kind: "error", text: msg });
+      }
+    } catch (err) {
+      setSyncStatus({
+        kind: "error",
+        text: err instanceof Error ? err.message : String(err),
+      });
+    } finally {
+      setSyncing(false);
+    }
+  }
 
   async function toggleDevice(device: BluetoothDevice) {
     setConnectingPaths((prev) => new Set(prev).add(device.path));
@@ -133,6 +172,25 @@ export function Bluetooth() {
                 </button>
               );
             })
+          )}
+        </div>
+        <div className="bt-popover-footer">
+          <button
+            type="button"
+            className="bar-btn bt-sync-btn"
+            disabled={syncing}
+            title="Sync Bluetooth pairing keys from Windows (bt-win-sync)"
+            onClick={() => void syncFromWindows()}
+          >
+            {syncing ? "Syncing from Windows…" : "Sync from Windows"}
+          </button>
+          {syncStatus && (
+            <div
+              className={`bt-sync-status is-${syncStatus.kind}`}
+              title={syncStatus.text}
+            >
+              {syncStatus.text}
+            </div>
           )}
         </div>
       </Popover>
