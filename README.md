@@ -2,7 +2,7 @@
 
 Build your Sway status bar with plain HTML, CSS, and TypeScript/React—without switching away from Sway or reinventing Linux D-Bus plumbing.
 
-`webbar` is a Rust Wayland host (`gtk4` + `gtk4-layer-shell` + `webkit6`) that docks a transparent WebView at the top of each monitor and automatically injects `window.webbar` into every page with reactive stores (`sway`, `tray`, `notifications`, `audio`, `bluetooth`, `network`, `backlight`) plus Promise-based `dbus` and `exec` escape hatches.
+`webbar` is a Rust Wayland host (`gtk4` + `gtk4-layer-shell` + `webkit6`) that docks a transparent WebView at the top of each monitor and automatically injects `window.webbar` into every page with reactive stores (`sway`, `tray`, `notifications`, `audio`, `bluetooth`, `network`, `backlight`, `theme`) plus Promise-based `dbus` and `exec` escape hatches. System appearance (dark/light mode, accent color, font, and GTK4/Libadwaita colors) is also injected as `--desktop-*` and `--gtk-*` CSS variables—see [THEMING.md](THEMING.md).
 
 ## Usage
 
@@ -129,5 +129,5 @@ npm run --workspaces build
 
 - Rust payload types use `ts-rs` to generate `preload/src/generated/*.ts` (verified in sync by `nix flake check`).
 - `preload/` is packaged as the `@webbar/types` workspace (`preload/src/preload.ts` and `preload/src/index.ts`), compiling `generated/preload.js` and `preload/dist/` while providing `{ get, subscribe, onChange }` stores compatible with React's `useSyncExternalStore` and vanilla TypeScript, `window.webbar.output` per monitor, and `AbortSignal` cancellation on `exec` and `dbus.watch`.
-- System state (`sway`, `tray`, `notifications`, `audio`, `bluetooth`, `network`, `backlight`) is aggregated once in the Rust host and shared across all monitor WebViews.
+- System state (`sway`, `tray`, `notifications`, `audio`, `bluetooth`, `network`, `backlight`, `theme`) is aggregated once in the Rust host and shared across all monitor WebViews.
 - [`src/dbus_json.rs`](src/dbus_json.rs) and [`src/tray.rs`](src/tray.rs) were originally inspired by [domicile](https://github.com/cprussin/domicile) (MIT License).

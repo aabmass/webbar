@@ -275,6 +275,7 @@ pub enum BridgeEvent {
         error: Option<String>,
         displays: Vec<crate::backlight::BacklightDisplay>,
     },
+    Theme(crate::theme::ThemeState),
     // Escape-hatch events
     DbusMatchStarted {
         id: u32,
@@ -315,6 +316,7 @@ pub type SendEvent = Arc<dyn Fn(BridgeEvent) + Send + Sync>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum SnapshotKey {
+    Theme,
     Sway,
     Tray,
     Notifications,
@@ -327,6 +329,7 @@ pub enum SnapshotKey {
 impl BridgeEvent {
     pub fn snapshot_key(&self) -> Option<SnapshotKey> {
         match self {
+            BridgeEvent::Theme(_) => Some(SnapshotKey::Theme),
             BridgeEvent::SwayState(_) => Some(SnapshotKey::Sway),
             BridgeEvent::Tray { .. } => Some(SnapshotKey::Tray),
             BridgeEvent::Notifications { .. } => Some(SnapshotKey::Notifications),
@@ -362,6 +365,7 @@ impl SnapshotCache {
             return Vec::new();
         };
         let order = [
+            SnapshotKey::Theme,
             SnapshotKey::Sway,
             SnapshotKey::Tray,
             SnapshotKey::Notifications,
@@ -482,6 +486,7 @@ mod tests {
             displays: Vec::new(),
         });
         cache.record(&BridgeEvent::SwayState(Box::new(crate::sway_ipc::test_state())));
+        cache.record(&BridgeEvent::Theme(crate::theme::ThemeState::default()));
         cache.record(&BridgeEvent::RpcReply {
             id: 1,
             ok: true,
@@ -490,10 +495,11 @@ mod tests {
         });
 
         let all = cache.snapshot_all();
-        assert_eq!(all.len(), 2);
-        assert!(matches!(all[0], BridgeEvent::SwayState(_)));
+        assert_eq!(all.len(), 3);
+        assert!(matches!(all[0], BridgeEvent::Theme(_)));
+        assert!(matches!(all[1], BridgeEvent::SwayState(_)));
         assert!(matches!(
-            all[1],
+            all[2],
             BridgeEvent::BacklightState {
                 brightness: Some(80),
                 ..

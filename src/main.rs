@@ -9,6 +9,7 @@ mod notifications;
 mod process_bridge;
 mod sway_ipc;
 mod sway_state;
+mod theme;
 mod tray;
 mod ws_bridge;
 
@@ -29,7 +30,7 @@ use gtk4_layer_shell::{Edge, KeyboardMode, Layer, LayerShell};
 use webkit6::prelude::*;
 use webkit6::{
     LoadEvent, UserContentInjectedFrames, UserContentManager, UserScript,
-    UserScriptInjectionTime, WebContext, WebView,
+    UserScriptInjectionTime, UserStyleLevel, UserStyleSheet, WebContext, WebView,
 };
 
 use crate::audio::AudioController;
@@ -173,7 +174,8 @@ struct HostServices {
 }
 
 impl HostServices {
-    fn start(send_event: SendEvent, claim_dbus_servers: bool) -> Arc<Self> {
+    fn start(send_event: SendEvent, claim_dbus_servers: bool) -> (Arc<Self>, theme::ThemeState) {
+        let initial_theme = theme::start_theme_watcher(send_event.clone());
         let notifications = NotificationStore::new(send_event.clone());
         let tray_menus = tray::TrayMenuWatcher::new(send_event.clone());
         if claim_dbus_servers {
@@ -188,14 +190,17 @@ impl HostServices {
         network::spawn(send_event.clone());
         let backlight = backlight::spawn(send_event);
 
-        Arc::new(Self {
-            notifications,
-            audio,
-            bluetooth,
-            backlight,
-            sway: sway_ipc::SwayCommands::spawn(),
-            tray_menus,
-        })
+        (
+            Arc::new(Self {
+                notifications,
+                audio,
+                bluetooth,
+                backlight,
+                sway: sway_ipc::SwayCommands::spawn(),
+                tray_menus,
+            }),
+            initial_theme,
+        )
     }
 
     fn dispatch(
@@ -363,7 +368,7 @@ impl HostServices {
     }
 }
 
-fn start_ws_bridge(config: &Config, claim_dbus_servers: bool) -> (u16, String) {
+fn start_ws_bridge(config: &Config, claim_dbus_servers: bool) -> (u16, String, theme::ThemeState) {
     let snapshots = SnapshotCache::new();
     let broadcaster = ws_bridge::WsBroadcaster::new();
     let send_event: SendEvent = {
@@ -378,7 +383,7 @@ fn start_ws_bridge(config: &Config, claim_dbus_servers: bool) -> (u16, String) {
         })
     };
 
-    let services = HostServices::start(send_event, claim_dbus_servers);
+    let (services, initial_theme) = HostServices::start(send_event, claim_dbus_servers);
     let requested_port = config.ws_bridge.unwrap_or(0);
     let token = config
         .ws_token
@@ -400,7 +405,7 @@ fn start_ws_bridge(config: &Config, claim_dbus_servers: bool) -> (u16, String) {
             std::process::exit(1);
         }
     };
-    (bound_port, token)
+    (bound_port, token, initial_theme)
 }
 
 fn main() {
@@ -434,7 +439,7 @@ fn activate(app: &Application, config: &Config) {
         register_webbar_scheme(dir.clone());
     }
 
-    let (ws_port, ws_token) = start_ws_bridge(config, true);
+    let (ws_port, ws_token, initial_theme) = start_ws_bridge(config, true);
 
     let Some(display) = gdk::Display::default() else {
         eprintln!("webbar: no GDK display available");
@@ -455,6 +460,7 @@ fn activate(app: &Application, config: &Config) {
     let windows: Rc<RefCell<HashMap<glib::Object, ApplicationWindow>>> =
         Rc::new(RefCell::new(HashMap::new()));
 
+    let initial_theme_css = theme::format_root_css(&initial_theme);
     let sync_monitors = {
         let app = app.clone();
         let config = config.clone();
@@ -471,7 +477,14 @@ fn activate(app: &Application, config: &Config) {
                     continue;
                 }
                 if let Ok(monitor) = obj.clone().downcast::<Monitor>() {
-                    let win = create_bar_window(&app, &monitor, &config, ws_port, &ws_token);
+                    let win = create_bar_window(
+                        &app,
+                        &monitor,
+                        &config,
+                        ws_port,
+                        &ws_token,
+                        &initial_theme_css,
+                    );
                     windows.borrow_mut().insert(obj, win);
                 }
             }
@@ -747,6 +760,7 @@ fn create_bar_window(
     config: &Config,
     ws_port: u16,
     ws_token: &str,
+    initial_theme_css: &str,
 ) -> ApplicationWindow {
     let geom = monitor.geometry();
     let input_state = Rc::new(RefCell::new(WindowInputState::new(
@@ -823,6 +837,13 @@ fn create_bar_window(
     });
 
     let ucm = UserContentManager::new();
+    ucm.add_style_sheet(&UserStyleSheet::new(
+        initial_theme_css,
+        UserContentInjectedFrames::TopFrame,
+        UserStyleLevel::Author,
+        &[],
+        &[],
+    ));
     ucm.add_script(&UserScript::new(
         PRELOAD_JS,
         UserContentInjectedFrames::TopFrame,

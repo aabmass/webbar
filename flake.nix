@@ -126,6 +126,7 @@
             buildInputs = with pkgs; [
               gtk4
               gtk4-layer-shell
+              libadwaita
               webkitgtk_6_0
               glib
               dbus
@@ -297,6 +298,7 @@
           buildInputs = with pkgs; [
             gtk4
             gtk4-layer-shell
+            libadwaita
             webkitgtk_6_0
             glib
             dbus

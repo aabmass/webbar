@@ -10,8 +10,8 @@ body {
   height: 34px;
   overflow: hidden;
   background: transparent;
-  color: #e6edf3;
-  font-family: system-ui, -apple-system, sans-serif;
+  color: var(--desktop-window-fg, #e6edf3);
+  font-family: var(--desktop-font-family, system-ui, -apple-system, sans-serif);
   font-size: 12px;
   user-select: none;
 }
@@ -24,8 +24,8 @@ body {
   width: 100%;
   height: 34px;
   padding: 0 10px;
-  background: rgba(18, 20, 26, 0.88);
-  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  background: color-mix(in srgb, var(--desktop-window-bg, #12141a) 90%, transparent);
+  border-bottom: 1px solid var(--desktop-border-color, rgba(255, 255, 255, 0.08));
 }
 
 .group {
@@ -61,8 +61,8 @@ body {
   height: 24px;
   padding: 0 10px;
   border-radius: 999px;
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid var(--desktop-border-color, rgba(255, 255, 255, 0.1));
+  background: color-mix(in srgb, var(--desktop-window-fg, #ffffff) 6%, transparent);
   color: inherit;
   font: inherit;
   white-space: nowrap;
@@ -77,7 +77,7 @@ body {
 }
 
 .clickable:hover {
-  background: rgba(255, 255, 255, 0.12);
+  background: color-mix(in srgb, var(--desktop-window-fg, #ffffff) 12%, transparent);
 }
 
 .ws-pill {
@@ -87,32 +87,32 @@ body {
 }
 
 .ws-pill[data-visible="true"] {
-  border-color: rgba(255, 255, 255, 0.25);
-  background: rgba(255, 255, 255, 0.1);
+  border-color: color-mix(in srgb, var(--desktop-window-fg, #ffffff) 25%, transparent);
+  background: color-mix(in srgb, var(--desktop-window-fg, #ffffff) 10%, transparent);
 }
 
 .ws-pill[data-focused="true"] {
-  border-color: rgba(88, 166, 255, 0.7);
-  background: rgba(88, 166, 255, 0.22);
-  color: #a5d6ff;
+  border-color: var(--desktop-accent-bg, #58a6ff);
+  background: color-mix(in srgb, var(--desktop-accent-bg, #58a6ff) 22%, transparent);
+  color: var(--desktop-accent-color, #a5d6ff);
   font-weight: 600;
 }
 
 .ws-pill[data-urgent="true"] {
-  border-color: rgba(248, 81, 73, 0.8);
-  background: rgba(248, 81, 73, 0.24);
-  color: #ffa198;
+  border-color: var(--desktop-destructive-bg, #f85149);
+  background: color-mix(in srgb, var(--desktop-destructive-bg, #f85149) 24%, transparent);
+  color: var(--desktop-destructive-color, #ffa198);
 }
 
 .mode-badge {
-  border-color: rgba(210, 153, 34, 0.7);
-  background: rgba(210, 153, 34, 0.22);
-  color: #f0c674;
+  border-color: var(--desktop-warning-bg, #d29922);
+  background: color-mix(in srgb, var(--desktop-warning-bg, #d29922) 22%, transparent);
+  color: var(--desktop-warning-color, #f0c674);
   font-weight: 600;
 }
 
 .focused-title {
-  color: #9da7b3;
+  color: color-mix(in srgb, var(--desktop-window-fg, #e6edf3) 68%, transparent);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -130,45 +130,45 @@ body {
 }
 
 #audio-status[data-state="muted"] {
-  border-color: rgba(210, 153, 34, 0.55);
-  color: #f0c674;
+  border-color: color-mix(in srgb, var(--desktop-warning-bg, #d29922) 55%, transparent);
+  color: var(--desktop-warning-color, #f0c674);
 }
 
 #network-status[data-state="connected"] {
-  border-color: rgba(126, 231, 135, 0.4);
+  border-color: color-mix(in srgb, var(--desktop-success-bg, #7ee787) 45%, transparent);
 }
 
 #network-status[data-state="portal"],
 #network-status[data-state="limited"] {
-  border-color: rgba(210, 153, 34, 0.55);
-  color: #f0c674;
+  border-color: color-mix(in srgb, var(--desktop-warning-bg, #d29922) 55%, transparent);
+  color: var(--desktop-warning-color, #f0c674);
 }
 
 #network-status[data-state="offline"],
 #network-status[data-state="error"] {
-  border-color: rgba(248, 81, 73, 0.45);
-  color: #ffa198;
+  border-color: color-mix(in srgb, var(--desktop-error-bg, #f85149) 45%, transparent);
+  color: var(--desktop-error-color, #ffa198);
 }
 
 #bt-status[data-state="connected"] {
-  border-color: rgba(88, 166, 255, 0.55);
-  background: rgba(88, 166, 255, 0.16);
-  color: #a5d6ff;
+  border-color: color-mix(in srgb, var(--desktop-accent-bg, #58a6ff) 55%, transparent);
+  background: color-mix(in srgb, var(--desktop-accent-bg, #58a6ff) 16%, transparent);
+  color: var(--desktop-accent-color, #a5d6ff);
 }
 
 #bt-status[data-state="on"] {
-  border-color: rgba(126, 231, 135, 0.4);
+  border-color: color-mix(in srgb, var(--desktop-success-bg, #7ee787) 45%, transparent);
 }
 
 #bt-status[data-state="error"] {
-  border-color: rgba(248, 81, 73, 0.55);
-  color: #ffa198;
+  border-color: color-mix(in srgb, var(--desktop-error-bg, #f85149) 55%, transparent);
+  color: var(--desktop-error-color, #ffa198);
 }
 
 #notif-status[data-has-items="true"] {
-  border-color: rgba(210, 153, 34, 0.55);
-  background: rgba(210, 153, 34, 0.18);
-  color: #f0c674;
+  border-color: color-mix(in srgb, var(--desktop-warning-bg, #d29922) 55%, transparent);
+  background: color-mix(in srgb, var(--desktop-warning-bg, #d29922) 18%, transparent);
+  color: var(--desktop-warning-color, #f0c674);
 }
 
 .clear-btn {
@@ -177,5 +177,5 @@ body {
 }
 
 .clear-btn:hover {
-  background: rgba(248, 81, 73, 0.25);
+  background: color-mix(in srgb, var(--desktop-destructive-bg, #f85149) 25%, transparent);
 }

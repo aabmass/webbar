@@ -18,6 +18,7 @@ import type { NotificationItem } from "./generated/NotificationItem";
 import type { NotificationUrgency } from "./generated/NotificationUrgency";
 import type { SwayCommandError as SwayCommandErrorData } from "./generated/SwayCommandError";
 import type { SwayNode, SwayState, SwayWorkspace } from "./generated/sway";
+import type { ThemeState } from "./generated/ThemeState";
 import type { TrayItem } from "./generated/TrayItem";
 import type { TrayMenuItem } from "./generated/TrayMenuItem";
 
@@ -52,6 +53,7 @@ export type {
   NotificationAction,
   NotificationItem,
   NotificationUrgency,
+  ThemeState,
   TrayItem,
   TrayMenuItem,
 };
@@ -151,6 +153,7 @@ export type WebbarApi = {
   backlight: Store<BacklightState> & {
     set: (percent: number, displayId?: string) => Promise<void>;
   };
+  theme: Store<ThemeState>;
   acquireOverlay: () => () => void;
   setInputRegion: (rects: InputRect[]) => void;
   resetInputRegion: () => void;
@@ -329,6 +332,49 @@ function storeView<T, E extends Record<string, unknown>>(
   };
 }
 
+export function applyThemeToDocument(
+  state: ThemeState,
+  root: HTMLElement | undefined = typeof document !== "undefined"
+    ? document.documentElement
+    : undefined,
+): void {
+  if (!root || !root.style) {
+    return;
+  }
+
+  const mode = state.dark ? "dark" : "light";
+  if (root.dataset) {
+    root.dataset.desktopTheme = mode;
+  }
+  root.style.colorScheme = mode;
+  root.style.setProperty("--desktop-font-family", state.font_family);
+  root.style.setProperty("--desktop-font-size", state.font_size);
+  root.style.setProperty("--desktop-font-weight", String(state.font_weight));
+  if (state.monospace_font_family) {
+    root.style.setProperty(
+      "--desktop-monospace-font-family",
+      state.monospace_font_family,
+    );
+  } else {
+    root.style.removeProperty("--desktop-monospace-font-family");
+  }
+  root.style.setProperty(
+    "--desktop-enable-animations",
+    state.enable_animations ? "1" : "0",
+  );
+
+  for (const [key, val] of Object.entries(state.desktop_colors)) {
+    if (typeof val === "string") {
+      root.style.setProperty(`--desktop-${key}`, val);
+    }
+  }
+  for (const [key, val] of Object.entries(state.gtk_colors)) {
+    if (typeof val === "string") {
+      root.style.setProperty(`--gtk-${key}`, val);
+    }
+  }
+}
+
 export function createWebbarBridge(
   postMessage: (json: string) => void,
   output = "",
@@ -471,6 +517,20 @@ export function createWebbarBridge(
       error: null,
       displays: [],
     }),
+    theme: createStore<ThemeState>({
+      dark: true,
+      high_contrast: false,
+      theme_name: "Adwaita",
+      icon_theme_name: "Adwaita",
+      font_family: '"Cantarell", sans-serif',
+      font_size: "11pt",
+      font_weight: 400,
+      monospace_font_family: null,
+      enable_animations: true,
+      accent_color: null,
+      desktop_colors: {},
+      gtk_colors: {},
+    }),
   };
 
   type MenuStoreEntry = {
@@ -588,6 +648,11 @@ export function createWebbarBridge(
         error: typeof e.error === "string" ? e.error : null,
         displays: (e.displays as BacklightDisplay[]) ?? [],
       }),
+    theme: (e) => {
+      const next = e as unknown as ThemeState;
+      stores.theme._update(next);
+      applyThemeToDocument(next);
+    },
   };
 
   function receive(event: Record<string, unknown>): void {
@@ -803,6 +868,7 @@ export function createWebbarBridge(
           ...(displayId ? { display_id: displayId } : {}),
         }),
     }),
+    theme: storeView(stores.theme, {}),
     acquireOverlay: () => {
       explicitOverlayCount += 1;
       syncOverlay();

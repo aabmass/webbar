@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   SwayCommandError,
+  applyThemeToDocument,
   createStore,
   createWebbarBridge,
 } from "../dist/preload.mjs";
@@ -234,6 +235,32 @@ test("all window.webbar stores follow snapshot + subscribe + onChange contract",
         assert.equal(s.brightness, 65);
         assert.equal(s.displays.length, 1);
         assert.equal(s.displays[0].output, "DP-1");
+      },
+    },
+    {
+      name: "theme",
+      store: api.theme,
+      event: {
+        type: "theme",
+        dark: false,
+        high_contrast: false,
+        theme_name: "Adwaita",
+        icon_theme_name: "Adwaita",
+        font_family: '"Inter", sans-serif',
+        font_size: "10pt",
+        font_weight: 500,
+        monospace_font_family: '"JetBrains Mono", sans-serif',
+        enable_animations: true,
+        accent_color: "#3584e4",
+        desktop_colors: { "window-bg": "#fafafa", "accent-bg": "#3584e4" },
+        gtk_colors: { "theme-bg-color": "#fafafa" },
+      },
+      assertState: (s) => {
+        assert.equal(s.dark, false);
+        assert.equal(s.font_family, '"Inter", sans-serif');
+        assert.equal(s.font_weight, 500);
+        assert.equal(s.desktop_colors["window-bg"], "#fafafa");
+        assert.equal(s.gtk_colors["theme-bg-color"], "#fafafa");
       },
     },
   ];
@@ -1004,4 +1031,78 @@ test("tray.menu exposes a reactive store that watches/unwatches on subscribe", (
     [{ type: "tray_unwatch_menu", bus, menu_path: menuPath }],
   );
   assert.deepEqual(storeA.get(), []);
+});
+
+test("applyThemeToDocument sets and updates --desktop-* and --gtk-* CSS variables", () => {
+  const props = new Map();
+  const mockRoot = {
+    dataset: {},
+    style: {
+      colorScheme: "",
+      setProperty(k, v) {
+        props.set(k, v);
+      },
+      removeProperty(k) {
+        props.delete(k);
+      },
+    },
+  };
+
+  applyThemeToDocument(
+    {
+      dark: true,
+      high_contrast: false,
+      theme_name: "Adwaita",
+      icon_theme_name: "Adwaita",
+      font_family: '"Inter", sans-serif',
+      font_size: "11pt",
+      font_weight: 500,
+      monospace_font_family: '"JetBrains Mono", sans-serif',
+      enable_animations: true,
+      accent_color: "#89b4fa",
+      desktop_colors: { "window-bg": "#1e1e2e", "accent-bg": "#89b4fa" },
+      gtk_colors: { "theme-bg-color": "#1e1e2e" },
+    },
+    mockRoot,
+  );
+
+  assert.equal(mockRoot.dataset.desktopTheme, "dark");
+  assert.equal(mockRoot.style.colorScheme, "dark");
+  assert.equal(props.get("--desktop-font-family"), '"Inter", sans-serif');
+  assert.equal(props.get("--desktop-font-size"), "11pt");
+  assert.equal(props.get("--desktop-font-weight"), "500");
+  assert.equal(
+    props.get("--desktop-monospace-font-family"),
+    '"JetBrains Mono", sans-serif',
+  );
+  assert.equal(props.get("--desktop-enable-animations"), "1");
+  assert.equal(props.get("--desktop-window-bg"), "#1e1e2e");
+  assert.equal(props.get("--desktop-accent-bg"), "#89b4fa");
+  assert.equal(props.get("--gtk-theme-bg-color"), "#1e1e2e");
+
+  // Switching to light mode updates properties and removes monospace font when null
+  applyThemeToDocument(
+    {
+      dark: false,
+      high_contrast: false,
+      theme_name: "Adwaita",
+      icon_theme_name: "Adwaita",
+      font_family: '"Cantarell", sans-serif',
+      font_size: "11pt",
+      font_weight: 400,
+      monospace_font_family: null,
+      enable_animations: false,
+      accent_color: null,
+      desktop_colors: { "window-bg": "#fafafa" },
+      gtk_colors: { "theme-bg-color": "#ffffff" },
+    },
+    mockRoot,
+  );
+
+  assert.equal(mockRoot.dataset.desktopTheme, "light");
+  assert.equal(mockRoot.style.colorScheme, "light");
+  assert.equal(props.get("--desktop-enable-animations"), "0");
+  assert.equal(props.get("--desktop-window-bg"), "#fafafa");
+  assert.equal(props.get("--gtk-theme-bg-color"), "#ffffff");
+  assert.equal(props.has("--desktop-monospace-font-family"), false);
 });

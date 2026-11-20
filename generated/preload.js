@@ -136,6 +136,41 @@
       ...extra
     };
   }
+  function applyThemeToDocument(state, root = typeof document !== "undefined" ? document.documentElement : void 0) {
+    if (!root || !root.style) {
+      return;
+    }
+    const mode = state.dark ? "dark" : "light";
+    if (root.dataset) {
+      root.dataset.desktopTheme = mode;
+    }
+    root.style.colorScheme = mode;
+    root.style.setProperty("--desktop-font-family", state.font_family);
+    root.style.setProperty("--desktop-font-size", state.font_size);
+    root.style.setProperty("--desktop-font-weight", String(state.font_weight));
+    if (state.monospace_font_family) {
+      root.style.setProperty(
+        "--desktop-monospace-font-family",
+        state.monospace_font_family
+      );
+    } else {
+      root.style.removeProperty("--desktop-monospace-font-family");
+    }
+    root.style.setProperty(
+      "--desktop-enable-animations",
+      state.enable_animations ? "1" : "0"
+    );
+    for (const [key, val] of Object.entries(state.desktop_colors)) {
+      if (typeof val === "string") {
+        root.style.setProperty(`--desktop-${key}`, val);
+      }
+    }
+    for (const [key, val] of Object.entries(state.gtk_colors)) {
+      if (typeof val === "string") {
+        root.style.setProperty(`--gtk-${key}`, val);
+      }
+    }
+  }
   function createWebbarBridge(postMessage, output = "", isNativeOverlayActive = () => false) {
     let nextId = 1;
     let explicitOverlayCount = 0;
@@ -226,6 +261,20 @@
         brightness: null,
         error: null,
         displays: []
+      }),
+      theme: createStore({
+        dark: true,
+        high_contrast: false,
+        theme_name: "Adwaita",
+        icon_theme_name: "Adwaita",
+        font_family: '"Cantarell", sans-serif',
+        font_size: "11pt",
+        font_weight: 400,
+        monospace_font_family: null,
+        enable_animations: true,
+        accent_color: null,
+        desktop_colors: {},
+        gtk_colors: {}
       })
     };
     const menuStores = /* @__PURE__ */ new Map();
@@ -322,7 +371,12 @@
         brightness: typeof e.brightness === "number" ? e.brightness : null,
         error: typeof e.error === "string" ? e.error : null,
         displays: e.displays ?? []
-      })
+      }),
+      theme: (e) => {
+        const next = e;
+        stores.theme._update(next);
+        applyThemeToDocument(next);
+      }
     };
     function receive(event) {
       const type = event.type;
@@ -524,6 +578,7 @@
           ...displayId ? { display_id: displayId } : {}
         })
       }),
+      theme: storeView(stores.theme, {}),
       acquireOverlay: () => {
         explicitOverlayCount += 1;
         syncOverlay();

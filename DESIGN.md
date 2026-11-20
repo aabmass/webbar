@@ -11,7 +11,8 @@ Let users build a Sway status bar in plain HTML, CSS, and TypeScript/React—wit
 ┌──────────────────────────────────────────────────────────────────────┐
 │  User Bar UI (web/, examples/sway-full-bar/, or ~/.config/webbar/)   │
 │  HTML / CSS / TS / React using window.webbar.*                       │
-│  (sway, tray, notifications, audio, bluetooth, network, backlight)   │
+│  (sway, tray, notifications, audio, bluetooth, network, backlight,   │
+│   theme)                                                             │
 └─────────────────────────────────▲────────────────────────────────────┘
                                   │ injected at DocumentStart (or Vite entry)
 ┌─────────────────────────────────┴────────────────────────────────────┐
@@ -29,6 +30,7 @@ Let users build a Sway status bar in plain HTML, CSS, and TypeScript/React—wit
 │  - tray.rs (StatusNotifierWatcher + DBusMenu) + notifications.rs     │
 │  - audio.rs (libpulse) + bluetooth.rs (BlueZ) + network.rs (NM)      │
 │  - backlight.rs (ddcutil D-Bus + /sys/class/backlight + logind)      │
+│  - theme.rs (adw::StyleManager + gtk4::Settings + StyleContext)      │
 │  - dbus_bridge.rs / process_bridge.rs (Promise-based escape hatches) │
 └──────────────────────────────────────────────────────────────────────┘
 ```
@@ -58,3 +60,8 @@ Let users build a Sway status bar in plain HTML, CSS, and TypeScript/React—wit
    - Tray apps expose icons over D-Bus in multiple formats: theme icon names (`IconName` / `icon-name`), file paths, raw ARGB32 pixmaps (`IconPixmap`), or raw PNG bytes (`icon-data`).
    - Rust resolves all of these on the host (using GTK4's `IconTheme` for theme names and `gdk_pixbuf` for ARGB pixmaps) and sends the frontend a ready-to-render base64 `data:` URL in `icon_url`.
    - `icon_name` is also passed through so frontends can identify freedesktop `-symbolic` icons and recolor them with CSS `mask-image` to match the bar theme.
+
+6. **OS theming via `SnapshotCache` + `:root` CSS variables (`src/theme.rs`, `preload/src/preload.ts`)**
+   - WebKitGTK does not expose GTK4/Libadwaita colors or `gtk-font-name` to web content. `src/theme.rs` uses `libadwaita::StyleManager`, `gtk4::Settings`, `gtk4::pango::FontDescription`, and `gtk4::StyleContext::lookup_color` to watch dark/light mode, accent color, font, and GTK/Libadwaita named colors.
+   - `ThemeState` is broadcast as `BridgeEvent::Theme` through `SnapshotCache` and `ws_bridge.rs`, so both WebKitGTK bar windows and `--ws-bridge` external browsers receive live updates on `window.webbar.theme` and `:root` (`--desktop-*` semantic tokens, `--gtk-*` GTK named colors, `color-scheme`, and `data-desktop-theme`).
+   - In WebKitGTK mode, `src/main.rs` also injects the initial `:root` CSS block as a `UserStyleSheet` (`UserStyleLevel::Author`) so the first paint has zero flash before the WebSocket connects, after which `preload.ts` updates `document.documentElement.style` in place. See [THEMING.md](THEMING.md) for the user-facing variable reference.
