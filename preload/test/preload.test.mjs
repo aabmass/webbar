@@ -1106,3 +1106,65 @@ test("applyThemeToDocument sets and updates --desktop-* and --gtk-* CSS variable
   assert.equal(props.get("--gtk-theme-bg-color"), "#ffffff");
   assert.equal(props.has("--desktop-monospace-font-family"), false);
 });
+
+test("bridge theme events sync api.theme store and document.documentElement", () => {
+  const props = new Map();
+  const mockRoot = {
+    dataset: {},
+    style: {
+      colorScheme: "",
+      setProperty(k, v) {
+        props.set(k, v);
+      },
+      removeProperty(k) {
+        props.delete(k);
+      },
+    },
+  };
+
+  const prevDocument = globalThis.document;
+  globalThis.document = { documentElement: mockRoot };
+  try {
+    const { api, receive } = createWebbarBridge(() => {});
+    const seenDark = [];
+    const unsub = api.theme.subscribe(() => {
+      seenDark.push(api.theme.get().dark);
+    });
+
+    const base = {
+      type: "theme",
+      high_contrast: false,
+      theme_name: "Adwaita",
+      icon_theme_name: "Adwaita",
+      font_family: '"Inter", sans-serif',
+      font_size: "11pt",
+      font_weight: 400,
+      monospace_font_family: null,
+      enable_animations: true,
+      accent_color: null,
+      desktop_colors: {},
+      gtk_colors: {},
+    };
+
+    receive({ ...base, dark: false, desktop_colors: { "window-bg": "#fafafa" } });
+    assert.equal(api.theme.get().dark, false);
+    assert.equal(mockRoot.dataset.desktopTheme, "light");
+    assert.equal(mockRoot.style.colorScheme, "light");
+    assert.equal(props.get("--desktop-window-bg"), "#fafafa");
+
+    receive({ ...base, dark: true, desktop_colors: { "window-bg": "#1e1e2e" } });
+    assert.equal(api.theme.get().dark, true);
+    assert.equal(mockRoot.dataset.desktopTheme, "dark");
+    assert.equal(mockRoot.style.colorScheme, "dark");
+    assert.equal(props.get("--desktop-window-bg"), "#1e1e2e");
+    assert.deepEqual(seenDark, [false, true]);
+
+    unsub();
+  } finally {
+    if (prevDocument === undefined) {
+      delete globalThis.document;
+    } else {
+      globalThis.document = prevDocument;
+    }
+  }
+});
