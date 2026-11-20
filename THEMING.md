@@ -28,7 +28,7 @@ body {
 }
 ```
 
-See [web/style.css](file:///home/aaron/repo/webbar/web/style.css) for a complete minimal bar styled with `--desktop-*` tokens.
+See [examples/minimal/style.css](examples/minimal/style.css) for a complete minimal bar styled with `--desktop-*` tokens.
 
 ---
 

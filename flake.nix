@@ -25,7 +25,7 @@
 
           npmWorkspaceSrc = mkNpmSrc [
             ./preload
-            ./web
+            ./examples/minimal
             ./examples/sway-full-bar
             ./examples/react-tray
           ];
@@ -84,9 +84,9 @@
               '';
             };
 
-          webUi = mkWorkspaceUi {
-            pname = "webbar-ui";
-            workspace = "web";
+          minimalUi = mkWorkspaceUi {
+            pname = "webbar-minimal";
+            workspace = "examples/minimal";
           };
 
           swayFullBarUi = mkWorkspaceUi {
@@ -142,11 +142,6 @@
             preBuild = ''
               mkdir -p generated
               cp ${preloadPkg}/generated/preload.js generated/preload.js
-            '';
-
-            postInstall = ''
-              mkdir -p $out/share/webbar
-              cp -r ${webUi}/* $out/share/webbar/
             '';
 
             meta = with pkgs.lib; {
@@ -275,7 +270,7 @@
               '';
             });
             preload-test = preloadPkg;
-            web-ui = webUi;
+            minimal-ui = minimalUi;
             sway-full-bar-ui = swayFullBarUi;
             react-tray-ui = reactTrayUi;
           };

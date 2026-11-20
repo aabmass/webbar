@@ -9,7 +9,7 @@ Let users build a Sway status bar in plain HTML, CSS, and TypeScript/React—wit
 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
-│  User Bar UI (web/, examples/sway-full-bar/, or ~/.config/webbar/)   │
+│  User Bar UI (examples/minimal/, examples/sway-full-bar/, etc.)      │
 │  HTML / CSS / TS / React using window.webbar.*                       │
 │  (sway, tray, notifications, audio, bluetooth, network, backlight,   │
 │   theme)                                                             │
@@ -54,7 +54,7 @@ Let users build a Sway status bar in plain HTML, CSS, and TypeScript/React—wit
 
 4. **Explicit UI source (`--dir` / `--url` / `--ws-bridge`) + Nix**
    - `webbar` takes `--dir <path>` (served over a hardened `webbar://app/...` URI scheme), `--url <url>` (e.g., a Vite dev server for live reload), or `--ws-bridge <port>` alone for headless browser-dev mode.
-   - `flake.nix` provides a reproducible `devShell`, `packages.default` (installing `web/dist` into `$out/share/webbar`), and `sway-full-bar` / `sway-full-bar-dev` / `sway-full-bar-browser-dev` wrappers.
+   - `flake.nix` provides a reproducible `devShell`, `packages.default` (the `webbar` binary), and `sway-full-bar` / `sway-full-bar-dev` / `sway-full-bar-browser-dev` wrappers.
 
 5. **Tray & DBusMenu icons resolved in Rust to `data:` URLs (`src/tray.rs`)**
    - Tray apps expose icons over D-Bus in multiple formats: theme icon names (`IconName` / `icon-name`), file paths, raw ARGB32 pixmaps (`IconPixmap`), or raw PNG bytes (`icon-data`).

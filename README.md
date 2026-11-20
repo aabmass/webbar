@@ -17,8 +17,8 @@ webbar --dir ./examples/sway-full-bar/dist --height 86
 ## Running with Nix
 
 ```bash
-# Run with the built-in web/dist example
-nix run . -- --dir ./web/dist
+# Run with the minimal vanilla TS example
+nix run . -- --dir ./examples/minimal/dist
 
 # Run with the React tray example
 nix run . -- --dir ./examples/react-tray/dist
@@ -35,12 +35,12 @@ nix develop
 Requires `rustc`/`cargo`, `node`/`npm`, and system dev libraries for `gtk4`, `gtk4-layer-shell-0`, `webkitgtk-6.0`, and `libpulse`.
 
 ```bash
-# 1. Install workspace dependencies and build the default bar UI (or examples/react-tray)
+# 1. Install workspace dependencies and build an example bar UI (e.g. examples/minimal or examples/react-tray)
 npm install
-npm --workspace=web run build
+npm --workspace=examples/minimal run build
 
 # 2. Build and run webbar
-cargo run -- --dir ./web/dist
+cargo run -- --dir ./examples/minimal/dist
 ```
 
 ### Live Reload with Vite (`examples/sway-full-bar`)
@@ -120,7 +120,7 @@ npm install
 # Preload bridge (@webbar/types) build, typecheck, and contract tests
 npm --workspace=@webbar/types run build && npm --workspace=@webbar/types test
 
-# Typecheck and build all workspaces (preload, web, examples/sway-full-bar, examples/react-tray)
+# Typecheck and build all workspaces (preload, examples/minimal, examples/sway-full-bar, examples/react-tray)
 npm run --workspaces typecheck
 npm run --workspaces build
 ```
