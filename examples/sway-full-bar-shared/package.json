@@ -1,0 +1,20 @@
+{
+  "name": "@webbar/sway-full-bar-shared",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./audio": "./src/audio.ts",
+    "./clock": "./src/clock.ts",
+    "./devMocks": "./src/devMocks.ts",
+    "./popoverPosition": "./src/popoverPosition.ts",
+    "./stasis": "./src/stasis.ts",
+    "./tray": "./src/tray.ts",
+    "./workspaces": "./src/workspaces.ts",
+    "./styles/bar.css": "./styles/bar.css",
+    "./styles/theme.css": "./styles/theme.css"
+  },
+  "devDependencies": {
+    "@webbar/types": "0.1.0"
+  }
+}

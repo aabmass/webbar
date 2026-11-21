@@ -1,42 +1,11 @@
 import { memo, useCallback, useEffect, useRef, useState } from "react";
+import {
+  buildCalendarCells,
+  clockParts,
+  formatMonthLabel,
+  WEEKDAYS,
+} from "@webbar/sway-full-bar-shared/clock";
 import { Popover } from "./Popover";
-
-const TIME_FORMATTER = new Intl.DateTimeFormat("en-US", {
-  hour: "numeric",
-  minute: "2-digit",
-  second: "2-digit",
-  hour12: true,
-  timeZoneName: "short",
-});
-
-const DATE_FORMATTER = new Intl.DateTimeFormat("en-US", {
-  weekday: "long",
-  month: "long",
-  day: "numeric",
-  year: "numeric",
-});
-
-const MONTH_FORMATTER = new Intl.DateTimeFormat("en-US", {
-  month: "long",
-  year: "numeric",
-});
-
-function clockParts(date: Date) {
-  const parts = TIME_FORMATTER.formatToParts(date);
-  const get = (type: Intl.DateTimeFormatPartTypes) =>
-    parts.find((p) => p.type === type)?.value ?? "";
-  const time = `${get("hour")}:${get("minute")}`;
-  const seconds = `:${get("second")}`;
-  return {
-    time,
-    seconds,
-    ampm: get("dayPeriod"),
-    tz: get("timeZoneName"),
-    date: DATE_FORMATTER.format(date),
-  };
-}
-
-const WEEKDAYS = ["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"];
 
 type CalendarProps = {
   todayYear: number;
@@ -53,26 +22,8 @@ const Calendar = memo(function Calendar({
 
   const year = view.getFullYear();
   const month = view.getMonth();
-  const firstDow = new Date(year, month, 1).getDay();
-  const daysInMonth = new Date(year, month + 1, 0).getDate();
-
-  const prevMonthDays = new Date(year, month, 0).getDate();
-  const cells: { day: number; outside: boolean }[] = [];
-  for (let i = firstDow - 1; i >= 0; i--) {
-    cells.push({ day: prevMonthDays - i, outside: true });
-  }
-  for (let d = 1; d <= daysInMonth; d++) cells.push({ day: d, outside: false });
-  for (let d = 1; cells.length % 7 !== 0; d++) {
-    cells.push({ day: d, outside: true });
-  }
-
-  const isToday = (d: number) =>
-    d === todayDay && month === todayMonth && year === todayYear;
-
-  const isWeekend = (cellIdx: number) =>
-    cellIdx % 7 === 0 || cellIdx % 7 === 6;
-
-  const monthLabel = MONTH_FORMATTER.format(view);
+  const cells = buildCalendarCells(year, month, todayYear, todayMonth, todayDay);
+  const monthLabel = formatMonthLabel(view);
 
   return (
     <div className="calendar">
@@ -101,14 +52,14 @@ const Calendar = memo(function Calendar({
             {wd}
           </span>
         ))}
-        {cells.map(({ day, outside }, idx) => {
+        {cells.map((cell, idx) => {
           const classes = ["cal-day"];
-          if (outside) classes.push("is-outside");
-          else if (isToday(day)) classes.push("is-today");
-          if (isWeekend(idx)) classes.push("is-weekend");
+          if (cell.outside) classes.push("is-outside");
+          else if (cell.isToday) classes.push("is-today");
+          if (cell.isWeekend) classes.push("is-weekend");
           return (
             <span key={idx} className={classes.join(" ")}>
-              {day}
+              {cell.day}
             </span>
           );
         })}

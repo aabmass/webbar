@@ -5,7 +5,9 @@
   "workspaces": [
     "preload",
     "examples/minimal",
+    "examples/sway-full-bar-shared",
     "examples/sway-full-bar",
+    "examples/sway-full-bar-svelte",
     "examples/react-tray"
   ]
 }

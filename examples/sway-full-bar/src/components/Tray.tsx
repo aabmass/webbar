@@ -1,47 +1,11 @@
 import { useCallback, useRef, useState, useSyncExternalStore } from "react";
 import type { TrayItem, TrayMenuItem } from "@webbar/types";
+import {
+  classifyMenuItems,
+  normalizeMenuItems,
+  trayShortLabel,
+} from "@webbar/sway-full-bar-shared/tray";
 import { Popover } from "./Popover";
-
-function trayShortLabel(item: TrayItem): string {
-  const raw = item.title || item.icon_name || item.bus;
-  return raw.length > 14 ? `${raw.slice(0, 12)}…` : raw;
-}
-
-function normalizeMenuItems(items: TrayMenuItem[]): TrayMenuItem[] {
-  const result: TrayMenuItem[] = [];
-  for (const item of items) {
-    if (item.item_type === "separator") {
-      if (
-        result.length === 0 ||
-        result[result.length - 1].item_type === "separator"
-      ) {
-        continue;
-      }
-    }
-    result.push(item);
-  }
-  while (
-    result.length > 0 &&
-    result[result.length - 1].item_type === "separator"
-  ) {
-    result.pop();
-  }
-  return result;
-}
-
-function endsWithEllipsis(label: string): boolean {
-  const trimmed = label.trimEnd();
-  return trimmed.endsWith("...") || trimmed.endsWith("…");
-}
-
-function isPlainDisabled(entry: TrayMenuItem): boolean {
-  return (
-    !entry.enabled &&
-    entry.children.length === 0 &&
-    !entry.toggle_type &&
-    !entry.icon_url
-  );
-}
 
 function ChevronIcon({ expanded }: { expanded: boolean }) {
   return (
@@ -94,59 +58,40 @@ function MenuList({
   // Track expanded submenu by label rather than numeric id because apps like
   // nm-applet destroy and recreate menu items with fresh ids on LayoutUpdated.
   const [expandedLabel, setExpandedLabel] = useState<string | null>(null);
-  const normalized = normalizeMenuItems(items);
-  let prevWasSectionHeader = false;
+  const classified = classifyMenuItems(items);
 
   return (
     <div className="tray-menu-list" role="menu">
-      {normalized.map((entry, idx) => {
-        if (entry.item_type === "separator") {
-          prevWasSectionHeader = false;
+      {classified.map(({ kind, key, entry }) => {
+        if (kind === "separator") {
           return (
-            <div
-              key={`sep-${entry.id}-${idx}`}
-              className="tray-menu-sep"
-              role="separator"
-            />
+            <div key={key} className="tray-menu-sep" role="separator" />
           );
         }
 
-        const prev = idx > 0 ? normalized[idx - 1] : null;
-        const next = idx + 1 < normalized.length ? normalized[idx + 1] : null;
-        const isGroupStart = !prev || prev.item_type === "separator";
-        const hasNextInGroup = Boolean(next && next.item_type !== "separator");
-
-        if (isPlainDisabled(entry)) {
-          const isSectionHeader =
-            isGroupStart && hasNextInGroup && !endsWithEllipsis(entry.label);
-          if (isSectionHeader) {
-            prevWasSectionHeader = true;
-            return (
-              <div
-                key={entry.id}
-                className="tray-menu-section"
-                title={entry.accessible_desc || undefined}
-              >
-                {entry.label}
-              </div>
-            );
-          }
-
-          if (prevWasSectionHeader || normalized.length === 1) {
-            prevWasSectionHeader = false;
-            return (
-              <div
-                key={entry.id}
-                className="tray-menu-status"
-                title={entry.accessible_desc || undefined}
-              >
-                {entry.label}
-              </div>
-            );
-          }
+        if (kind === "section") {
+          return (
+            <div
+              key={key}
+              className="tray-menu-section"
+              title={entry.accessible_desc || undefined}
+            >
+              {entry.label}
+            </div>
+          );
         }
 
-        prevWasSectionHeader = false;
+        if (kind === "status") {
+          return (
+            <div
+              key={key}
+              className="tray-menu-status"
+              title={entry.accessible_desc || undefined}
+            >
+              {entry.label}
+            </div>
+          );
+        }
 
         const hasChildren = entry.children.length > 0;
         const isExpanded = expandedLabel === entry.label;

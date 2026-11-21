@@ -1,5 +1,12 @@
 import { useCallback, useRef, useState, useSyncExternalStore } from "react";
 import type { AudioDevice, AudioStream } from "@webbar/types";
+import {
+  fillPercentForVolume,
+  getActiveMic,
+  getActiveSpeaker,
+  openAudioMixer,
+  sliderMaxForVolume,
+} from "@webbar/sway-full-bar-shared/audio";
 import { MicIcon, MixerIcon, SpeakerIcon } from "./Icons";
 import { LevelReadout } from "./LevelReadout";
 import { Popover } from "./Popover";
@@ -35,8 +42,8 @@ function DeviceRow({
 
 function StreamRow({ stream }: { stream: AudioStream }) {
   const pct = Math.round(stream.volume * 100);
-  const sliderMax = stream.volume > 1 ? 1.5 : 1;
-  const fillPct = Math.min(100, (stream.volume / sliderMax) * 100);
+  const sliderMax = sliderMaxForVolume(stream.volume);
+  const fillPct = fillPercentForVolume(stream.volume);
 
   return (
     <div className="audio-stream-card">
@@ -93,28 +100,24 @@ export function AudioOutput() {
   const btnRef = useRef<HTMLButtonElement>(null);
   const close = useCallback(() => setOpen(false), []);
 
-  const speaker: AudioDevice | undefined =
-    audioState.outputs.find((o) => o.default) ?? audioState.outputs[0];
-  const mic: AudioDevice | undefined =
-    audioState.inputs.find((i) => i.default) ?? audioState.inputs[0];
+  const speaker = getActiveSpeaker(audioState);
+  const mic = getActiveMic(audioState);
 
   const volume = speaker?.volume ?? 0;
   const muted = speaker?.muted ?? false;
   const pct = Math.round(volume * 100);
-  const outputSliderMax = volume > 1 ? 1.5 : 1;
-  const outputFillPct = Math.min(100, (volume / outputSliderMax) * 100);
+  const outputSliderMax = sliderMaxForVolume(volume);
+  const outputFillPct = fillPercentForVolume(volume);
 
   const micVolume = mic?.volume ?? 0;
   const micMuted = mic?.muted ?? false;
   const micPct = Math.round(micVolume * 100);
-  const micSliderMax = micVolume > 1 ? 1.5 : 1;
-  const micFillPct = Math.min(100, (micVolume / micSliderMax) * 100);
+  const micSliderMax = sliderMaxForVolume(micVolume);
+  const micFillPct = fillPercentForVolume(micVolume);
 
   function openMixer() {
     close();
-    window.webbar.sway.command("exec pwvucontrol").catch(() => {
-      void window.webbar.exec(["pwvucontrol"]).catch(() => {});
-    });
+    openAudioMixer();
   }
 
   return (

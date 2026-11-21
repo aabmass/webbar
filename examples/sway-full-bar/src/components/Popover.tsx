@@ -7,6 +7,11 @@ import {
   type ReactNode,
   type RefObject,
 } from "react";
+import {
+  computePopoverPosition,
+  focusedWorkspaceKey,
+  type PopoverPosition,
+} from "@webbar/sway-full-bar-shared/popoverPosition";
 
 type PopoverProps = {
   open: boolean;
@@ -16,79 +21,15 @@ type PopoverProps = {
   children: ReactNode;
 };
 
-type PositionState = {
-  style: CSSProperties;
-  caret: "center" | "end" | "none";
-};
-
-const VIEWPORT_MARGIN = 8;
-
-function focusedWorkspaceKey(): string {
-  const s = window.webbar.sway.get();
-  const focused = s.workspaces.find((w) => w.focused);
-  return `${focused?.id ?? ""}:${s.mode}`;
-}
-
-function computePosition(
-  anchorEl: HTMLElement | null,
-  panelEl: HTMLElement | null,
-  align: "center" | "end",
-): PositionState {
-  const rect = anchorEl?.getBoundingClientRect();
-  // Open just below the bar (not the button) so the caret has room to show.
-  const barBottom =
-    anchorEl?.closest(".centerbox")?.getBoundingClientRect().bottom ??
-    rect?.bottom ??
-    80;
-  const top = Math.round(barBottom + 10);
-  const vw = window.innerWidth;
-  const panelWidth = panelEl?.getBoundingClientRect().width ?? 0;
-
-  if (align === "center" && rect) {
-    const anchorCenter = rect.left + rect.width / 2;
-    if (panelWidth > 0) {
-      const idealLeft = anchorCenter - panelWidth / 2;
-      const maxLeft = Math.max(VIEWPORT_MARGIN, vw - panelWidth - VIEWPORT_MARGIN);
-      const clampedLeft = Math.round(
-        Math.min(Math.max(VIEWPORT_MARGIN, idealLeft), maxLeft),
-      );
-      return {
-        caret: "center",
-        style: { top, left: clampedLeft },
-      };
-    }
-    return {
-      caret: "center",
-      style: {
-        top,
-        left: Math.round(anchorCenter),
-        transform: "translateX(-50%)",
-      },
-    };
+function toReactStyle(pos: PopoverPosition): CSSProperties {
+  const style: CSSProperties = { top: pos.top };
+  if (pos.left !== undefined) style.left = pos.left;
+  if (pos.right !== undefined) style.right = pos.right;
+  if (pos.transform) style.transform = pos.transform;
+  if (pos.caretRight) {
+    (style as Record<string, string>)["--caret-right"] = pos.caretRight;
   }
-
-  if (anchorEl && rect) {
-    // Derive the right edge from offsetWidth around the center so CSS :active
-    // scale() on the anchor button doesn't shift the popover between clicks.
-    const anchorCenter = rect.left + rect.width / 2;
-    const unscaledRight = anchorCenter + anchorEl.offsetWidth / 2;
-    let right = Math.max(VIEWPORT_MARGIN, Math.round(vw - unscaledRight));
-    if (panelWidth > 0) {
-      const maxRight = Math.max(VIEWPORT_MARGIN, vw - panelWidth - VIEWPORT_MARGIN);
-      right = Math.min(right, Math.round(maxRight));
-    }
-    const caretRight = vw - right - anchorCenter;
-    return {
-      caret: "end",
-      style: {
-        top,
-        right,
-        ["--caret-right" as string]: `${Math.max(12, Math.round(caretRight))}px`,
-      },
-    };
-  }
-
-  return { caret: "none", style: { top, right: 12 } };
+  return style;
 }
 
 export function Popover({
@@ -99,9 +40,10 @@ export function Popover({
   children,
 }: PopoverProps) {
   const panelRef = useRef<HTMLDivElement>(null);
-  const [position, setPosition] = useState<PositionState>({
+  const [position, setPosition] = useState<PopoverPosition>({
     caret: "none",
-    style: { top: 90, right: 12 },
+    top: 90,
+    right: 12,
   });
 
   useLayoutEffect(() => {
@@ -115,7 +57,9 @@ export function Popover({
     }
 
     const updatePosition = () => {
-      setPosition(computePosition(anchorRef.current, panelRef.current, align));
+      setPosition(
+        computePopoverPosition(anchorRef.current, panelRef.current, align),
+      );
     };
     updatePosition();
     window.addEventListener("resize", updatePosition);
@@ -187,7 +131,7 @@ export function Popover({
       ref={panelRef}
       popover="manual"
       className={`popover-panel caret-${position.caret}`}
-      style={position.style}
+      style={toReactStyle(position)}
       role="dialog"
     >
       {children}

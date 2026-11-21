@@ -26,7 +26,9 @@
           npmWorkspaceSrc = mkNpmSrc [
             ./preload
             ./examples/minimal
+            ./examples/sway-full-bar-shared
             ./examples/sway-full-bar
+            ./examples/sway-full-bar-svelte
             ./examples/react-tray
           ];
 
@@ -62,10 +64,10 @@
             '';
           };
 
-          mkWorkspaceUi = { pname, workspace }:
+          mkWorkspaceUi = { pname, workspace, extraDirs ? [] }:
             pkgs.buildNpmPackage {
               inherit pname version npmDeps;
-              src = mkNpmSrc [ ./preload (./. + "/${workspace}") ];
+              src = mkNpmSrc ([ ./preload (./. + "/${workspace}") ] ++ extraDirs);
               npmConfigHook = pkgs.importNpmLock.npmConfigHook;
               npmWorkspace = workspace;
 
@@ -92,6 +94,13 @@
           swayFullBarUi = mkWorkspaceUi {
             pname = "webbar-sway-full-bar";
             workspace = "examples/sway-full-bar";
+            extraDirs = [ ./examples/sway-full-bar-shared ];
+          };
+
+          swayFullBarSvelteUi = mkWorkspaceUi {
+            pname = "webbar-sway-full-bar-svelte";
+            workspace = "examples/sway-full-bar-svelte";
+            extraDirs = [ ./examples/sway-full-bar-shared ];
           };
 
           reactTrayUi = mkWorkspaceUi {
@@ -222,6 +231,10 @@
             sway-full-bar = pkgs.writeShellScriptBin "webbar-sway-full-bar" ''
               exec ${webbarPkg}/bin/webbar --dir ${swayFullBarUi} --height 86 --overlay-height 800 "$@"
             '';
+            sway-full-bar-svelte-ui = swayFullBarSvelteUi;
+            sway-full-bar-svelte = pkgs.writeShellScriptBin "webbar-sway-full-bar-svelte" ''
+              exec ${webbarPkg}/bin/webbar --dir ${swayFullBarSvelteUi} --height 86 --overlay-height 800 "$@"
+            '';
             sway-full-bar-dev = pkgs.writeShellApplication {
               name = "webbar-sway-full-bar-dev";
               runtimeInputs = [ pkgs.nodejs pkgs.curl ];
@@ -310,6 +323,67 @@
                 wait "$VITE_PID"
               '';
             };
+            sway-full-bar-svelte-browser-dev = pkgs.writeShellApplication {
+              name = "webbar-sway-full-bar-svelte-browser-dev";
+              runtimeInputs = [ pkgs.nodejs pkgs.curl pkgs.coreutils ];
+              text = ''
+                if [ ! -f examples/sway-full-bar-svelte/package.json ]; then
+                  echo "webbar-sway-full-bar-svelte-browser-dev: run from the webbar repository root" >&2
+                  exit 1
+                fi
+
+                if [ ! -d node_modules ]; then
+                  npm install
+                fi
+
+                if [ ! -f preload/dist/preload.mjs ]; then
+                  npm --workspace=@webbar/types run build
+                fi
+
+                WS_PORT="''${WEBBAR_WS_PORT:-9123}"
+                VITE_PORT="''${WEBBAR_VITE_PORT:-5174}"
+                WS_TOKEN="''${WEBBAR_WS_TOKEN:-$(head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n')}"
+
+                ${webbarPkg}/bin/webbar --ws-bridge "$WS_PORT" --ws-token "$WS_TOKEN" &
+                WS_PID=$!
+                VITE_PID=""
+                cleanup() {
+                  kill "$WS_PID" 2>/dev/null || true
+                  if [ -n "$VITE_PID" ]; then
+                    kill "$VITE_PID" 2>/dev/null || true
+                  fi
+                }
+                trap cleanup EXIT INT TERM
+
+                npm --workspace=examples/sway-full-bar-svelte run dev -- --port "$VITE_PORT" --strictPort &
+                VITE_PID=$!
+
+                ready=0
+                for _ in $(seq 1 100); do
+                  if ! kill -0 "$WS_PID" 2>/dev/null; then
+                    echo "webbar-sway-full-bar-svelte-browser-dev: ws-bridge exited early" >&2
+                    exit 1
+                  fi
+                  if ! kill -0 "$VITE_PID" 2>/dev/null; then
+                    echo "webbar-sway-full-bar-svelte-browser-dev: vite exited early" >&2
+                    exit 1
+                  fi
+                  if curl -fsS "http://localhost:$VITE_PORT" >/dev/null 2>&1; then
+                    ready=1
+                    break
+                  fi
+                  sleep 0.15
+                done
+
+                if [ "$ready" -ne 1 ]; then
+                  echo "webbar-sway-full-bar-svelte-browser-dev: timed out waiting for Vite on port $VITE_PORT" >&2
+                  exit 1
+                fi
+
+                echo "webbar-sway-full-bar-svelte-browser-dev: open http://localhost:$VITE_PORT?wsPort=$WS_PORT&wsToken=$WS_TOKEN"
+                wait "$VITE_PID"
+              '';
+            };
           };
 
           checks = {
@@ -335,6 +409,7 @@
             preload-test = preloadPkg;
             minimal-ui = minimalUi;
             sway-full-bar-ui = swayFullBarUi;
+            sway-full-bar-svelte-ui = swayFullBarSvelteUi;
             react-tray-ui = reactTrayUi;
           };
         };
