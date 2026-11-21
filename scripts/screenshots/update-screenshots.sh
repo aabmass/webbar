@@ -162,6 +162,11 @@ default_floating_border pixel 2
 client.focused          #8ab4f8 #18181c #ececf1 #8ab4f8 #8ab4f8
 client.focused_inactive #323442 #18181c #9a9aa6 #323442 #323442
 client.unfocused        #2a2c38 #18181c #9a9aa6 #2a2c38 #2a2c38
+assign [app_id="^demo-hero-"] workspace 1
+assign [app_id="demo-ws-2"] workspace 2
+assign [app_id="demo-ws-3"] workspace 3
+assign [app_id="demo-ws-q"] workspace q
+assign [app_id="demo-ws-w"] workspace w
 EOF
 
 WLR_BACKENDS=headless \
@@ -211,40 +216,46 @@ set_wallpaper() {
   sleep 0.3
 }
 
+ws_window_count() {
+  local ws="$1"
+  swaymsg -t get_tree | jq -r --arg ws "$ws" '
+    [.. | objects | select(.type? == "workspace" and .name? == $ws)
+     | .. | objects | select((.type? == "con" or .type? == "floating_con") and .pid? != null)] | length
+  ' 2>/dev/null || echo 0
+}
+
 wait_ws_count() {
   local ws="$1"
   local want="$2"
-  for _ in $(seq 1 80); do
+  for _ in $(seq 1 100); do
     local got
-    got="$(swaymsg -t get_tree | jq -r --arg ws "$ws" '
-      .. | objects | select(.type? == "workspace" and .name? == $ws)
-      | [.. | objects | select((.type? == "con" or .type? == "floating_con") and .pid? != null)] | length
-    ' 2>/dev/null || echo 0)"
-    if [ "${got:-0}" -ge "$want" ]; then
+    got="$(ws_window_count "$ws")"
+    if [ "${got:-0}" -eq "$want" ]; then
       return 0
     fi
-    sleep 0.08
+    sleep 0.05
   done
-  return 0
+  echo "update-screenshots: timed out waiting for workspace '$ws' to have $want windows (got $(ws_window_count "$ws"))" >&2
+  return 1
 }
 
 spawn_pane() {
-  local foot_cfg="$1"
-  local mode="$2"
-  local theme="$3"
-  foot --config "$foot_cfg" -- bash "$REPO_ROOT/scripts/screenshots/demo-panes.sh" "$mode" "$theme" "$REPO_ROOT" >"$WORK_DIR/foot-${mode}-${theme}.log" 2>&1 &
+  local app_id="$1"
+  local foot_cfg="$2"
+  local mode="$3"
+  local theme="$4"
+  foot --app-id "$app_id" --config "$foot_cfg" -- bash "$REPO_ROOT/scripts/screenshots/demo-panes.sh" "$mode" "$theme" "$REPO_ROOT" >"$WORK_DIR/foot-${app_id}-${theme}.log" 2>&1 &
   PIDS+=("$!")
 }
 
 populate_bg_workspaces() {
   local foot_cfg="$1"
-  # Give workspaces 2, 3, 4, q, w real windows so the 2-row workspace grid shows dots
+  # Give workspaces 2, 3, q, w real windows so the 2-row workspace grid shows dots
   for spec in "2:2" "3:1" "q:3" "w:1"; do
     local ws="${spec%%:*}"
     local count="${spec##*:}"
-    swaymsg "workspace $ws" >/dev/null
     for _ in $(seq 1 "$count"); do
-      spawn_pane "$foot_cfg" idle dark
+      spawn_pane "demo-ws-$ws" "$foot_cfg" idle dark
     done
     wait_ws_count "$ws" "$count"
   done
@@ -255,28 +266,30 @@ populate_hero_workspace() {
   local foot_cfg="$WORK_DIR/foot-${theme}.ini"
 
   swaymsg "workspace 1" >/dev/null
-  # Close any existing windows on workspace 1
-  swaymsg '[workspace="1"] kill' >/dev/null 2>&1 || true
-  sleep 0.25
+  # Close any existing hero windows on workspace 1 and wait until empty
+  swaymsg '[app_id="^demo-hero-"] kill' >/dev/null 2>&1 || true
+  wait_ws_count "1" 0
+  swaymsg "workspace 1" >/dev/null
 
-  # Left pane: syntax-highlighted App.tsx + theme.css
+  # Left pane: syntax-highlighted App.tsx
   swaymsg "splith" >/dev/null
-  spawn_pane "$foot_cfg" code "$theme"
+  spawn_pane "demo-hero-code" "$foot_cfg" code "$theme"
   wait_ws_count "1" 1
 
   # Top-right pane: zero-PII webbar fetch card
-  spawn_pane "$foot_cfg" fetch "$theme"
+  spawn_pane "demo-hero-fetch" "$foot_cfg" fetch "$theme"
   wait_ws_count "1" 2
 
   # Split vertically on the right pane for bottom-right status terminal
+  swaymsg '[app_id="demo-hero-fetch"] focus' >/dev/null
   swaymsg "splitv" >/dev/null
-  spawn_pane "$foot_cfg" status "$theme"
+  spawn_pane "demo-hero-status" "$foot_cfg" status "$theme"
   wait_ws_count "1" 3
 
   # Balance left pane wider (~56%) and focus the left code pane
-  swaymsg "focus left" >/dev/null
+  swaymsg '[app_id="demo-hero-code"] focus' >/dev/null
   swaymsg "resize set width 56 ppt" >/dev/null
-  sleep 0.35
+  sleep 0.4
 }
 
 WEBBAR_PID=""
