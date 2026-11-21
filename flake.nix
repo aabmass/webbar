@@ -279,6 +279,32 @@
               '';
             };
 
+          integrationTestPkg = pkgs.writeShellApplication {
+            name = "webbar-integration-test";
+            runtimeInputs = [
+              pkgs.sway
+              pkgs.dbus
+              pkgs.stasis
+              pkgs.playwright-test
+              pkgs.curl
+              pkgs.coreutils
+              (pkgs.python3.withPackages (ps: [
+                ps.dbus-python
+                ps.pygobject3
+              ]))
+            ];
+            text = ''
+              export WEBBAR_BIN="${webbarPkg}/bin/webbar"
+              export WEBBAR_PRELOAD_JS="${preloadPkg}/generated/preload.js"
+              export WEBBAR_REACT_UI_DIR="${swayFullBarUi}"
+              export WEBBAR_SVELTE_UI_DIR="${swayFullBarSvelteUi}"
+              export PLAYWRIGHT_BROWSERS_PATH="${pkgs.playwright-driver.browsers}"
+              export PLAYWRIGHT_NODE_MODULES="${pkgs.playwright-test}/lib/node_modules"
+              export PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
+              exec bash ./scripts/integration/run-parity-test.sh
+            '';
+          };
+
           mkBarDev = { name, workspace, defaultPort }:
             pkgs.writeShellApplication {
               inherit name;
@@ -316,6 +342,11 @@
               type = "app";
               program = "${updateScreenshotsPkg}/bin/webbar-update-screenshots";
               meta.description = "Regenerate README screenshots of sway-full-bar in an isolated headless Sway session";
+            };
+            integration-test = {
+              type = "app";
+              program = "${integrationTestPkg}/bin/webbar-integration-test";
+              meta.description = "Run React & Svelte UI parity tests against live Sway, D-Bus, Stasis, and webbar --ws-bridge";
             };
           };
 
@@ -376,6 +407,16 @@
             sway-full-bar-ui = swayFullBarUi;
             sway-full-bar-svelte-ui = swayFullBarSvelteUi;
             react-tray-ui = reactTrayUi;
+            integration-parity = pkgs.runCommand "webbar-integration-parity" {
+              nativeBuildInputs = [ integrationTestPkg ];
+            } ''
+              cd "${pkgs.lib.fileset.toSource {
+                root = ./.;
+                fileset = ./scripts/integration;
+              }}"
+              webbar-integration-test
+              touch "$out"
+            '';
           };
         };
     in

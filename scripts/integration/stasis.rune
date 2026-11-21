@@ -1,0 +1,16 @@
+default:
+  listen_dbus_inhibit true
+
+  lock_screen:
+    timeout 3600
+    command "true"
+  end
+end
+
+gaming:
+  mode "overlay"
+  lock_screen:
+    timeout 7200
+    command "true"
+  end
+end
