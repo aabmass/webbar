@@ -14,6 +14,28 @@ webbar --url http://localhost:5173
 webbar --dir ./examples/sway-full-bar/dist --height 86
 ```
 
+## Example Bar Screenshots
+
+`webbar` itself imposes no layout or styling—you build whatever bar you want with standard web technologies (HTML, CSS, and JavaScript/TypeScript). The screenshots below show [`examples/sway-full-bar`](examples/sway-full-bar), an included reference bar built for Sway that demonstrates workspaces, clock/calendar, system tray, idle controls, audio mixer, display brightness, Bluetooth, and automatic dark/light theming (see [THEMING.md](THEMING.md)).
+
+### Dark Theme
+
+![Example sway-full-bar dark desktop](docs/screenshots/hero-dark.png)
+
+### Adaptive Light Theme
+
+![Example sway-full-bar light desktop](docs/screenshots/hero-light.png)
+
+### Interactive Popovers
+
+| Audio Mixer | Clock & Calendar |
+| :---: | :---: |
+| ![Audio mixer popover](docs/screenshots/popover-audio.png) | ![Clock and calendar popover](docs/screenshots/popover-calendar.png) |
+| **Bluetooth** | **Display & Appearance** |
+| ![Bluetooth popover](docs/screenshots/popover-bluetooth.png) | ![Display and appearance popover](docs/screenshots/popover-display.png) |
+
+<!-- Regenerate example screenshots in an isolated headless Sway session with: nix run .#update-screenshots -->
+
 ## Running with Nix
 
 ```bash

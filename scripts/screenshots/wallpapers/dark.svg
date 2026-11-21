@@ -1,0 +1,60 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 900" width="1600" height="900">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0b0d14"/>
+      <stop offset="48%" stop-color="#111522"/>
+      <stop offset="100%" stop-color="#0c101a"/>
+    </linearGradient>
+
+    <radialGradient id="glowBlue" cx="22%" cy="18%" r="55%">
+      <stop offset="0%" stop-color="#8ab4f8" stop-opacity="0.28"/>
+      <stop offset="45%" stop-color="#3b6fd8" stop-opacity="0.11"/>
+      <stop offset="100%" stop-color="#0b0d14" stop-opacity="0"/>
+    </radialGradient>
+
+    <radialGradient id="glowMint" cx="80%" cy="76%" r="50%">
+      <stop offset="0%" stop-color="#6fcf97" stop-opacity="0.22"/>
+      <stop offset="48%" stop-color="#2b8a6e" stop-opacity="0.08"/>
+      <stop offset="100%" stop-color="#0b0d14" stop-opacity="0"/>
+    </radialGradient>
+
+    <radialGradient id="glowViolet" cx="62%" cy="22%" r="42%">
+      <stop offset="0%" stop-color="#9d7cd8" stop-opacity="0.18"/>
+      <stop offset="55%" stop-color="#4e3d7a" stop-opacity="0.06"/>
+      <stop offset="100%" stop-color="#0b0d14" stop-opacity="0"/>
+    </radialGradient>
+
+    <linearGradient id="wave1" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#8ab4f8" stop-opacity="0.14"/>
+      <stop offset="100%" stop-color="#6fcf97" stop-opacity="0.04"/>
+    </linearGradient>
+
+    <linearGradient id="wave2" x1="100%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#9d7cd8" stop-opacity="0.12"/>
+      <stop offset="100%" stop-color="#8ab4f8" stop-opacity="0.02"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="1600" height="900" fill="url(#bg)"/>
+  <rect width="1600" height="900" fill="url(#glowBlue)"/>
+  <rect width="1600" height="900" fill="url(#glowMint)"/>
+  <rect width="1600" height="900" fill="url(#glowViolet)"/>
+
+  <!-- Layered translucent waves -->
+  <path d="M-40 620 C 260 470, 560 720, 920 560 C 1220 425, 1420 510, 1660 410 L 1660 940 L -40 940 Z" fill="url(#wave1)"/>
+  <path d="M-40 730 C 310 610, 620 820, 980 680 C 1280 565, 1460 660, 1660 580 L 1660 940 L -40 940 Z" fill="url(#wave2)"/>
+
+  <!-- Subtle topographic contour lines -->
+  <g fill="none" stroke="#8ab4f8" stroke-opacity="0.09" stroke-width="1.2">
+    <path d="M-60 280 C 220 210, 440 350, 760 260 C 1080 170, 1320 290, 1660 190"/>
+    <path d="M-60 330 C 240 260, 470 400, 790 310 C 1100 220, 1340 335, 1660 245"/>
+    <path d="M-60 380 C 260 310, 500 450, 820 360 C 1120 275, 1360 385, 1660 300"/>
+    <path d="M-60 430 C 280 365, 530 500, 850 410 C 1140 330, 1380 435, 1660 355"/>
+  </g>
+
+  <g fill="none" stroke="#6fcf97" stroke-opacity="0.07" stroke-width="1.2">
+    <path d="M-60 680 C 290 560, 610 760, 960 630 C 1260 520, 1450 610, 1660 530"/>
+    <path d="M-60 735 C 310 620, 635 810, 990 685 C 1285 580, 1470 660, 1660 590"/>
+    <path d="M-60 790 C 335 680, 665 860, 1020 740 C 1310 640, 1490 715, 1660 650"/>
+  </g>
+</svg>

@@ -151,8 +151,45 @@
               platforms = platforms.linux;
             };
           });
+
+          # Dev-only runner exposed strictly under `apps.update-screenshots` so
+          # headless Sway / terminal / image tooling is never pulled in by
+          # normal builds, `packages.*`, `devShells`, or `checks`.
+          updateScreenshotsPkg = pkgs.writeShellApplication {
+            name = "webbar-update-screenshots";
+            runtimeInputs = with pkgs; [
+              sway
+              swaybg
+              foot
+              grim
+              dbus
+              bat
+              python3
+              librsvg
+              oxipng
+              jq
+              curl
+              coreutils
+              fontconfig
+              bash
+            ];
+            text = ''
+              export WEBBAR_BIN="${webbarPkg}/bin/webbar"
+              export WEBBAR_UI_DIR="${swayFullBarUi}"
+              export FONT_DIRS="${pkgs.inter}/share/fonts:${pkgs.jetbrains-mono}/share/fonts:${pkgs.dejavu_fonts}/share/fonts"
+              exec bash ./scripts/screenshots/update-screenshots.sh "$@"
+            '';
+          };
         in
         {
+          apps = {
+            update-screenshots = {
+              type = "app";
+              program = "${updateScreenshotsPkg}/bin/webbar-update-screenshots";
+              meta.description = "Regenerate README screenshots of sway-full-bar in an isolated headless Sway session";
+            };
+          };
+
           packages = {
             default = webbarPkg;
             sway-full-bar-ui = swayFullBarUi;
@@ -277,6 +314,7 @@
         };
     in
     {
+      apps = forAllSystems (pkgs: (mkSystemOutputs pkgs).apps);
       packages = forAllSystems (pkgs: (mkSystemOutputs pkgs).packages);
       checks = forAllSystems (pkgs: (mkSystemOutputs pkgs).checks);
 
