@@ -152,12 +152,11 @@
             };
           });
 
-          # Dev-only runner exposed strictly under `apps.update-screenshots` so
-          # headless Sway / terminal / image tooling is never pulled in by
-          # normal builds, `packages.*`, `devShells`, or `checks`.
-          updateScreenshotsPkg = pkgs.writeShellApplication {
-            name = "webbar-update-screenshots";
-            runtimeInputs = with pkgs; [
+          # Dev-only hermetic screenshot builder exposed strictly under
+          # `apps.update-screenshots` so headless Sway / terminal / image
+          # tooling is never pulled in by `packages.*` or `devShells.*`.
+          screenshotsPkg = pkgs.runCommand "webbar-screenshots" {
+            nativeBuildInputs = with pkgs; [
               sway
               swaybg
               foot
@@ -173,11 +172,38 @@
               fontconfig
               bash
             ];
+          } ''
+            export WEBBAR_BIN="${webbarPkg}/bin/webbar"
+            export WEBBAR_UI_DIR="${swayFullBarUi}"
+            export FONT_DIRS="${pkgs.inter}/share/fonts:${pkgs.jetbrains-mono}/share/fonts:${pkgs.dejavu_fonts}/share/fonts"
+            export OUT_DIR="$out"
+            # nix-daemon is already the networkless build sandbox; WebKit's
+            # inner bwrap sandbox cannot nest inside it.
+            export WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS=1
+
+            cd "${pkgs.lib.fileset.toSource {
+              root = ./.;
+              fileset = pkgs.lib.fileset.unions [
+                ./scripts/screenshots
+                ./examples/sway-full-bar/package.json
+                ./examples/sway-full-bar/src/App.tsx
+              ];
+            }}"
+            bash ./scripts/screenshots/update-screenshots.sh
+          '';
+
+          updateScreenshotsPkg = pkgs.writeShellApplication {
+            name = "webbar-update-screenshots";
+            runtimeInputs = [ pkgs.coreutils ];
             text = ''
-              export WEBBAR_BIN="${webbarPkg}/bin/webbar"
-              export WEBBAR_UI_DIR="${swayFullBarUi}"
-              export FONT_DIRS="${pkgs.inter}/share/fonts:${pkgs.jetbrains-mono}/share/fonts:${pkgs.dejavu_fonts}/share/fonts"
-              exec bash ./scripts/screenshots/update-screenshots.sh "$@"
+              if [ ! -f flake.nix ] || [ ! -d docs/screenshots ]; then
+                echo "update-screenshots: run from the webbar repository root" >&2
+                exit 1
+              fi
+              mkdir -p docs/screenshots
+              cp -f --no-preserve=mode ${screenshotsPkg}/*.png docs/screenshots/
+              echo "update-screenshots: copied sandboxed screenshots into docs/screenshots/"
+              ls -lh docs/screenshots
             '';
           };
         in

@@ -7,7 +7,7 @@ if [ ! -f examples/sway-full-bar/package.json ] || [ ! -f scripts/screenshots/de
 fi
 
 REPO_ROOT="$PWD"
-OUT_DIR="$REPO_ROOT/docs/screenshots"
+OUT_DIR="${OUT_DIR:-$REPO_ROOT/docs/screenshots}"
 mkdir -p "$OUT_DIR"
 
 WEBBAR_BIN="${WEBBAR_BIN:?WEBBAR_BIN must be set}"
@@ -21,6 +21,8 @@ export XDG_CONFIG_HOME="$WORK_DIR/config"
 export XDG_CACHE_HOME="$WORK_DIR/cache"
 export XDG_DATA_HOME="$WORK_DIR/data"
 export TZ="UTC"
+export LANG="C.UTF-8"
+export LC_ALL="C.UTF-8"
 mkdir -p "$HOME" "$XDG_RUNTIME_DIR" "$XDG_CONFIG_HOME" "$XDG_CACHE_HOME" "$XDG_DATA_HOME"
 chmod 700 "$XDG_RUNTIME_DIR"
 
