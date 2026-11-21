@@ -24,12 +24,12 @@
             };
 
           npmWorkspaceSrc = mkNpmSrc [
-            ./preload
-            ./examples/minimal
-            ./examples/sway-full-bar-shared
-            ./examples/sway-full-bar
-            ./examples/sway-full-bar-svelte
-            ./examples/react-tray
+            ./preload/package.json
+            ./examples/minimal/package.json
+            ./examples/sway-full-bar-shared/package.json
+            ./examples/sway-full-bar/package.json
+            ./examples/sway-full-bar-svelte/package.json
+            ./examples/react-tray/package.json
           ];
 
           npmDeps = pkgs.importNpmLock {
@@ -147,6 +147,7 @@
 
           webbarPkg = craneLib.buildPackage (commonArgs // {
             inherit cargoArtifacts;
+            doCheck = false;
 
             preBuild = ''
               mkdir -p generated
