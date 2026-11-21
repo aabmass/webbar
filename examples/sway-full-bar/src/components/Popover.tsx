@@ -79,7 +79,6 @@ export function Popover({
   useEffect(() => {
     if (!open) return;
 
-    const releaseOverlay = window.webbar.acquireOverlay();
     const initialSwayKey = focusedWorkspaceKey();
 
     const onKeyDown = (e: KeyboardEvent) => {
@@ -120,7 +119,6 @@ export function Popover({
       window.removeEventListener("pointerdown", onPointerDown, true);
       window.removeEventListener("blur", onWindowBlur);
       unsubSway();
-      releaseOverlay();
     };
   }, [open, onClose, anchorRef]);
 

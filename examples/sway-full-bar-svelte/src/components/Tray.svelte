@@ -17,7 +17,7 @@
 {#if items.length > 0}
   <div
     class="tray"
-    role="list"
+    role="group"
     aria-label="System tray"
     transition:scale={{ duration: motionDuration(120), start: 0.92, easing: cubicOut }}
   >

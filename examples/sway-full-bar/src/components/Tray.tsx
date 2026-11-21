@@ -278,7 +278,7 @@ export function Tray() {
   }
 
   return (
-    <div className="tray" role="list" aria-label="System tray">
+    <div className="tray" role="group" aria-label="System tray">
       {items.map((item) => {
         const key = `${item.bus}${item.path}`;
         return <TrayButton key={key} item={item} />;

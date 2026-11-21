@@ -38,7 +38,6 @@
     };
     updatePosition();
 
-    const releaseOverlay = window.webbar.acquireOverlay();
     const initialSwayKey = focusedWorkspaceKey();
 
     const onKeyDown = (e: KeyboardEvent) => {
@@ -76,7 +75,8 @@
 
     return {
       // Runs only after Svelte's `out` transition completes, keeping the panel
-      // in the top layer and the GTK overlay acquired during the close animation.
+      // in the top layer (so preload's :popover-open overlay tracking stays
+      // active) during the close animation.
       destroy() {
         window.removeEventListener("resize", updatePosition);
         window.removeEventListener("keydown", onKeyDown);
@@ -90,7 +90,6 @@
         } catch {
           // Ignore if already detached or hidden
         }
-        releaseOverlay();
       },
     };
   }

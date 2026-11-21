@@ -121,19 +121,30 @@ export function Stasis() {
   );
   const isInhibited = isManuallyPaused || hasExternalInhibitor;
 
+  const hasStatus = status !== null;
+  const statusState = status?.state ?? null;
+  const statusPaused = status?.paused ?? false;
+  const statusManuallyPaused = status?.manually_paused ?? false;
+
   useEffect(() => {
-    if (!status) {
+    if (!hasStatus) {
       setBlame(null);
       return;
     }
-    void refreshBlame();
     const timer = window.setInterval(() => {
       void refreshBlame();
     }, 3000);
     return () => {
       window.clearInterval(timer);
     };
-  }, [status, refreshBlame]);
+  }, [hasStatus, refreshBlame]);
+
+  // Refresh blame immediately when daemon status or inhibition state changes
+  // (e.g. D-Bus or Wayland idle inhibitors appearing/clearing).
+  useEffect(() => {
+    if (!hasStatus) return;
+    void refreshBlame();
+  }, [hasStatus, statusState, statusPaused, statusManuallyPaused, refreshBlame]);
 
   useEffect(() => {
     if (!open) return;

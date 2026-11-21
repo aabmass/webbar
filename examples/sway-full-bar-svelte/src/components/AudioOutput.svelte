@@ -62,10 +62,11 @@
   {@const devicePct = Math.round(device.volume * 100)}
   <button
     type="button"
+    role="radio"
     class="audio-device-btn"
     class:is-default={device.default}
     title={device.description}
-    aria-pressed={device.default}
+    aria-checked={device.default}
     onclick={() => selectDevice(device, kind)}
   >
     <span class="audio-device-dot" aria-hidden="true"></span>

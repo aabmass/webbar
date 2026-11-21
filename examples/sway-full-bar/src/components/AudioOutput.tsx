@@ -22,9 +22,10 @@ function DeviceRow({
   return (
     <button
       type="button"
+      role="radio"
       className={`audio-device-btn${device.default ? " is-default" : ""}`}
       title={device.description}
-      aria-pressed={device.default}
+      aria-checked={device.default}
       onClick={() => {
         if (!device.default) {
           void window.webbar.audio.setDefault(device.id, kind);

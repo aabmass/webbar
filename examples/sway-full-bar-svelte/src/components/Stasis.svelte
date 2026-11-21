@@ -114,19 +114,31 @@
   });
 
   let hasStatus = $derived(status !== null);
+  let statusState = $derived(status?.state ?? null);
+  let statusPaused = $derived(status?.paused ?? false);
+  let statusManuallyPaused = $derived(status?.manually_paused ?? false);
 
   $effect(() => {
     if (!hasStatus) {
       blame = null;
       return;
     }
-    void refreshBlame();
     const timer = window.setInterval(() => {
       void refreshBlame();
     }, 3000);
     return () => {
       window.clearInterval(timer);
     };
+  });
+
+  // Refresh blame immediately when daemon status or inhibition state changes
+  // (e.g. D-Bus or Wayland idle inhibitors appearing/clearing).
+  $effect(() => {
+    if (!hasStatus) return;
+    void statusState;
+    void statusPaused;
+    void statusManuallyPaused;
+    void refreshBlame();
   });
 
   $effect(() => {

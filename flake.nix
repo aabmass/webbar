@@ -215,6 +215,99 @@
               ls -lh docs/screenshots
             '';
           };
+          mkBrowserDev = { name, workspace, defaultPort }:
+            pkgs.writeShellApplication {
+              inherit name;
+              runtimeInputs = [ pkgs.nodejs pkgs.curl pkgs.coreutils ];
+              text = ''
+                if [ ! -f ${workspace}/package.json ]; then
+                  echo "${name}: run from the webbar repository root" >&2
+                  exit 1
+                fi
+
+                if [ ! -d node_modules ]; then
+                  npm install
+                fi
+
+                if [ ! -f preload/dist/preload.mjs ]; then
+                  npm --workspace=@webbar/types run build
+                fi
+
+                WS_PORT="''${WEBBAR_WS_PORT:-9123}"
+                VITE_PORT="''${WEBBAR_VITE_PORT:-${toString defaultPort}}"
+                WS_TOKEN="''${WEBBAR_WS_TOKEN:-$(head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n')}"
+
+                ${webbarPkg}/bin/webbar --ws-bridge "$WS_PORT" --ws-token "$WS_TOKEN" &
+                WS_PID=$!
+                VITE_PID=""
+                cleanup() {
+                  kill "$WS_PID" 2>/dev/null || true
+                  if [ -n "$VITE_PID" ]; then
+                    kill "$VITE_PID" 2>/dev/null || true
+                  fi
+                }
+                trap cleanup EXIT INT TERM
+
+                npm --workspace=${workspace} run dev -- --port "$VITE_PORT" --strictPort &
+                VITE_PID=$!
+
+                ready=0
+                for _ in $(seq 1 100); do
+                  if ! kill -0 "$WS_PID" 2>/dev/null; then
+                    echo "${name}: ws-bridge exited early" >&2
+                    exit 1
+                  fi
+                  if ! kill -0 "$VITE_PID" 2>/dev/null; then
+                    echo "${name}: vite exited early" >&2
+                    exit 1
+                  fi
+                  if curl -fsS "http://localhost:$VITE_PORT" >/dev/null 2>&1; then
+                    ready=1
+                    break
+                  fi
+                  sleep 0.15
+                done
+
+                if [ "$ready" -ne 1 ]; then
+                  echo "${name}: timed out waiting for Vite on port $VITE_PORT" >&2
+                  exit 1
+                fi
+
+                echo "${name}: open http://localhost:$VITE_PORT?wsPort=$WS_PORT&wsToken=$WS_TOKEN"
+                wait "$VITE_PID"
+              '';
+            };
+
+          mkBarDev = { name, workspace, defaultPort }:
+            pkgs.writeShellApplication {
+              inherit name;
+              runtimeInputs = [ pkgs.nodejs pkgs.curl ];
+              text = ''
+                if [ ! -f ${workspace}/package.json ]; then
+                  echo "${name}: run from the webbar repository root" >&2
+                  exit 1
+                fi
+
+                if [ ! -d node_modules ]; then
+                  npm install
+                fi
+
+                VITE_PORT="''${WEBBAR_VITE_PORT:-${toString defaultPort}}"
+
+                npm --workspace=${workspace} run dev -- --port "$VITE_PORT" --strictPort &
+                VITE_PID=$!
+                trap 'kill "$VITE_PID" 2>/dev/null || true' EXIT INT TERM
+
+                for _ in $(seq 1 100); do
+                  if curl -fsS "http://localhost:$VITE_PORT" >/dev/null 2>&1; then
+                    break
+                  fi
+                  sleep 0.15
+                done
+
+                ${webbarPkg}/bin/webbar --url "http://localhost:$VITE_PORT" --height 86 --replace "$@"
+              '';
+            };
         in
         {
           apps = {
@@ -229,160 +322,31 @@
             default = webbarPkg;
             sway-full-bar-ui = swayFullBarUi;
             sway-full-bar = pkgs.writeShellScriptBin "webbar-sway-full-bar" ''
-              exec ${webbarPkg}/bin/webbar --dir ${swayFullBarUi} --height 86 --overlay-height 800 "$@"
+              exec ${webbarPkg}/bin/webbar --dir ${swayFullBarUi} --height 86 "$@"
             '';
             sway-full-bar-svelte-ui = swayFullBarSvelteUi;
             sway-full-bar-svelte = pkgs.writeShellScriptBin "webbar-sway-full-bar-svelte" ''
-              exec ${webbarPkg}/bin/webbar --dir ${swayFullBarSvelteUi} --height 86 --overlay-height 800 "$@"
+              exec ${webbarPkg}/bin/webbar --dir ${swayFullBarSvelteUi} --height 86 "$@"
             '';
-            sway-full-bar-dev = pkgs.writeShellApplication {
+            sway-full-bar-dev = mkBarDev {
               name = "webbar-sway-full-bar-dev";
-              runtimeInputs = [ pkgs.nodejs pkgs.curl ];
-              text = ''
-                if [ ! -f examples/sway-full-bar/package.json ]; then
-                  echo "webbar-sway-full-bar-dev: run from the webbar repository root" >&2
-                  exit 1
-                fi
-
-                if [ ! -d node_modules ]; then
-                  npm install
-                fi
-
-                npm --workspace=examples/sway-full-bar run dev -- --port 5173 --strictPort &
-                VITE_PID=$!
-                trap 'kill "$VITE_PID" 2>/dev/null || true' EXIT INT TERM
-
-                for _ in $(seq 1 100); do
-                  if curl -fsS http://localhost:5173 >/dev/null 2>&1; then
-                    break
-                  fi
-                  sleep 0.15
-                done
-
-                ${webbarPkg}/bin/webbar --url http://localhost:5173 --height 86 --overlay-height 800 --replace "$@"
-              '';
+              workspace = "examples/sway-full-bar";
+              defaultPort = 5173;
             };
-            sway-full-bar-browser-dev = pkgs.writeShellApplication {
+            sway-full-bar-svelte-dev = mkBarDev {
+              name = "webbar-sway-full-bar-svelte-dev";
+              workspace = "examples/sway-full-bar-svelte";
+              defaultPort = 5174;
+            };
+            sway-full-bar-browser-dev = mkBrowserDev {
               name = "webbar-sway-full-bar-browser-dev";
-              runtimeInputs = [ pkgs.nodejs pkgs.curl pkgs.coreutils ];
-              text = ''
-                if [ ! -f examples/sway-full-bar/package.json ]; then
-                  echo "webbar-sway-full-bar-browser-dev: run from the webbar repository root" >&2
-                  exit 1
-                fi
-
-                if [ ! -d node_modules ]; then
-                  npm install
-                fi
-
-                if [ ! -f preload/dist/preload.mjs ]; then
-                  npm --workspace=@webbar/types run build
-                fi
-
-                WS_PORT="''${WEBBAR_WS_PORT:-9123}"
-                VITE_PORT="''${WEBBAR_VITE_PORT:-5173}"
-                WS_TOKEN="''${WEBBAR_WS_TOKEN:-$(head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n')}"
-
-                ${webbarPkg}/bin/webbar --ws-bridge "$WS_PORT" --ws-token "$WS_TOKEN" &
-                WS_PID=$!
-                VITE_PID=""
-                cleanup() {
-                  kill "$WS_PID" 2>/dev/null || true
-                  if [ -n "$VITE_PID" ]; then
-                    kill "$VITE_PID" 2>/dev/null || true
-                  fi
-                }
-                trap cleanup EXIT INT TERM
-
-                npm --workspace=examples/sway-full-bar run dev -- --port "$VITE_PORT" --strictPort &
-                VITE_PID=$!
-
-                ready=0
-                for _ in $(seq 1 100); do
-                  if ! kill -0 "$WS_PID" 2>/dev/null; then
-                    echo "webbar-sway-full-bar-browser-dev: ws-bridge exited early" >&2
-                    exit 1
-                  fi
-                  if ! kill -0 "$VITE_PID" 2>/dev/null; then
-                    echo "webbar-sway-full-bar-browser-dev: vite exited early" >&2
-                    exit 1
-                  fi
-                  if curl -fsS "http://localhost:$VITE_PORT" >/dev/null 2>&1; then
-                    ready=1
-                    break
-                  fi
-                  sleep 0.15
-                done
-
-                if [ "$ready" -ne 1 ]; then
-                  echo "webbar-sway-full-bar-browser-dev: timed out waiting for Vite on port $VITE_PORT" >&2
-                  exit 1
-                fi
-
-                echo "webbar-sway-full-bar-browser-dev: open http://localhost:$VITE_PORT?wsPort=$WS_PORT&wsToken=$WS_TOKEN"
-                wait "$VITE_PID"
-              '';
+              workspace = "examples/sway-full-bar";
+              defaultPort = 5173;
             };
-            sway-full-bar-svelte-browser-dev = pkgs.writeShellApplication {
+            sway-full-bar-svelte-browser-dev = mkBrowserDev {
               name = "webbar-sway-full-bar-svelte-browser-dev";
-              runtimeInputs = [ pkgs.nodejs pkgs.curl pkgs.coreutils ];
-              text = ''
-                if [ ! -f examples/sway-full-bar-svelte/package.json ]; then
-                  echo "webbar-sway-full-bar-svelte-browser-dev: run from the webbar repository root" >&2
-                  exit 1
-                fi
-
-                if [ ! -d node_modules ]; then
-                  npm install
-                fi
-
-                if [ ! -f preload/dist/preload.mjs ]; then
-                  npm --workspace=@webbar/types run build
-                fi
-
-                WS_PORT="''${WEBBAR_WS_PORT:-9123}"
-                VITE_PORT="''${WEBBAR_VITE_PORT:-5174}"
-                WS_TOKEN="''${WEBBAR_WS_TOKEN:-$(head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n')}"
-
-                ${webbarPkg}/bin/webbar --ws-bridge "$WS_PORT" --ws-token "$WS_TOKEN" &
-                WS_PID=$!
-                VITE_PID=""
-                cleanup() {
-                  kill "$WS_PID" 2>/dev/null || true
-                  if [ -n "$VITE_PID" ]; then
-                    kill "$VITE_PID" 2>/dev/null || true
-                  fi
-                }
-                trap cleanup EXIT INT TERM
-
-                npm --workspace=examples/sway-full-bar-svelte run dev -- --port "$VITE_PORT" --strictPort &
-                VITE_PID=$!
-
-                ready=0
-                for _ in $(seq 1 100); do
-                  if ! kill -0 "$WS_PID" 2>/dev/null; then
-                    echo "webbar-sway-full-bar-svelte-browser-dev: ws-bridge exited early" >&2
-                    exit 1
-                  fi
-                  if ! kill -0 "$VITE_PID" 2>/dev/null; then
-                    echo "webbar-sway-full-bar-svelte-browser-dev: vite exited early" >&2
-                    exit 1
-                  fi
-                  if curl -fsS "http://localhost:$VITE_PORT" >/dev/null 2>&1; then
-                    ready=1
-                    break
-                  fi
-                  sleep 0.15
-                done
-
-                if [ "$ready" -ne 1 ]; then
-                  echo "webbar-sway-full-bar-svelte-browser-dev: timed out waiting for Vite on port $VITE_PORT" >&2
-                  exit 1
-                fi
-
-                echo "webbar-sway-full-bar-svelte-browser-dev: open http://localhost:$VITE_PORT?wsPort=$WS_PORT&wsToken=$WS_TOKEN"
-                wait "$VITE_PID"
-              '';
+              workspace = "examples/sway-full-bar-svelte";
+              defaultPort = 5174;
             };
           };
 
