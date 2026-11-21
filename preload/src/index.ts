@@ -18,33 +18,58 @@ if (!window.webbar) {
   let ws: WebSocket | null = null;
   let delay = 500;
 
+  const hasOpenPopover = (): boolean => {
+    try {
+      return document.querySelector(":popover-open") !== null;
+    } catch {
+      return false;
+    }
+  };
+
   const { api, receive, notifyOverlayChange, onConnect, onDisconnect } =
     createWebbarBridge(
-    (json) => {
-      if (ws?.readyState === WebSocket.OPEN) {
-        ws.send(json);
-      } else if (pending.length < 64) {
-        pending.push(json);
+      (json) => {
+        if (ws?.readyState === WebSocket.OPEN) {
+          ws.send(json);
+        } else if (pending.length < 64) {
+          pending.push(json);
+        }
+      },
+      output,
+      hasOpenPopover,
+    );
+
+  // Recover if an open [popover] is removed from the DOM without hidePopover()
+  // (which skips firing a capturing `toggle` event on `document`).
+  let popoverRemovalObserver: MutationObserver | null = null;
+  const syncNativePopover = () => {
+    if (hasOpenPopover()) {
+      if (!popoverRemovalObserver && document.documentElement) {
+        popoverRemovalObserver = new MutationObserver((records) => {
+          if (records.some((r) => r.removedNodes.length > 0)) {
+            syncNativePopover();
+          }
+        });
+        popoverRemovalObserver.observe(document.documentElement, {
+          childList: true,
+          subtree: true,
+        });
       }
-    },
-    output,
-    () => {
-      try {
-        return document.querySelector(":popover-open") !== null;
-      } catch {
-        return false;
-      }
-    },
-  );
+    } else if (popoverRemovalObserver) {
+      popoverRemovalObserver.disconnect();
+      popoverRemovalObserver = null;
+    }
+    notifyOverlayChange();
+  };
 
   window.webbar = api;
-  document.addEventListener("toggle", notifyOverlayChange, true);
+  document.addEventListener("toggle", syncNativePopover, true);
   if (document.readyState === "loading") {
-    window.addEventListener("DOMContentLoaded", notifyOverlayChange, {
+    window.addEventListener("DOMContentLoaded", syncNativePopover, {
       once: true,
     });
   } else {
-    notifyOverlayChange();
+    syncNativePopover();
   }
 
   const connect = () => {

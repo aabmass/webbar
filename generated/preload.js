@@ -747,6 +747,13 @@
     const pending = [];
     let ws = null;
     let delay = 500;
+    const hasOpenPopover = () => {
+      try {
+        return document.querySelector(":popover-open") !== null;
+      } catch {
+        return false;
+      }
+    };
     const { api, receive, notifyOverlayChange, onConnect, onDisconnect } = createWebbarBridge(
       (json) => {
         if (ws?.readyState === WebSocket.OPEN) {
@@ -756,22 +763,36 @@
         }
       },
       output,
-      () => {
-        try {
-          return document.querySelector(":popover-open") !== null;
-        } catch {
-          return false;
-        }
-      }
+      hasOpenPopover
     );
+    let popoverRemovalObserver = null;
+    const syncNativePopover = () => {
+      if (hasOpenPopover()) {
+        if (!popoverRemovalObserver && document.documentElement) {
+          popoverRemovalObserver = new MutationObserver((records) => {
+            if (records.some((r) => r.removedNodes.length > 0)) {
+              syncNativePopover();
+            }
+          });
+          popoverRemovalObserver.observe(document.documentElement, {
+            childList: true,
+            subtree: true
+          });
+        }
+      } else if (popoverRemovalObserver) {
+        popoverRemovalObserver.disconnect();
+        popoverRemovalObserver = null;
+      }
+      notifyOverlayChange();
+    };
     window.webbar = api;
-    document.addEventListener("toggle", notifyOverlayChange, true);
+    document.addEventListener("toggle", syncNativePopover, true);
     if (document.readyState === "loading") {
-      window.addEventListener("DOMContentLoaded", notifyOverlayChange, {
+      window.addEventListener("DOMContentLoaded", syncNativePopover, {
         once: true
       });
     } else {
-      notifyOverlayChange();
+      syncNativePopover();
     }
     const connect = () => {
       const socket = ws = new WebSocket(url);

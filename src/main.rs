@@ -754,6 +754,12 @@ fn apply_window_input_state(win: &ApplicationWindow, state: &WindowInputState) {
     }
 }
 
+fn format_bar_defaults_css(bar_height: i32) -> String {
+    format!(
+        ":root {{ --webbar-height: {bar_height}px; }}\nhtml, body {{ background: transparent; }}\n"
+    )
+}
+
 fn create_bar_window(
     app: &Application,
     monitor: &Monitor,
@@ -837,6 +843,14 @@ fn create_bar_window(
     });
 
     let ucm = UserContentManager::new();
+    let bar_defaults_css = format_bar_defaults_css(config.height);
+    ucm.add_style_sheet(&UserStyleSheet::new(
+        &bar_defaults_css,
+        UserContentInjectedFrames::TopFrame,
+        UserStyleLevel::User,
+        &[],
+        &[],
+    ));
     ucm.add_style_sheet(&UserStyleSheet::new(
         initial_theme_css,
         UserContentInjectedFrames::TopFrame,
@@ -1105,5 +1119,12 @@ mod tests {
 
         let _ = fs::remove_file(&outside);
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn format_bar_defaults_css_sets_height_var_and_transparent_root() {
+        let css = format_bar_defaults_css(42);
+        assert!(css.contains("--webbar-height: 42px;"));
+        assert!(css.contains("html, body { background: transparent; }"));
     }
 }
