@@ -14,17 +14,14 @@ if (!PRELOAD_JS) {
   throw new Error("WEBBAR_PRELOAD_JS must be set");
 }
 
-const TARGETS = [
-  { name: "react", url: process.env.WEBBAR_REACT_URL },
-  { name: "svelte", url: process.env.WEBBAR_SVELTE_URL },
-].filter((t) => Boolean(t.url));
+const TARGET_NAME = process.env.WEBBAR_TARGET || "bar";
+const TARGET_URL = process.env.WEBBAR_URL;
 
-if (TARGETS.length === 0) {
-  throw new Error("WEBBAR_REACT_URL and/or WEBBAR_SVELTE_URL must be set");
+if (!TARGET_URL) {
+  throw new Error("WEBBAR_URL must be set");
 }
 
-for (const target of TARGETS) {
-  test.describe(`${target.name} bar integration`, () => {
+test.describe(`${TARGET_NAME} bar integration`, () => {
     test("sway IPC, stasis watch/pause/profiles, dbus inhibit, and popovers", async ({
       page,
     }) => {
@@ -37,7 +34,7 @@ for (const target of TARGETS) {
       });
 
       await page.addInitScript({ path: PRELOAD_JS });
-      await page.goto(target.url, { waitUntil: "domcontentloaded" });
+      await page.goto(TARGET_URL, { waitUntil: "domcontentloaded" });
 
       // 1. Wait for live Sway workspaces + Stasis watch connection
       const focusedWs = page.locator(".workspaces-grid .ws-btn.focused");
@@ -154,7 +151,169 @@ for (const target of TARGETS) {
       }
       await expect(page.locator(".tray")).toBeHidden();
 
+      // 7. Real BlueZ Bluetooth (org.bluez on isolated system bus)
+      const btBtn = page.locator(
+        '.widget-cluster button.icon-btn[title^="Bluetooth"]',
+      );
+      await expect(btBtn).toBeVisible();
+      await expect(btBtn).not.toHaveClass(/is-dimmed/);
+      await btBtn.click();
+
+      const btPopover = page.locator(".popover-panel", {
+        has: page.locator(".bt-popover-list"),
+      });
+      await expect(btPopover).toBeVisible();
+      await expect(btPopover.locator(".qs-subtitle")).toHaveText("1 connected");
+
+      const headphones = btPopover.locator(".bt-device", {
+        hasText: "WH-1000XM5",
+      });
+      await expect(headphones).toHaveClass(/connected/);
+      await expect(headphones).toContainText("85%");
+
+      const mouse = btPopover.locator(".bt-device", { hasText: "MX Master 3S" });
+      await expect(mouse).toHaveClass(/paired/);
+      await expect(mouse).toContainText("64%");
+
+      await mouse.click();
+      await expect(mouse).toHaveClass(/connected/);
+      await expect(btPopover.locator(".qs-subtitle")).toHaveText("2 connected");
+
+      await mouse.click();
+      await expect(mouse).toHaveClass(/paired/);
+      await expect(btPopover.locator(".qs-subtitle")).toHaveText("1 connected");
+
+      const btPowerSwitch = btPopover.getByRole("switch", {
+        name: "Bluetooth power",
+      });
+      await expect(btPowerSwitch).toHaveAttribute("aria-checked", "true");
+      await btPowerSwitch.click();
+      await expect(btPowerSwitch).toHaveAttribute("aria-checked", "false");
+      await expect(btPopover.locator(".qs-subtitle")).toHaveText("Off");
+
+      await btPowerSwitch.click();
+      await expect(btPowerSwitch).toHaveAttribute("aria-checked", "true");
+      await expect(btPopover.locator(".qs-subtitle")).toHaveText("1 connected");
+
+      await page.keyboard.press("Escape");
+      await expect(btPopover).toBeHidden();
+
+      // 8. Real DDC Backlight + gsettings Theme Switching
+      const displayBtn = page.locator(
+        '.widget-cluster button.level-btn[title*="Monitor brightness"]',
+      );
+      await expect(displayBtn).toBeVisible();
+      await expect(displayBtn).not.toHaveClass(/is-dimmed/);
+      await expect(displayBtn).toContainText("78%");
+      await displayBtn.click();
+
+      const displayPopover = page.locator(".display-popover");
+      await expect(displayPopover).toBeVisible();
+
+      const brightnessSlider = displayPopover.locator(
+        'input[aria-label="Monitor brightness"]',
+      );
+      await expect(brightnessSlider).toHaveValue("78");
+      await expect(displayPopover.locator(".drawer-value")).toHaveText("78%");
+
+      await brightnessSlider.fill("55");
+      await expect(displayPopover.locator(".drawer-value")).toHaveText("55%");
+      await expect(displayBtn).toContainText("55%");
+
+      await brightnessSlider.fill("78");
+      await expect(displayPopover.locator(".drawer-value")).toHaveText("78%");
+      await expect(displayBtn).toContainText("78%");
+
+      const html = page.locator("html");
+      await expect(html).toHaveAttribute("data-desktop-theme", "dark");
+      const lightRadio = displayPopover.getByRole("radio", { name: "Light" });
+      const darkRadio = displayPopover.getByRole("radio", { name: "Dark" });
+      await expect(darkRadio).toHaveAttribute("aria-checked", "true");
+
+      await lightRadio.click();
+      await expect(lightRadio).toHaveAttribute("aria-checked", "true");
+      await expect(html).toHaveAttribute("data-desktop-theme", "light");
+
+      await darkRadio.click();
+      await expect(darkRadio).toHaveAttribute("aria-checked", "true");
+      await expect(html).toHaveAttribute("data-desktop-theme", "dark");
+
+      await page.keyboard.press("Escape");
+      await expect(displayPopover).toBeHidden();
+
+      // 9. Real PulseAudio Audio (sinks, input, stream)
+      const audioBtn = page.locator(
+        '.widget-cluster button.level-btn[title*="Studio Monitors"]',
+      );
+      await expect(audioBtn).toBeVisible();
+      await expect(audioBtn).not.toHaveClass(/is-dimmed/);
+      await expect(audioBtn).toContainText("72%");
+      await audioBtn.click();
+
+      const audioPopover = page.locator(".audio-popover");
+      await expect(audioPopover).toBeVisible();
+      await expect(audioPopover.locator(".audio-subtitle")).toHaveText(
+        "Studio Monitors",
+      );
+      await expect(audioPopover).toContainText("USB Condenser Mic");
+      await expect(audioPopover).toContainText("80%");
+
+      const streamCard = audioPopover.locator(".audio-stream-card", {
+        hasText: "Spotify",
+      });
+      await expect(streamCard).toContainText("Tycho — Awake");
+      await expect(streamCard).toContainText("84%");
+
+      await audioPopover.getByRole("button", { name: "Mute output" }).click();
+      await expect(audioBtn).toHaveClass(/is-muted/);
+      await expect(
+        audioPopover.getByRole("button", { name: "Unmute output" }),
+      ).toBeVisible();
+
+      await audioPopover.getByRole("button", { name: "Unmute output" }).click();
+      await expect(audioBtn).not.toHaveClass(/is-muted/);
+
+      await audioPopover
+        .locator("button.audio-collapse-btn", { hasText: "Switch (2)" })
+        .click();
+      const studioRadio = audioPopover.getByRole("radio", {
+        name: /Studio Monitors/,
+      });
+      const dacRadio = audioPopover.getByRole("radio", {
+        name: /USB-C Headphone DAC/,
+      });
+      await expect(studioRadio).toHaveAttribute("aria-checked", "true");
+      await expect(dacRadio).toHaveAttribute("aria-checked", "false");
+
+      await dacRadio.click();
+      await expect(audioPopover.locator(".audio-subtitle")).toHaveText(
+        "USB-C Headphone DAC",
+      );
+      const dacBtn = page.locator(
+        '.widget-cluster button.level-btn[title*="USB-C Headphone DAC"]',
+      );
+      await expect(dacBtn).toContainText("85%");
+
+      await studioRadio.click();
+      await expect(audioPopover.locator(".audio-subtitle")).toHaveText(
+        "Studio Monitors",
+      );
+      await expect(audioBtn).toContainText("72%");
+
+      await audioPopover.getByRole("button", { name: "Mute Spotify" }).click();
+      await expect(
+        audioPopover.getByRole("button", { name: "Unmute Spotify" }),
+      ).toBeVisible();
+      await audioPopover
+        .getByRole("button", { name: "Unmute Spotify" })
+        .click();
+      await expect(
+        audioPopover.getByRole("button", { name: "Mute Spotify" }),
+      ).toBeVisible();
+
+      await page.keyboard.press("Escape");
+      await expect(audioPopover).toBeHidden();
+
       expect(errors).toEqual([]);
     });
   });
-}

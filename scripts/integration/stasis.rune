@@ -1,5 +1,6 @@
 default:
   listen_dbus_inhibit true
+  monitor_media false
 
   lock_screen:
     timeout 3600

@@ -10,24 +10,16 @@ REPO_ROOT="$PWD"
 OUT_DIR="${OUT_DIR:-$REPO_ROOT/docs/screenshots}"
 mkdir -p "$OUT_DIR"
 
-WEBBAR_BIN="${WEBBAR_BIN:?WEBBAR_BIN must be set}"
 WEBBAR_UI_DIR="${WEBBAR_UI_DIR:?WEBBAR_UI_DIR must be set}"
 FONT_DIRS="${FONT_DIRS:-}"
 
-WORK_DIR="$(mktemp -d -t webbar-screenshots.XXXXXX)"
-export HOME="$WORK_DIR/home"
-export XDG_RUNTIME_DIR="$WORK_DIR/runtime"
-export XDG_CONFIG_HOME="$WORK_DIR/config"
-export XDG_CACHE_HOME="$WORK_DIR/cache"
-export XDG_DATA_HOME="$WORK_DIR/data"
-export TZ="UTC"
-export LANG="C.UTF-8"
-export LC_ALL="C.UTF-8"
-mkdir -p "$HOME" "$XDG_RUNTIME_DIR" "$XDG_CONFIG_HOME" "$XDG_CACHE_HOME" "$XDG_DATA_HOME"
-chmod 700 "$XDG_RUNTIME_DIR"
+# shellcheck source=../harness/env.sh
+source "$REPO_ROOT/scripts/harness/env.sh"
+harness_init "webbar-screenshots"
 
 # Isolated fontconfig so Inter + JetBrains Mono render identically everywhere
 if [ -n "$FONT_DIRS" ]; then
+  mkdir -p "$HOME/.cache"
   FONTCONFIG_FILE="$WORK_DIR/fonts.conf"
   {
     echo '<?xml version="1.0"?>'
@@ -37,7 +29,7 @@ if [ -n "$FONT_DIRS" ]; then
     for d in "${dirs[@]}"; do
       [ -n "$d" ] && printf '  <dir>%s</dir>\n' "$d"
     done
-    printf '  <cachedir>%s/fontconfig</cachedir>\n' "$XDG_CACHE_HOME"
+    printf '  <cachedir>%s/.cache/fontconfig</cachedir>\n' "$HOME"
     echo '  <match target="font">'
     echo '    <edit name="antialias" mode="assign"><bool>true</bool></edit>'
     echo '    <edit name="hinting" mode="assign"><bool>true</bool></edit>'
@@ -48,18 +40,6 @@ if [ -n "$FONT_DIRS" ]; then
   } > "$FONTCONFIG_FILE"
   export FONTCONFIG_FILE
 fi
-
-PIDS=()
-cleanup() {
-  for pid in "${PIDS[@]:-}"; do
-    if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
-      kill "$pid" 2>/dev/null || true
-    fi
-  done
-  wait 2>/dev/null || true
-  rm -rf "$WORK_DIR"
-}
-trap cleanup EXIT INT TERM
 
 # 1. Prepare temporary UI directory with injected demo-fixture.js
 UI_DIR="$WORK_DIR/ui"
@@ -79,16 +59,11 @@ p.write_text(html)
 PY
 
 # Pick an ephemeral free TCP port and serve the patched UI
-PORT="$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1]); s.close()')"
+PORT="$(harness_pick_port)"
+harness_register_log "$WORK_DIR/http.log"
 python3 -m http.server "$PORT" --bind 127.0.0.1 --directory "$UI_DIR" >"$WORK_DIR/http.log" 2>&1 &
-PIDS+=("$!")
-
-for _ in $(seq 1 50); do
-  if curl -fsS "http://127.0.0.1:$PORT/index.html" >/dev/null 2>&1; then
-    break
-  fi
-  sleep 0.1
-done
+harness_register_pid "$!"
+harness_wait_http "http://127.0.0.1:$PORT/index.html"
 
 # 2. Render vector wallpapers to 1600x900 PNGs
 rsvg-convert -w 1600 -h 900 "$REPO_ROOT/scripts/screenshots/wallpapers/dark.svg" -o "$WORK_DIR/dark.png"
@@ -146,13 +121,7 @@ regular7=5c5c6a
 EOF
 
 # 4. Start isolated session D-Bus
-export DBUS_SESSION_BUS_ADDRESS="unix:path=$XDG_RUNTIME_DIR/bus"
-dbus-daemon --session --address="$DBUS_SESSION_BUS_ADDRESS" --nofork --nopidfile >"$WORK_DIR/dbus.log" 2>&1 &
-PIDS+=("$!")
-for _ in $(seq 1 50); do
-  [ -S "$XDG_RUNTIME_DIR/bus" ] && break
-  sleep 0.05
-done
+harness_start_session_dbus
 
 # 5. Start isolated headless Sway
 cat > "$WORK_DIR/sway.conf" <<EOF
@@ -171,40 +140,7 @@ assign [app_id="demo-ws-q"] workspace q
 assign [app_id="demo-ws-w"] workspace w
 EOF
 
-WLR_BACKENDS=headless \
-WLR_RENDERER=pixman \
-WLR_LIBINPUT_NO_DEVICES=1 \
-XDG_CURRENT_DESKTOP=sway \
-sway --config "$WORK_DIR/sway.conf" --unsupported-gpu >"$WORK_DIR/sway.log" 2>&1 &
-SWAY_PID="$!"
-PIDS+=("$SWAY_PID")
-
-SWAYSOCK=""
-WAYLAND_DISPLAY=""
-for _ in $(seq 1 100); do
-  if ! kill -0 "$SWAY_PID" 2>/dev/null; then
-    echo "update-screenshots: headless sway exited early:" >&2
-    cat "$WORK_DIR/sway.log" >&2
-    exit 1
-  fi
-  sock="$(ls "$XDG_RUNTIME_DIR"/sway-ipc.*.sock 2>/dev/null | head -n1 || true)"
-  wl="$(ls "$XDG_RUNTIME_DIR"/wayland-* 2>/dev/null | grep -v '\.lock$' | head -n1 || true)"
-  if [ -n "$sock" ] && [ -n "$wl" ]; then
-    SWAYSOCK="$sock"
-    WAYLAND_DISPLAY="$(basename "$wl")"
-    export SWAYSOCK WAYLAND_DISPLAY
-    if swaymsg -t get_outputs >/dev/null 2>&1; then
-      break
-    fi
-  fi
-  sleep 0.1
-done
-
-if [ -z "$SWAYSOCK" ] || [ -z "$WAYLAND_DISPLAY" ]; then
-  echo "update-screenshots: timed out waiting for headless sway" >&2
-  cat "$WORK_DIR/sway.log" >&2
-  exit 1
-fi
+harness_start_sway "$WORK_DIR/sway.conf"
 
 set_wallpaper() {
   local img="$1"
@@ -214,7 +150,7 @@ set_wallpaper() {
   fi
   swaybg -i "$img" -m fill >"$WORK_DIR/swaybg.log" 2>&1 &
   SWAYBG_PID="$!"
-  PIDS+=("$SWAYBG_PID")
+  harness_register_pid "$SWAYBG_PID"
   sleep 0.3
 }
 
@@ -247,7 +183,7 @@ spawn_pane() {
   local mode="$3"
   local theme="$4"
   foot --app-id "$app_id" --config "$foot_cfg" -- bash "$REPO_ROOT/scripts/screenshots/demo-panes.sh" "$mode" "$theme" "$REPO_ROOT" >"$WORK_DIR/foot-${app_id}-${theme}.log" 2>&1 &
-  PIDS+=("$!")
+  harness_register_pid "$!"
 }
 
 populate_bg_workspaces() {
@@ -295,6 +231,7 @@ populate_hero_workspace() {
 }
 
 WEBBAR_PID=""
+harness_register_log "$WORK_DIR/webbar.log"
 launch_bar() {
   local query="$1"
   local wait_secs="${2:-2.2}"
@@ -306,18 +243,17 @@ launch_bar() {
   WEBKIT_DISABLE_DMABUF_RENDERER=1 \
   WEBKIT_DISABLE_COMPOSITING_MODE=1 \
   GSK_RENDERER=cairo \
-  "$WEBBAR_BIN" \
+  webbar \
     --url "http://127.0.0.1:$PORT/index.html?$query" \
     --height 86 \
     --overlay-height 800 \
     --replace >"$WORK_DIR/webbar.log" 2>&1 &
   WEBBAR_PID="$!"
-  PIDS+=("$WEBBAR_PID")
+  harness_register_pid "$WEBBAR_PID"
 
   sleep "$wait_secs"
   if ! kill -0 "$WEBBAR_PID" 2>/dev/null; then
-    echo "update-screenshots: webbar exited early for query '$query':" >&2
-    cat "$WORK_DIR/webbar.log" >&2
+    echo "update-screenshots: webbar exited early for query '$query'" >&2
     exit 1
   fi
 }

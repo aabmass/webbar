@@ -166,7 +166,7 @@
           # `apps.update-screenshots` so headless Sway / terminal / image
           # tooling is never pulled in by `packages.*` or `devShells.*`.
           screenshotsPkg = pkgs.runCommand "webbar-screenshots" {
-            nativeBuildInputs = with pkgs; [
+            nativeBuildInputs = [ webbarPkg ] ++ (with pkgs; [
               sway
               swaybg
               foot
@@ -181,9 +181,8 @@
               coreutils
               fontconfig
               bash
-            ];
+            ]);
           } ''
-            export WEBBAR_BIN="${webbarPkg}/bin/webbar"
             export WEBBAR_UI_DIR="${swayFullBarUi}"
             export FONT_DIRS="${pkgs.inter}/share/fonts:${pkgs.jetbrains-mono}/share/fonts:${pkgs.dejavu_fonts}/share/fonts"
             export OUT_DIR="$out"
@@ -195,6 +194,7 @@
               root = ./.;
               fileset = pkgs.lib.fileset.unions [
                 ./scripts/screenshots
+                ./scripts/harness
                 ./examples/sway-full-bar/package.json
                 ./examples/sway-full-bar/src/App.tsx
               ];
@@ -279,31 +279,41 @@
               '';
             };
 
-          integrationTestPkg = pkgs.writeShellApplication {
-            name = "webbar-integration-test";
-            runtimeInputs = [
-              pkgs.sway
-              pkgs.dbus
-              pkgs.stasis
-              pkgs.playwright-test
-              pkgs.curl
-              pkgs.coreutils
-              (pkgs.python3.withPackages (ps: [
-                ps.dbus-python
-                ps.pygobject3
-              ]))
+          integrationParitySrc = pkgs.lib.fileset.toSource {
+            root = ./.;
+            fileset = pkgs.lib.fileset.unions [
+              ./scripts/integration
+              ./scripts/harness
             ];
-            text = ''
-              export WEBBAR_BIN="${webbarPkg}/bin/webbar"
+          };
+
+          mkIntegrationParityCheck = { target, uiDir }:
+            pkgs.runCommand "webbar-integration-parity-${target}" {
+              nativeBuildInputs = [
+                webbarPkg
+                pkgs.sway
+                pkgs.dbus
+                pkgs.stasis
+                pkgs.pulseaudio
+                pkgs.glib.bin
+                pkgs.playwright-test
+                pkgs.curl
+                (pkgs.python3.withPackages (ps: [
+                  ps.dbus-python
+                  ps.pygobject3
+                ]))
+              ];
+            } ''
               export WEBBAR_PRELOAD_JS="${preloadPkg}/generated/preload.js"
-              export WEBBAR_REACT_UI_DIR="${swayFullBarUi}"
-              export WEBBAR_SVELTE_UI_DIR="${swayFullBarSvelteUi}"
+              export WEBBAR_TARGET="${target}"
+              export WEBBAR_UI_DIR="${uiDir}"
               export PLAYWRIGHT_BROWSERS_PATH="${pkgs.playwright-driver.browsers}"
               export PLAYWRIGHT_NODE_MODULES="${pkgs.playwright-test}/lib/node_modules"
-              export PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
-              exec bash ./scripts/integration/run-parity-test.sh
+              export XDG_DATA_DIRS="${pkgs.gsettings-desktop-schemas}/share/gsettings-schemas/${pkgs.gsettings-desktop-schemas.name}"
+              cd "${integrationParitySrc}"
+              bash ./scripts/integration/run-parity-test.sh
+              touch "$out"
             '';
-          };
 
           mkBarDev = { name, workspace, defaultPort }:
             pkgs.writeShellApplication {
@@ -342,11 +352,6 @@
               type = "app";
               program = "${updateScreenshotsPkg}/bin/webbar-update-screenshots";
               meta.description = "Regenerate README screenshots of sway-full-bar in an isolated headless Sway session";
-            };
-            integration-test = {
-              type = "app";
-              program = "${integrationTestPkg}/bin/webbar-integration-test";
-              meta.description = "Run React & Svelte UI parity tests against live Sway, D-Bus, Stasis, and webbar --ws-bridge";
             };
           };
 
@@ -407,16 +412,14 @@
             sway-full-bar-ui = swayFullBarUi;
             sway-full-bar-svelte-ui = swayFullBarSvelteUi;
             react-tray-ui = reactTrayUi;
-            integration-parity = pkgs.runCommand "webbar-integration-parity" {
-              nativeBuildInputs = [ integrationTestPkg ];
-            } ''
-              cd "${pkgs.lib.fileset.toSource {
-                root = ./.;
-                fileset = ./scripts/integration;
-              }}"
-              webbar-integration-test
-              touch "$out"
-            '';
+            integration-parity-react = mkIntegrationParityCheck {
+              target = "react";
+              uiDir = swayFullBarUi;
+            };
+            integration-parity-svelte = mkIntegrationParityCheck {
+              target = "svelte";
+              uiDir = swayFullBarSvelteUi;
+            };
           };
         };
     in
