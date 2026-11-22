@@ -120,18 +120,18 @@ button:focus-visible {
 
 .ws-dots {
   position: absolute;
-  bottom: 3.5px;
+  bottom: 3px;
   left: 0;
   right: 0;
   display: flex;
   justify-content: center;
-  gap: 2.5px;
+  gap: 2px;
   pointer-events: none;
 }
 
 .ws-dots i {
-  width: 2.5px;
-  height: 2.5px;
+  width: 3px;
+  height: 3px;
   border-radius: 50%;
   background: currentColor;
   opacity: 0.78;
