@@ -21,6 +21,47 @@ export function formatRelativeTime(timestampMs: number, nowMs: number): string {
   return `${Math.floor(diffHr / 24)}d`;
 }
 
+export const TOAST_EXIT_MS = 1500;
+export const TOAST_EXIT_FALLBACK_MS = 1650;
+
+export type ToastEntry = {
+  item: NotificationItem;
+  exiting: boolean;
+};
+
+export function prefersReducedMotion(): boolean {
+  return (
+    typeof window !== "undefined" &&
+    (window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false)
+  );
+}
+
+export function reconcileToastEntries(
+  prev: ToastEntry[],
+  popups: NotificationItem[],
+): ToastEntry[] {
+  const popupById = new Map(popups.map((p) => [p.id, p]));
+  const prevIds = new Set(prev.map((e) => e.item.id));
+  const next: ToastEntry[] = [];
+
+  for (const popup of popups) {
+    if (!prevIds.has(popup.id)) {
+      next.push({ item: popup, exiting: false });
+    }
+  }
+
+  for (const entry of prev) {
+    const active = popupById.get(entry.item.id);
+    if (active) {
+      next.push({ item: active, exiting: false });
+    } else {
+      next.push({ item: entry.item, exiting: true });
+    }
+  }
+
+  return next;
+}
+
 export function activePopups(
   items: NotificationItem[],
   limit = 4,

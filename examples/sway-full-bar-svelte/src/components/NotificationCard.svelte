@@ -6,6 +6,34 @@
     visibleActions,
   } from "@webbar/sway-full-bar-shared/notifications";
 
+  function updateSheen(
+    el: HTMLElement,
+    clientX: number,
+    clientY: number,
+    isEnter: boolean,
+  ) {
+    const rect = el.getBoundingClientRect();
+    const rawX = clientX - rect.left;
+    const maxX = rect.width * 0.25;
+    const clampedY = Math.round(Math.max(0, Math.min(clientY - rect.top, rect.height)));
+
+    if (isEnter) {
+      el.style.setProperty("--toast-x", `${Math.round(Math.max(0, Math.min(rawX, maxX)))}px`);
+      el.style.setProperty("--toast-y", `${clampedY}px`);
+      el.dataset.sheenLocked = rawX >= maxX ? "1" : "";
+      return;
+    }
+
+    if (rawX <= maxX) {
+      el.dataset.sheenLocked = "";
+      el.style.setProperty("--toast-x", `${Math.round(Math.max(0, rawX))}px`);
+      el.style.setProperty("--toast-y", `${clampedY}px`);
+    } else if (el.dataset.sheenLocked !== "1") {
+      el.dataset.sheenLocked = "1";
+      el.style.setProperty("--toast-x", `${Math.round(maxX)}px`);
+    }
+  }
+
   let {
     item,
     nowMs,
@@ -47,15 +75,22 @@
   class:is-critical={item.urgency === "critical"}
   data-webbar-interactive={isToast ? "" : undefined}
   onpointerenter={isToast
-    ? () => {
+    ? (e) => {
         hovered = true;
         window.webbar.notifications.pauseTimeout(item.id);
+        updateSheen(e.currentTarget, e.clientX, e.clientY, true);
+      }
+    : undefined}
+  onpointermove={isToast
+    ? (e) => {
+        updateSheen(e.currentTarget, e.clientX, e.clientY, false);
       }
     : undefined}
   onpointerleave={isToast
-    ? () => {
+    ? (e) => {
         hovered = false;
         window.webbar.notifications.resumeTimeout(item.id);
+        delete e.currentTarget.dataset.sheenLocked;
       }
     : undefined}
 >

@@ -6,34 +6,65 @@ import {
   visibleActions,
 } from "@webbar/sway-full-bar-shared/notifications";
 
+function updateSheen(
+  el: HTMLElement,
+  clientX: number,
+  clientY: number,
+  isEnter: boolean,
+) {
+  const rect = el.getBoundingClientRect();
+  const rawX = clientX - rect.left;
+  const maxX = rect.width * 0.25;
+  const clampedY = Math.round(Math.max(0, Math.min(clientY - rect.top, rect.height)));
+
+  if (isEnter) {
+    el.style.setProperty("--toast-x", `${Math.round(Math.max(0, Math.min(rawX, maxX)))}px`);
+    el.style.setProperty("--toast-y", `${clampedY}px`);
+    el.dataset.sheenLocked = rawX >= maxX ? "1" : "";
+    return;
+  }
+
+  if (rawX <= maxX) {
+    el.dataset.sheenLocked = "";
+    el.style.setProperty("--toast-x", `${Math.round(Math.max(0, rawX))}px`);
+    el.style.setProperty("--toast-y", `${clampedY}px`);
+  } else if (el.dataset.sheenLocked !== "1") {
+    el.dataset.sheenLocked = "1";
+    el.style.setProperty("--toast-x", `${Math.round(maxX)}px`);
+  }
+}
+
 export function NotificationCard({
   item,
   nowMs,
   isToast = false,
+  exiting = false,
 }: {
   item: NotificationItem;
   nowMs: number;
   isToast?: boolean;
+  exiting?: boolean;
 }) {
   const hoveredRef = useRef(false);
+  const interactiveToast = isToast && !exiting;
   const hasDefault = hasDefaultAction(item);
   const actions = visibleActions(item);
-  const canClickBody = isToast || hasDefault;
+  const canClickBody = interactiveToast || (!exiting && hasDefault);
 
   useEffect(() => {
-    if (!isToast) return;
+    if (!interactiveToast) return;
     return () => {
       if (hoveredRef.current) {
         hoveredRef.current = false;
         window.webbar.notifications.resumeTimeout(item.id);
       }
     };
-  }, [isToast, item.id]);
+  }, [interactiveToast, item.id]);
 
   function onBodyClick() {
     if (hasDefault) {
       window.webbar.notifications.invokeAction(item.id, "default");
-    } else if (isToast) {
+    } else if (interactiveToast) {
       window.webbar.notifications.hidePopup(item.id);
     }
   }
@@ -41,20 +72,29 @@ export function NotificationCard({
   return (
     <article
       className={`notif-card${isToast ? " notif-toast" : ""}${item.urgency === "critical" ? " is-critical" : ""}`}
-      data-webbar-interactive={isToast ? "" : undefined}
+      data-webbar-interactive={interactiveToast ? "" : undefined}
       onPointerEnter={
-        isToast
-          ? () => {
+        interactiveToast
+          ? (e) => {
               hoveredRef.current = true;
               window.webbar.notifications.pauseTimeout(item.id);
+              updateSheen(e.currentTarget, e.clientX, e.clientY, true);
+            }
+          : undefined
+      }
+      onPointerMove={
+        interactiveToast
+          ? (e) => {
+              updateSheen(e.currentTarget, e.clientX, e.clientY, false);
             }
           : undefined
       }
       onPointerLeave={
-        isToast
-          ? () => {
+        interactiveToast
+          ? (e) => {
               hoveredRef.current = false;
               window.webbar.notifications.resumeTimeout(item.id);
+              delete e.currentTarget.dataset.sheenLocked;
             }
           : undefined
       }

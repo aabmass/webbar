@@ -1,7 +1,12 @@
 <script lang="ts">
+  import { flip } from "svelte/animate";
+  import { cubicOut } from "svelte/easing";
+  import { fade } from "svelte/transition";
   import {
     activePopups,
     isFocusedOutput,
+    prefersReducedMotion,
+    TOAST_EXIT_MS,
   } from "@webbar/sway-full-bar-shared/notifications";
   import { fromExternalStore } from "../lib/webbarStore.svelte";
   import NotificationCard from "./NotificationCard.svelte";
@@ -18,15 +23,14 @@
   );
 
   let nowMs = $state(Date.now());
-  let popups = $derived(activePopups(notifStore.current.items));
-  let show = $derived(
-    !hidden &&
-      popups.length > 0 &&
-      isFocusedOutput(swayStore.current, window.webbar.output),
+  let canShow = $derived(
+    !hidden && isFocusedOutput(swayStore.current, window.webbar.output),
   );
+  let popups = $derived(activePopups(notifStore.current.items));
+  let hasPopups = $derived(canShow && popups.length > 0);
 
   $effect(() => {
-    if (!show) return;
+    if (!hasPopups) return;
     nowMs = Date.now();
     const timer = window.setInterval(() => {
       nowMs = Date.now();
@@ -35,14 +39,39 @@
   });
 </script>
 
-{#if show}
+{#if canShow}
   <div
     class="notif-toast-stack"
     role="region"
     aria-label="Notification popups"
   >
     {#each popups as item (item.id)}
-      <NotificationCard {item} {nowMs} isToast />
+      <div
+        class="notif-toast-item"
+        animate:flip={{
+          duration: prefersReducedMotion() ? 0 : 300,
+          easing: cubicOut,
+        }}
+        out:fade={{
+          duration: prefersReducedMotion() ? 0 : TOAST_EXIT_MS,
+          easing: cubicOut,
+        }}
+        onoutrostart={(e) => {
+          e.currentTarget.classList.add("is-exiting");
+          e.currentTarget
+            .querySelector("[data-webbar-interactive]")
+            ?.removeAttribute("data-webbar-interactive");
+        }}
+      >
+        <NotificationCard {item} {nowMs} isToast />
+      </div>
     {/each}
   </div>
 {/if}
+
+<style>
+  .notif-toast-item:global(.is-exiting),
+  .notif-toast-item:global(.is-exiting) :global(.notif-toast) {
+    pointer-events: none;
+  }
+</style>

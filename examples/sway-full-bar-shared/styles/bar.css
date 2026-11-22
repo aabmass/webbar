@@ -1992,15 +1992,22 @@ button:focus-visible {
   height: 26px;
   padding: 0 10px;
   border-radius: var(--radius-sm);
+  border: 1px solid var(--hairline);
   background: var(--surface-hover);
   color: var(--fg-color);
   font-size: 11.5px;
   font-weight: 600;
+  cursor: pointer;
+  transition:
+    background-color 140ms var(--ease-out),
+    color 140ms var(--ease-out),
+    border-color 140ms var(--ease-out);
 }
 
 .notif-action-btn:hover {
   background: var(--accent-soft);
   color: var(--accent-color);
+  border-color: color-mix(in srgb, var(--accent-color) 30%, transparent);
 }
 
 /* Floating toast stack */
@@ -2016,27 +2023,210 @@ button:focus-visible {
   z-index: 50;
 }
 
+.notif-toast-slot.is-exiting {
+  animation: notif-toast-out 1.5s cubic-bezier(0.33, 1, 0.68, 1) forwards;
+  pointer-events: none;
+}
+
+.notif-toast-slot.is-exiting .notif-toast {
+  pointer-events: none;
+}
+
+@keyframes notif-toast-out {
+  from {
+    opacity: 1;
+    translate: 0 0;
+    scale: 1;
+  }
+  to {
+    opacity: 0;
+    translate: 6px 0;
+    scale: 0.985;
+  }
+}
+
 .notif-toast {
+  position: relative;
+  overflow: hidden;
   pointer-events: auto;
-  background: var(--panel-bg);
-  border: 1px solid var(--panel-border);
-  box-shadow: 0 8px 24px var(--shadow-lg);
-  animation: notif-toast-in var(--dur-med) var(--ease-out);
+  padding: 12px 14px;
+  border-radius: var(--radius-lg);
+  background-color: color-mix(in srgb, var(--panel-bg) 68%, transparent);
+  background-image: linear-gradient(
+    180deg,
+    color-mix(in srgb, #ffffff 8%, transparent) 0%,
+    color-mix(in srgb, #ffffff 1%, transparent) 55%,
+    color-mix(in srgb, #000000 6%, transparent) 100%
+  );
+  -webkit-backdrop-filter: blur(18px) saturate(1.35);
+  backdrop-filter: blur(18px) saturate(1.35);
+  border: 1px solid color-mix(in srgb, #ffffff 14%, transparent);
+  box-shadow:
+    inset 0 1px 0 color-mix(in srgb, #ffffff 18%, transparent),
+    inset 0 0 0 1px color-mix(in srgb, #ffffff 4%, transparent),
+    0 4px 12px color-mix(in srgb, var(--shadow-color) 28%, transparent),
+    0 16px 40px color-mix(in srgb, var(--shadow-color) 46%, transparent);
+  transition:
+    background-color 480ms cubic-bezier(0.16, 1, 0.3, 1),
+    border-color 480ms cubic-bezier(0.16, 1, 0.3, 1),
+    box-shadow 480ms cubic-bezier(0.16, 1, 0.3, 1),
+    translate 320ms cubic-bezier(0.16, 1, 0.3, 1);
+  animation: notif-toast-in 260ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.notif-toast::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  opacity: 0;
+  background: radial-gradient(
+    320px circle at var(--toast-x, 50%) var(--toast-y, 50%),
+    color-mix(in srgb, #ffffff 8%, transparent),
+    transparent 75%
+  );
+  transition: opacity 420ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.notif-toast:hover::before {
+  opacity: 1;
+}
+
+.notif-toast:hover {
+  background-color: var(--panel-bg);
+  border-color: color-mix(in srgb, #ffffff 22%, transparent);
+  box-shadow:
+    inset 0 1px 0 color-mix(in srgb, #ffffff 24%, transparent),
+    inset 0 0 0 1px color-mix(in srgb, #ffffff 6%, transparent),
+    0 6px 16px color-mix(in srgb, var(--shadow-color) 32%, transparent),
+    0 20px 44px color-mix(in srgb, var(--shadow-color) 52%, transparent);
+  translate: 0 -1px;
+}
+
+.notif-toast .notif-close-btn {
+  opacity: 0.5;
+  transition:
+    opacity 180ms cubic-bezier(0.22, 1, 0.36, 1),
+    background-color var(--dur-fast) var(--ease-out),
+    color var(--dur-fast) var(--ease-out);
+}
+
+.notif-toast:hover .notif-close-btn {
+  opacity: 1;
+}
+
+:root[data-desktop-theme="light"] .notif-toast {
+  background-color: color-mix(in srgb, var(--panel-bg) 72%, transparent);
+  background-image: linear-gradient(
+    180deg,
+    rgba(255, 255, 255, 0.72) 0%,
+    rgba(255, 255, 255, 0.18) 60%,
+    rgba(255, 255, 255, 0) 100%
+  );
+  border-color: color-mix(in srgb, var(--fg-color) 11%, transparent);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.95),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.45),
+    0 4px 12px color-mix(in srgb, var(--shadow-color) 9%, transparent),
+    0 16px 36px color-mix(in srgb, var(--shadow-color) 16%, transparent);
+}
+
+:root[data-desktop-theme="light"] .notif-toast::before {
+  background: radial-gradient(
+    320px circle at var(--toast-x, 50%) var(--toast-y, 50%),
+    rgba(255, 255, 255, 0.45),
+    transparent 75%
+  );
+}
+
+:root[data-desktop-theme="light"] .notif-toast:hover {
+  background-color: var(--panel-bg);
+  border-color: color-mix(in srgb, var(--fg-color) 17%, transparent);
+  box-shadow:
+    inset 0 1px 0 #ffffff,
+    inset 0 0 0 1px rgba(255, 255, 255, 0.65),
+    0 6px 16px color-mix(in srgb, var(--shadow-color) 11%, transparent),
+    0 20px 42px color-mix(in srgb, var(--shadow-color) 20%, transparent);
+}
+
+@media (prefers-color-scheme: light) {
+  :root:not([data-desktop-theme]) .notif-toast {
+    background-color: color-mix(in srgb, var(--panel-bg) 72%, transparent);
+    background-image: linear-gradient(
+      180deg,
+      rgba(255, 255, 255, 0.72) 0%,
+      rgba(255, 255, 255, 0.18) 60%,
+      rgba(255, 255, 255, 0) 100%
+    );
+    border-color: color-mix(in srgb, var(--fg-color) 11%, transparent);
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.95),
+      inset 0 0 0 1px rgba(255, 255, 255, 0.45),
+      0 4px 12px color-mix(in srgb, var(--shadow-color) 9%, transparent),
+      0 16px 36px color-mix(in srgb, var(--shadow-color) 16%, transparent);
+  }
+
+  :root:not([data-desktop-theme]) .notif-toast::before {
+    background: radial-gradient(
+      320px circle at var(--toast-x, 50%) var(--toast-y, 50%),
+      rgba(255, 255, 255, 0.45),
+      transparent 75%
+    );
+  }
+
+  :root:not([data-desktop-theme]) .notif-toast:hover {
+    background-color: var(--panel-bg);
+    border-color: color-mix(in srgb, var(--fg-color) 17%, transparent);
+    box-shadow:
+      inset 0 1px 0 #ffffff,
+      inset 0 0 0 1px rgba(255, 255, 255, 0.65),
+      0 6px 16px color-mix(in srgb, var(--shadow-color) 11%, transparent),
+      0 20px 42px color-mix(in srgb, var(--shadow-color) 20%, transparent);
+  }
 }
 
 .notif-toast.is-critical {
-  border-color: var(--urgent-bg);
-  background: color-mix(in srgb, var(--panel-bg), var(--urgent-bg) 12%);
+  border-color: color-mix(in srgb, var(--urgent-bg) 44%, transparent);
+  border-left: 3px solid var(--urgent-bg);
+  background-color: color-mix(
+    in srgb,
+    color-mix(in srgb, var(--panel-bg) 76%, transparent),
+    var(--urgent-bg) 10%
+  );
+}
+
+.notif-toast.is-critical:hover {
+  background-color: color-mix(in srgb, var(--panel-bg), var(--urgent-bg) 11%);
+  border-color: color-mix(in srgb, var(--urgent-bg) 62%, transparent);
+  border-left-color: var(--urgent-bg);
+}
+
+:root[data-desktop-theme="light"] .notif-toast.is-critical {
+  border-color: color-mix(in srgb, var(--urgent-bg) 40%, transparent);
+  border-left: 3px solid var(--urgent-bg);
+  background-color: color-mix(
+    in srgb,
+    color-mix(in srgb, var(--panel-bg) 78%, transparent),
+    var(--urgent-bg) 8%
+  );
+}
+
+:root[data-desktop-theme="light"] .notif-toast.is-critical:hover {
+  background-color: color-mix(in srgb, var(--panel-bg), var(--urgent-bg) 9%);
+  border-color: color-mix(in srgb, var(--urgent-bg) 56%, transparent);
+  border-left-color: var(--urgent-bg);
 }
 
 @keyframes notif-toast-in {
   from {
     opacity: 0;
-    translate: 12px 0;
+    translate: 14px 0;
+    scale: 0.985;
   }
   to {
-    opacity: 1;
     translate: 0 0;
+    scale: 1;
   }
 }
 
@@ -2045,7 +2235,9 @@ button:focus-visible {
   *::before,
   *::after {
     animation-duration: 1ms !important;
+    animation-delay: 0ms !important;
     transition-duration: 1ms !important;
+    transition-delay: 0ms !important;
   }
 
   .bt-sync-status {
