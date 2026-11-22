@@ -122,7 +122,7 @@ pub enum BridgeRequest {
         action_key: String,
     },
     ClearNotifications,
-    SetNotificationsDnd {
+    SetNotificationsDoNotDisturb {
         enabled: bool,
     },
     MarkNotificationsRead,

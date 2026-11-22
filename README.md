@@ -2,7 +2,7 @@
 
 Build your Sway status bar with plain HTML, CSS, and TypeScript/React—without switching away from Sway or reinventing Linux D-Bus plumbing.
 
-`webbar` is a Rust Wayland host (`gtk4` + `gtk4-layer-shell` + `webkit6`) that docks a transparent WebView at the top of each monitor and automatically injects `window.webbar` into every page with reactive stores (`sway`, `tray`, `notifications`, `audio`, `bluetooth`, `network`, `backlight`, `theme`) plus Promise-based `dbus` and `exec` escape hatches. System appearance (dark/light mode, accent color, font, and GTK4/Libadwaita colors) is also injected as `--desktop-*` and `--gtk-*` CSS variables—see [THEMING.md](THEMING.md).
+`webbar` is a Rust Wayland host (`gtk4` + `gtk4-layer-shell` + `webkit6`) that docks a transparent WebView at the top of each monitor and automatically injects `window.webbar` into every page with reactive stores (`sway`, `tray`, `notifications`, `audio`, `bluetooth`, `network`, `backlight`, `theme`) plus Promise-based `dbus` and `exec` escape hatches. System appearance (dark/light mode, accent color, font, and GTK4/Libadwaita colors) is also injected as `--desktop-*` and `--gtk-*` CSS variables—see [THEMING.md](THEMING.md) and [NOTIFICATIONS.md](NOTIFICATIONS.md).
 
 ## Usage
 
@@ -16,7 +16,7 @@ webbar --dir ./examples/sway-full-bar/dist --height 86
 
 ## Example Bar Screenshots
 
-`webbar` itself imposes no layout or styling—you build whatever bar you want with standard web technologies (HTML, CSS, and JavaScript/TypeScript). The screenshots below show [`examples/sway-full-bar`](examples/sway-full-bar), an included reference bar built for Sway that demonstrates workspaces, clock/calendar, notifications, system tray, idle controls, audio mixer, display brightness, Bluetooth, and automatic dark/light theming (see [THEMING.md](THEMING.md)).
+`webbar` itself imposes no layout or styling—you build whatever bar you want with standard web technologies (HTML, CSS, and JavaScript/TypeScript). The screenshots below show [`examples/sway-full-bar`](examples/sway-full-bar) (with a Svelte 5 parity counterpart in [`examples/sway-full-bar-svelte`](examples/sway-full-bar-svelte)), an included reference bar built for Sway that demonstrates workspaces, clock/calendar, notifications, system tray, idle controls, audio mixer, display brightness, Bluetooth, and automatic dark/light theming (see [THEMING.md](THEMING.md)).
 
 ### Dark Theme
 
@@ -110,21 +110,35 @@ npm --workspace=@webbar/types run build
 npm --workspace=examples/sway-full-bar run dev -- --port 5173 --strictPort
 ```
 
-## Sway Keybindings & DevTools
+## Remote Control (D-Bus / `gapplication`)
 
-You can bind Sway keys directly to `webbar`'s notification and DevTools `gapplication` actions (these work even when the bar does not have keyboard focus):
+`webbar` exposes compositor-agnostic session D-Bus actions on `dev.local.webbar` (`org.gtk.Actions`), which can be triggered from keybindings or scripts even when the bar does not have keyboard focus:
+
+```bash
+gapplication action dev.local.webbar <action>
+```
+
+| Action | Effect |
+|---|---|
+| `devtools` | Open the WebKit Web Inspector on the first bar window |
+| `notifications-toggle-center` | Emit `notifications_toggle_center` to `window.webbar.onHostAction` |
+| `notifications-toggle-do-not-disturb` | Toggle Do Not Disturb mode |
+| `notifications-dismiss-latest` | Dismiss the newest active popup (or newest history item) |
+| `notifications-clear-all` | Dismiss all notifications |
+
+For example, in Sway:
 
 ```sway
 bindsym $mod+n       exec gapplication action dev.local.webbar notifications-toggle-center
-bindsym $mod+Shift+n exec gapplication action dev.local.webbar notifications-toggle-dnd
+bindsym $mod+Shift+n exec gapplication action dev.local.webbar notifications-toggle-do-not-disturb
 bindsym $mod+x       exec gapplication action dev.local.webbar notifications-dismiss-latest
 bindsym $mod+Shift+x exec gapplication action dev.local.webbar notifications-clear-all
 bindsym $mod+Shift+i exec gapplication action dev.local.webbar devtools
 ```
 
-You can also open the WebKit Web Inspector (DOM, Console, Sources, Network, Storage) by passing `--devtools` on startup, or—when the bar has keyboard focus (e.g. while an overlay is open)—by pressing `F12` / `Ctrl+Shift+I` or right-clicking the bar and choosing **Inspect Element**.
+You can also open the WebKit Web Inspector by passing `--devtools` on startup, or—when the bar has keyboard focus (e.g. while a `[popover]` is open)—by pressing `F12` / `Ctrl+Shift+I` or right-clicking the bar and choosing **Inspect Element**.
 
-> **Note:** Only one daemon can own `org.freedesktop.Notifications` or `org.kde.StatusNotifierWatcher` on your session D-Bus at a time. If another bar or notification daemon (`waybar`, `mako`, `swaync`) is already running, `webbar` logs a warning and still runs, but notifications/tray items stay with the existing daemon until it is stopped. Pass `--no-notifications` if you want `webbar` to leave `org.freedesktop.Notifications` unclaimed for another daemon.
+See [NOTIFICATIONS.md](NOTIFICATIONS.md) for building notification center popovers and floating toasts, or passing `--no-notifications` when running another `org.freedesktop.Notifications` daemon.
 
 ## Testing & Checks
 
@@ -154,7 +168,7 @@ npm run --workspaces build
 
 ## Architecture & Credits
 
-- See [DESIGN.md](DESIGN.md) for the three-layer architecture, store contracts, composable Wayland input regions, and daemon lifecycle, and [THEMING.md](THEMING.md) for `--desktop-*`/`--gtk-*` CSS tokens and themed icons.
+- See [DESIGN.md](DESIGN.md) for the three-layer architecture, store contracts, composable Wayland input regions, and daemon lifecycle, [THEMING.md](THEMING.md) for `--desktop-*`/`--gtk-*` CSS tokens and themed icons, and [NOTIFICATIONS.md](NOTIFICATIONS.md) for building notification centers and floating toasts.
 
 - Rust payload types use `ts-rs` to generate `preload/src/generated/*.ts` (verified in sync by `nix flake check`).
 - `preload/` is packaged as the `@webbar/types` workspace (`preload/src/preload.ts` and `preload/src/index.ts`), compiling `generated/preload.js` and `preload/dist/` while providing `{ get, subscribe, onChange }` stores compatible with React's `useSyncExternalStore` and vanilla TypeScript, `window.webbar.output` per monitor, and `AbortSignal` cancellation on `exec` and `dbus.watch`.

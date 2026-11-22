@@ -392,7 +392,7 @@
 
     let notifState = {
       available: true,
-      dnd: false,
+      do_not_disturb: false,
       unread_count: DEMO_NOTIFICATION_ITEMS.filter((i) => !i.read).length,
       items: DEMO_NOTIFICATION_ITEMS,
     };
@@ -429,7 +429,8 @@
         }),
       invokeAction: () => {},
       clearAll: () => updateNotifs({ ...notifState, items: [] }),
-      setDnd: (dnd) => updateNotifs({ ...notifState, dnd }),
+      setDoNotDisturb: (do_not_disturb) =>
+        updateNotifs({ ...notifState, do_not_disturb }),
       markAllRead: () =>
         updateNotifs({
           ...notifState,

@@ -131,7 +131,7 @@ export type WebbarApi = {
     hidePopup: (id: number) => void;
     invokeAction: (id: number, actionKey: string) => void;
     clearAll: () => void;
-    setDnd: (enabled: boolean) => void;
+    setDoNotDisturb: (enabled: boolean) => void;
     markAllRead: () => void;
     pauseTimeout: (id: number) => void;
     resumeTimeout: (id: number) => void;
@@ -508,7 +508,7 @@ export function createWebbarBridge(
     tray: createStore<TrayItem[]>([]),
     notifications: createStore<NotificationsState>({
       available: false,
-      dnd: false,
+      do_not_disturb: false,
       unread_count: 0,
       items: [],
     }),
@@ -640,7 +640,7 @@ export function createWebbarBridge(
     notifications_state: (e) =>
       stores.notifications._update({
         available: Boolean(e.available),
-        dnd: Boolean(e.dnd),
+        do_not_disturb: Boolean(e.do_not_disturb),
         unread_count: typeof e.unread_count === "number" ? e.unread_count : 0,
         items: (e.items as NotificationItem[]) ?? [],
       }),
@@ -862,8 +862,8 @@ export function createWebbarBridge(
           action_key: actionKey,
         }),
       clearAll: () => send({ type: "clear_notifications" }),
-      setDnd: (enabled: boolean) =>
-        send({ type: "set_notifications_dnd", enabled }),
+      setDoNotDisturb: (enabled: boolean) =>
+        send({ type: "set_notifications_do_not_disturb", enabled }),
       markAllRead: () => send({ type: "mark_notifications_read" }),
       pauseTimeout: (id: number) =>
         send({ type: "pause_notification_timeout", id }),

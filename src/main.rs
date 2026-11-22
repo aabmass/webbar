@@ -290,8 +290,8 @@ impl HostServices {
             BridgeRequest::ClearNotifications => {
                 self.notifications.clear_all();
             }
-            BridgeRequest::SetNotificationsDnd { enabled } => {
-                self.notifications.set_dnd(enabled);
+            BridgeRequest::SetNotificationsDoNotDisturb { enabled } => {
+                self.notifications.set_do_not_disturb(enabled);
             }
             BridgeRequest::MarkNotificationsRead => {
                 self.notifications.mark_all_read();
@@ -585,14 +585,15 @@ fn activate(app: &Application, config: &Config) {
     });
     app.add_action(&toggle_center_action);
 
-    let toggle_dnd_action = gio::SimpleAction::new("notifications-toggle-dnd", None);
+    let toggle_do_not_disturb_action =
+        gio::SimpleAction::new("notifications-toggle-do-not-disturb", None);
     {
         let notifications = services.notifications.clone();
-        toggle_dnd_action.connect_activate(move |_, _| {
-            notifications.toggle_dnd();
+        toggle_do_not_disturb_action.connect_activate(move |_, _| {
+            notifications.toggle_do_not_disturb();
         });
     }
-    app.add_action(&toggle_dnd_action);
+    app.add_action(&toggle_do_not_disturb_action);
 
     let dismiss_latest_action = gio::SimpleAction::new("notifications-dismiss-latest", None);
     {

@@ -50,7 +50,7 @@ export function notificationButtonTitle(state: NotificationsState): string {
   if (!state.available) {
     return "Notifications unavailable (another daemon is running) — click to open";
   }
-  if (state.dnd) {
+  if (state.do_not_disturb) {
     return state.unread_count > 0
       ? `Notifications: Do Not Disturb (${state.unread_count} unread) — click for center, right-click to enable`
       : "Notifications: Do Not Disturb — click for center, right-click to enable";
@@ -62,10 +62,10 @@ export function notificationButtonTitle(state: NotificationsState): string {
 }
 
 export function notificationCenterSubtitle(
-  dnd: boolean,
+  doNotDisturb: boolean,
   count: number,
 ): string {
-  if (dnd) return "Do Not Disturb";
+  if (doNotDisturb) return "Do Not Disturb";
   if (count === 0) return "All caught up";
   return `${count} ${count === 1 ? "notification" : "notifications"}`;
 }

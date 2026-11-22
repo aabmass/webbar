@@ -68,7 +68,7 @@ pub struct NotificationItem {
 #[ts(export, export_to = "../preload/src/generated/")]
 pub struct NotificationsState {
     pub available: bool,
-    pub dnd: bool,
+    pub do_not_disturb: bool,
     pub unread_count: u32,
     pub items: Vec<NotificationItem>,
 }
@@ -91,7 +91,7 @@ struct NotificationEntry {
 
 struct StoreData {
     available: bool,
-    dnd: bool,
+    do_not_disturb: bool,
     entries: Vec<NotificationEntry>,
     shutdown: bool,
 }
@@ -102,7 +102,7 @@ impl StoreData {
         let unread_count = items.iter().filter(|item| !item.read).count() as u32;
         NotificationsState {
             available: self.available,
-            dnd: self.dnd,
+            do_not_disturb: self.do_not_disturb,
             unread_count,
             items,
         }
@@ -310,7 +310,7 @@ impl NotificationStore {
             next_id: AtomicU32::new(1),
             data: Mutex::new(StoreData {
                 available: false,
-                dnd: false,
+                do_not_disturb: false,
                 entries: Vec::new(),
                 shutdown: false,
             }),
@@ -419,7 +419,7 @@ impl NotificationStore {
         let ts = now_ms();
 
         let mut guard = self.handle.inner.data.lock().unwrap();
-        let popup = !guard.dnd || urgency == NotificationUrgency::Critical;
+        let popup = !guard.do_not_disturb || urgency == NotificationUrgency::Critical;
 
         let existing_idx = if replaces_id != 0 {
             guard.entries.iter().position(|e| e.item.id == replaces_id)
@@ -625,20 +625,20 @@ impl NotificationStore {
         }
     }
 
-    pub fn set_dnd(&self, enabled: bool) {
+    pub fn set_do_not_disturb(&self, enabled: bool) {
         let mut guard = self.handle.inner.data.lock().unwrap();
-        if guard.dnd == enabled {
+        if guard.do_not_disturb == enabled {
             return;
         }
-        guard.dnd = enabled;
+        guard.do_not_disturb = enabled;
         let snapshot = guard.snapshot();
         drop(guard);
         self.emit_snapshot(snapshot);
     }
 
-    pub fn toggle_dnd(&self) {
+    pub fn toggle_do_not_disturb(&self) {
         let mut guard = self.handle.inner.data.lock().unwrap();
-        guard.dnd = !guard.dnd;
+        guard.do_not_disturb = !guard.do_not_disturb;
         let snapshot = guard.snapshot();
         drop(guard);
         self.emit_snapshot(snapshot);
@@ -1079,7 +1079,7 @@ mod tests {
         let (send, log) = capture();
         let store = NotificationStore::test_new(send);
 
-        store.set_dnd(true);
+        store.set_do_not_disturb(true);
         store.push_notification(
             "mail".into(),
             0,
@@ -1106,7 +1106,7 @@ mod tests {
 
         let snapshots = log.lock().unwrap();
         let latest = snapshots.last().unwrap();
-        assert!(latest.dnd);
+        assert!(latest.do_not_disturb);
         assert_eq!(latest.items.len(), 2);
         assert!(!latest.items[0].popup);
         assert!(latest.items[1].popup);
@@ -1313,7 +1313,7 @@ mod tests {
         let store = NotificationStore::test_new(send);
 
         let id1 = store.push(0, "app".into(), "Existing".into(), String::new());
-        store.set_dnd(true);
+        store.set_do_not_disturb(true);
 
         // New transient under DND is dropped without entering history
         let mut t1 = HashMap::new();

@@ -142,7 +142,7 @@ test("all window.webbar stores follow snapshot + subscribe + onChange contract",
       event: {
         type: "notifications_state",
         available: true,
-        dnd: false,
+        do_not_disturb: false,
         unread_count: 1,
         items: [
           {
@@ -168,7 +168,7 @@ test("all window.webbar stores follow snapshot + subscribe + onChange contract",
       },
       assertState: (s) => {
         assert.equal(s.available, true);
-        assert.equal(s.dnd, false);
+        assert.equal(s.do_not_disturb, false);
         assert.equal(s.unread_count, 1);
         assert.equal(s.items.length, 1);
         assert.equal(s.items[0].id, 7);
@@ -1200,14 +1200,14 @@ test("notification actions, onHostAction, and setInteractiveRegions reconnect re
   }, "DP-1");
 
   api.notifications.hidePopup(3);
-  api.notifications.setDnd(true);
+  api.notifications.setDoNotDisturb(true);
   api.notifications.markAllRead();
   api.notifications.pauseTimeout(3);
   api.notifications.resumeTimeout(3);
 
   assert.deepEqual(sent.slice(0, 5), [
     { type: "hide_notification_popup", id: 3 },
-    { type: "set_notifications_dnd", enabled: true },
+    { type: "set_notifications_do_not_disturb", enabled: true },
     { type: "mark_notifications_read" },
     { type: "pause_notification_timeout", id: 3 },
     { type: "resume_notification_timeout", id: 3 },

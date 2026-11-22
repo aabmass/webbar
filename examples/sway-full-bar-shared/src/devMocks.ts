@@ -179,7 +179,7 @@ function installNotificationMocks(): void {
 
   let state: NotificationsState = {
     available: true,
-    dnd: false,
+    do_not_disturb: false,
     unread_count: initialItems.filter((i) => !i.read).length,
     items: initialItems,
   };
@@ -219,7 +219,7 @@ function installNotificationMocks(): void {
     invokeAction: (id) =>
       update({ ...state, items: state.items.filter((i) => i.id !== id) }),
     clearAll: () => update({ ...state, items: [] }),
-    setDnd: (dnd) => update({ ...state, dnd }),
+    setDoNotDisturb: (do_not_disturb) => update({ ...state, do_not_disturb }),
     markAllRead: () =>
       update({
         ...state,

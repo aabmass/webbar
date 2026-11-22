@@ -244,7 +244,7 @@
       tray: createStore([]),
       notifications: createStore({
         available: false,
-        dnd: false,
+        do_not_disturb: false,
         unread_count: 0,
         items: []
       }),
@@ -359,7 +359,7 @@
       },
       notifications_state: (e) => stores.notifications._update({
         available: Boolean(e.available),
-        dnd: Boolean(e.dnd),
+        do_not_disturb: Boolean(e.do_not_disturb),
         unread_count: typeof e.unread_count === "number" ? e.unread_count : 0,
         items: e.items ?? []
       }),
@@ -570,7 +570,7 @@
           action_key: actionKey
         }),
         clearAll: () => send({ type: "clear_notifications" }),
-        setDnd: (enabled) => send({ type: "set_notifications_dnd", enabled }),
+        setDoNotDisturb: (enabled) => send({ type: "set_notifications_do_not_disturb", enabled }),
         markAllRead: () => send({ type: "mark_notifications_read" }),
         pauseTimeout: (id) => send({ type: "pause_notification_timeout", id }),
         resumeTimeout: (id) => send({ type: "resume_notification_timeout", id })

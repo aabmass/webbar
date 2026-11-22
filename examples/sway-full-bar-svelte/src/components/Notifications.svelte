@@ -64,8 +64,8 @@
   bind:this={btnEl}
   type="button"
   class="bar-btn icon-btn notif-btn"
-  class:is-dnd={notifState.dnd}
-  class:is-active={unread > 0 && !notifState.dnd}
+  class:is-dnd={notifState.do_not_disturb}
+  class:is-active={unread > 0 && !notifState.do_not_disturb}
   class:is-dimmed={!notifState.available}
   class:is-open={open}
   aria-label="Notifications"
@@ -73,10 +73,10 @@
   onclick={() => onOpenChange(!open)}
   oncontextmenu={(e) => {
     e.preventDefault();
-    window.webbar.notifications.setDnd(!notifState.dnd);
+    window.webbar.notifications.setDoNotDisturb(!notifState.do_not_disturb);
   }}
 >
-  <Icon name="bell" dnd={notifState.dnd} />
+  <Icon name="bell" dnd={notifState.do_not_disturb} />
   {#if unread > 0}
     <span class="notif-badge" aria-hidden="true">
       {unread > 99 ? "99+" : unread}
@@ -89,28 +89,31 @@
     <div class="notif-header">
       <div class="qs-heading">
         <span class="qs-title">
-          <Icon name="bell" dnd={notifState.dnd} /> Notifications
+          <Icon name="bell" dnd={notifState.do_not_disturb} /> Notifications
         </span>
         <span class="qs-subtitle">
-          {notificationCenterSubtitle(notifState.dnd, items.length)}
+          {notificationCenterSubtitle(notifState.do_not_disturb, items.length)}
         </span>
       </div>
       <div class="notif-header-controls">
         <span
           class="notif-dnd-control"
-          class:is-on={notifState.dnd}
+          class:is-on={notifState.do_not_disturb}
           title="Do Not Disturb"
         >
           <Icon name="bell" dnd={true} />
           <button
             type="button"
             role="switch"
-            aria-checked={notifState.dnd}
+            aria-checked={notifState.do_not_disturb}
             aria-label="Do Not Disturb"
             title="Do Not Disturb"
             class="qs-switch"
-            class:is-on={notifState.dnd}
-            onclick={() => window.webbar.notifications.setDnd(!notifState.dnd)}
+            class:is-on={notifState.do_not_disturb}
+            onclick={() =>
+              window.webbar.notifications.setDoNotDisturb(
+                !notifState.do_not_disturb,
+              )}
           ></button>
         </span>
         <button

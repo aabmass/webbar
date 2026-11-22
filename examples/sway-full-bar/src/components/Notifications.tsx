@@ -63,8 +63,8 @@ export function Notifications({
     "bar-btn",
     "icon-btn",
     "notif-btn",
-    notifState.dnd ? "is-dnd" : "",
-    unread > 0 && !notifState.dnd ? "is-active" : "",
+    notifState.do_not_disturb ? "is-dnd" : "",
+    unread > 0 && !notifState.do_not_disturb ? "is-active" : "",
     !notifState.available ? "is-dimmed" : "",
     open ? "is-open" : "",
   ]
@@ -82,10 +82,10 @@ export function Notifications({
         onClick={() => onOpenChange(!open)}
         onContextMenu={(e) => {
           e.preventDefault();
-          window.webbar.notifications.setDnd(!notifState.dnd);
+          window.webbar.notifications.setDoNotDisturb(!notifState.do_not_disturb);
         }}
       >
-        <BellIcon dnd={notifState.dnd} />
+        <BellIcon dnd={notifState.do_not_disturb} />
         {unread > 0 && (
           <span className="notif-badge" aria-hidden="true">
             {unread > 99 ? "99+" : unread}
@@ -98,27 +98,32 @@ export function Notifications({
           <div className="notif-header">
             <div className="qs-heading">
               <span className="qs-title">
-                <BellIcon dnd={notifState.dnd} /> Notifications
+                <BellIcon dnd={notifState.do_not_disturb} /> Notifications
               </span>
               <span className="qs-subtitle">
-                {notificationCenterSubtitle(notifState.dnd, items.length)}
+                {notificationCenterSubtitle(
+                  notifState.do_not_disturb,
+                  items.length,
+                )}
               </span>
             </div>
             <div className="notif-header-controls">
               <span
-                className={`notif-dnd-control${notifState.dnd ? " is-on" : ""}`}
+                className={`notif-dnd-control${notifState.do_not_disturb ? " is-on" : ""}`}
                 title="Do Not Disturb"
               >
                 <BellIcon dnd />
                 <button
                   type="button"
                   role="switch"
-                  aria-checked={notifState.dnd}
+                  aria-checked={notifState.do_not_disturb}
                   aria-label="Do Not Disturb"
                   title="Do Not Disturb"
-                  className={`qs-switch${notifState.dnd ? " is-on" : ""}`}
+                  className={`qs-switch${notifState.do_not_disturb ? " is-on" : ""}`}
                   onClick={() =>
-                    window.webbar.notifications.setDnd(!notifState.dnd)
+                    window.webbar.notifications.setDoNotDisturb(
+                      !notifState.do_not_disturb,
+                    )
                   }
                 />
               </span>
