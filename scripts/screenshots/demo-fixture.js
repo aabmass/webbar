@@ -3,6 +3,7 @@
   const themeMode = params.get("theme") === "light" ? "light" : "dark";
   const isDark = themeMode === "dark";
   const openTarget = params.get("open") || "";
+  const showToasts = params.get("toasts") === "1";
 
   // Freeze Date to a clean, deterministic timestamp (Fri, Oct 16, 2026 14:35:42 UTC)
   // so regenerating screenshots does not create noisy timestamp diffs.
@@ -186,6 +187,76 @@
   const trayAccent = isDark ? "#8ab4f8" : "#2b6de0";
   const trayGreen = isDark ? "#6fcf97" : "#1f8f54";
 
+  const DEMO_NOTIFICATION_ITEMS = [
+    {
+      id: 3,
+      app_name: "Downloads",
+      app_icon_name: "folder-download",
+      app_icon_url: svgIcon(
+        '<path d="M12 3a1 1 0 0 1 1 1v7.59l2.3-2.3a1 1 0 1 1 1.4 1.42l-4 4a1 1 0 0 1-1.4 0l-4-4a1 1 0 0 1 1.4-1.42L11 11.59V4a1 1 0 0 1 1-1zm-7 14h14v2H5v-2z"/>',
+        trayGreen,
+      ),
+      image_url: "",
+      summary: "nixos-unstable.iso",
+      body: "Downloading 68% (42 MB/s)",
+      urgency: "low",
+      actions: [],
+      timestamp_ms: FIXED_MS - 14 * 60_000,
+      category: "transfer",
+      desktop_entry: "",
+      progress: 68,
+      transient: false,
+      resident: false,
+      popup: false,
+      read: true,
+    },
+    {
+      id: 2,
+      app_name: "System",
+      app_icon_name: "dialog-warning",
+      app_icon_url: svgIcon(
+        '<path d="M12 3L2 20h20L12 3zm0 6v5m0 3v1"/>',
+        "#f2c94c",
+      ),
+      image_url: "",
+      summary: "System Update Ready",
+      body: "Rebuild complete — restart to apply kernel 6.12.",
+      urgency: "normal",
+      actions: [{ key: "restart", label: "Restart" }],
+      timestamp_ms: FIXED_MS - 3 * 60_000,
+      category: "device",
+      desktop_entry: "",
+      progress: null,
+      transient: false,
+      resident: false,
+      popup: showToasts,
+      read: false,
+    },
+    {
+      id: 1,
+      app_name: "Signal",
+      app_icon_name: "signal-desktop",
+      app_icon_url: svgIcon('<circle cx="12" cy="12" r="9"/>', trayAccent),
+      image_url: "",
+      summary: "Alice",
+      body: "Are we still on for lunch at 12:30?",
+      urgency: "normal",
+      actions: [
+        { key: "default", label: "Open" },
+        { key: "reply", label: "Reply" },
+        { key: "mark-read", label: "Mark Read" },
+      ],
+      timestamp_ms: FIXED_MS - 45_000,
+      category: "im.received",
+      desktop_entry: "signal-desktop",
+      progress: null,
+      transient: false,
+      resident: false,
+      popup: showToasts,
+      read: false,
+    },
+  ];
+
   const DEMO_TRAY = [
     {
       bus: ":1.101",
@@ -319,6 +390,55 @@
       menuEvent: () => {},
     };
 
+    let notifState = {
+      available: true,
+      dnd: false,
+      unread_count: DEMO_NOTIFICATION_ITEMS.filter((i) => !i.read).length,
+      items: DEMO_NOTIFICATION_ITEMS,
+    };
+    const notifSubs = new Set();
+    const updateNotifs = (next) => {
+      notifState = {
+        ...next,
+        unread_count: next.items.filter((i) => !i.read).length,
+      };
+      for (const cb of notifSubs) cb();
+    };
+    const subscribeNotifs = (cb) => {
+      notifSubs.add(cb);
+      return () => notifSubs.delete(cb);
+    };
+    wb.notifications = {
+      get: () => notifState,
+      subscribe: subscribeNotifs,
+      onChange: (cb) => {
+        cb(notifState);
+        return subscribeNotifs(() => cb(notifState));
+      },
+      dismiss: (id) =>
+        updateNotifs({
+          ...notifState,
+          items: notifState.items.filter((i) => i.id !== id),
+        }),
+      hidePopup: (id) =>
+        updateNotifs({
+          ...notifState,
+          items: notifState.items.map((i) =>
+            i.id === id ? { ...i, popup: false } : i,
+          ),
+        }),
+      invokeAction: () => {},
+      clearAll: () => updateNotifs({ ...notifState, items: [] }),
+      setDnd: (dnd) => updateNotifs({ ...notifState, dnd }),
+      markAllRead: () =>
+        updateNotifs({
+          ...notifState,
+          items: notifState.items.map((i) => ({ ...i, read: true })),
+        }),
+      pauseTimeout: () => {},
+      resumeTimeout: () => {},
+    };
+
     const origExec = wb.exec.bind(wb);
     wb.exec = async (argv, opts) => {
       if (Array.isArray(argv) && argv[0] === "stasis") {
@@ -383,15 +503,21 @@
   // workspaces, clock, tray, and controls all render cleanly.
   const triggerFullBarRepaint = () => {
     setTimeout(() => {
-      const box = document.querySelector(".centerbox");
-      if (box instanceof HTMLElement) {
-        box.style.opacity = "0.999";
-        requestAnimationFrame(() => {
-          requestAnimationFrame(() => {
-            box.style.opacity = "";
-          });
-        });
+      const targets = document.querySelectorAll(".centerbox, .notif-toast-stack");
+      const elements = Array.from(targets).filter(
+        (el) => el instanceof HTMLElement,
+      );
+      if (elements.length === 0) return;
+      for (const el of elements) {
+        el.style.opacity = "0.999";
       }
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          for (const el of elements) {
+            el.style.opacity = "";
+          }
+        });
+      });
     }, 800);
   };
   if (document.readyState === "loading") {
@@ -408,6 +534,7 @@
       audio: '.widget-cluster button[title*="Studio Monitors"]',
       display: '.widget-cluster button[title*="Monitor brightness"]',
       bluetooth: '.widget-cluster button[title*="Bluetooth"]',
+      notifications: "button.notif-btn",
       tray: '.tray button[title^="Network"]',
     };
     const selector = selectors[openTarget];

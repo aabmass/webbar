@@ -176,6 +176,9 @@
     let explicitOverlayCount = 0;
     let sentOverlayActive = false;
     let deactivateScheduled = false;
+    let interactiveRects = [];
+    let sentInteractiveRegions = false;
+    const hostActionListeners = /* @__PURE__ */ new Set();
     const pending = /* @__PURE__ */ new Map();
     const dbusWatches = /* @__PURE__ */ new Map();
     const processStreams = /* @__PURE__ */ new Map();
@@ -239,7 +242,12 @@
         mode: "default"
       }),
       tray: createStore([]),
-      notifications: createStore([]),
+      notifications: createStore({
+        available: false,
+        dnd: false,
+        unread_count: 0,
+        items: []
+      }),
       audio: createStore({
         available: false,
         outputs: [],
@@ -349,7 +357,12 @@
           entry.store._update(e.items ?? []);
         }
       },
-      notifications: (e) => stores.notifications._update(e.items ?? []),
+      notifications_state: (e) => stores.notifications._update({
+        available: Boolean(e.available),
+        dnd: Boolean(e.dnd),
+        unread_count: typeof e.unread_count === "number" ? e.unread_count : 0,
+        items: e.items ?? []
+      }),
       audio_state: (e) => stores.audio._update({
         available: Boolean(e.available),
         outputs: e.outputs ?? [],
@@ -508,6 +521,15 @@
           });
           break;
         }
+        case "host_action": {
+          const action = event.action;
+          if (typeof action === "string") {
+            for (const listener of hostActionListeners) {
+              listener(action);
+            }
+          }
+          break;
+        }
       }
     }
     function swayCommand(command) {
@@ -541,12 +563,17 @@
       }),
       notifications: storeView(stores.notifications, {
         dismiss: (id) => send({ type: "dismiss_notification", id }),
+        hidePopup: (id) => send({ type: "hide_notification_popup", id }),
         invokeAction: (id, actionKey) => send({
           type: "invoke_notification_action",
           id,
           action_key: actionKey
         }),
-        clearAll: () => send({ type: "clear_notifications" })
+        clearAll: () => send({ type: "clear_notifications" }),
+        setDnd: (enabled) => send({ type: "set_notifications_dnd", enabled }),
+        markAllRead: () => send({ type: "mark_notifications_read" }),
+        pauseTimeout: (id) => send({ type: "pause_notification_timeout", id }),
+        resumeTimeout: (id) => send({ type: "resume_notification_timeout", id })
       }),
       audio: storeView(stores.audio, {
         setVolume: (deviceId, volume, kind) => rpc("audio_set_volume", {
@@ -592,6 +619,19 @@
       },
       setInputRegion: (rects) => send({ type: "set_input_region", rects }),
       resetInputRegion: () => send({ type: "set_input_region", rects: [] }),
+      setInteractiveRegions: (rects) => {
+        interactiveRects = [...rects];
+        if (interactiveRects.length > 0) {
+          sentInteractiveRegions = true;
+        }
+        send({ type: "set_interactive_regions", rects: interactiveRects });
+      },
+      onHostAction: (listener) => {
+        hostActionListeners.add(listener);
+        return () => {
+          hostActionListeners.delete(listener);
+        };
+      },
       dbus: {
         call: (opts) => rpc("dbus_call", {
           bus: opts.bus ?? "session",
@@ -714,6 +754,10 @@
       deactivateScheduled = false;
       sentOverlayActive = computeOverlayActive();
       send({ type: "set_overlay", active: sentOverlayActive });
+      if (interactiveRects.length > 0 || sentInteractiveRegions) {
+        sentInteractiveRegions = interactiveRects.length > 0;
+        send({ type: "set_interactive_regions", rects: interactiveRects });
+      }
       for (const entry of menuStores.values()) {
         if (entry.subCount > 0) {
           send({
@@ -735,6 +779,11 @@
 
   // src/index.ts
   if (!window.webbar) {
+    let scheduleInteractiveSync = function() {
+      if (interactiveRaf !== 0) return;
+      interactiveRaf = window.requestAnimationFrame(syncInteractiveRegions);
+    };
+    scheduleInteractiveSync2 = scheduleInteractiveSync;
     const params = new URLSearchParams(window.location.search);
     const output = params.get("output") || "";
     const wsPort = params.get("wsPort") || params.get("ws") || "9123";
@@ -785,14 +834,86 @@
       }
       notifyOverlayChange();
     };
+    let lastInteractiveKey = "";
+    let interactiveRaf = 0;
+    const observedInteractive = /* @__PURE__ */ new Set();
+    const interactiveResizeObserver = typeof ResizeObserver !== "undefined" ? new ResizeObserver(() => scheduleInteractiveSync()) : null;
+    const syncInteractiveRegions = () => {
+      interactiveRaf = 0;
+      const nodes = document.querySelectorAll("[data-webbar-interactive]");
+      const currentSet = new Set(nodes);
+      if (interactiveResizeObserver) {
+        for (const el of observedInteractive) {
+          if (!currentSet.has(el)) {
+            interactiveResizeObserver.unobserve(el);
+            observedInteractive.delete(el);
+          }
+        }
+        for (const el of currentSet) {
+          if (!observedInteractive.has(el)) {
+            interactiveResizeObserver.observe(el);
+            observedInteractive.add(el);
+          }
+        }
+      }
+      const rects = [];
+      for (const el of nodes) {
+        const r = el.getBoundingClientRect();
+        const width = Math.round(r.width);
+        const height = Math.round(r.height);
+        if (width > 0 && height > 0) {
+          rects.push({
+            x: Math.round(r.left),
+            y: Math.round(r.top),
+            width,
+            height
+          });
+        }
+      }
+      const key = rects.map((r) => `${r.x},${r.y},${r.width},${r.height}`).join(";");
+      if (key !== lastInteractiveKey) {
+        lastInteractiveKey = key;
+        api.setInteractiveRegions(rects);
+      }
+    };
+    const startInteractiveObserver = () => {
+      if (!document.documentElement) return;
+      const observer = new MutationObserver(() => {
+        if (observedInteractive.size === 0 && lastInteractiveKey === "" && !document.querySelector("[data-webbar-interactive]")) {
+          return;
+        }
+        scheduleInteractiveSync();
+      });
+      observer.observe(document.documentElement, {
+        childList: true,
+        subtree: true,
+        attributes: true,
+        attributeFilter: ["data-webbar-interactive", "style", "class", "hidden"]
+      });
+      const onMotionEnd = () => {
+        if (observedInteractive.size > 0) {
+          scheduleInteractiveSync();
+        }
+      };
+      window.addEventListener("resize", scheduleInteractiveSync);
+      window.addEventListener("transitionend", onMotionEnd, true);
+      window.addEventListener("animationend", onMotionEnd, true);
+      syncInteractiveRegions();
+    };
     window.webbar = api;
     document.addEventListener("toggle", syncNativePopover, true);
     if (document.readyState === "loading") {
-      window.addEventListener("DOMContentLoaded", syncNativePopover, {
-        once: true
-      });
+      window.addEventListener(
+        "DOMContentLoaded",
+        () => {
+          syncNativePopover();
+          startInteractiveObserver();
+        },
+        { once: true }
+      );
     } else {
       syncNativePopover();
+      startInteractiveObserver();
     }
     const connect = () => {
       const socket = ws = new WebSocket(url);
@@ -818,4 +939,5 @@
     };
     connect();
   }
+  var scheduleInteractiveSync2;
 })();

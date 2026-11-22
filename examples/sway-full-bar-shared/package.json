@@ -7,6 +7,7 @@
     "./audio": "./src/audio.ts",
     "./clock": "./src/clock.ts",
     "./devMocks": "./src/devMocks.ts",
+    "./notifications": "./src/notifications.ts",
     "./popoverPosition": "./src/popoverPosition.ts",
     "./stasis": "./src/stasis.ts",
     "./tray": "./src/tray.ts",

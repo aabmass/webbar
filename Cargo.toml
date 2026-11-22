@@ -26,6 +26,7 @@ swayipc = "4"
 swayipc-types = "2"
 tungstenite = { version = "0.24", default-features = false, features = ["handshake"] }
 quick-xml = "0.37"
+freedesktop-desktop-entry = { version = "0.8", default-features = false }
 
 [build-dependencies]
 swayipc-types = "2"

@@ -3,7 +3,7 @@ import type {
   AudioState,
   BluetoothState,
   NetworkState,
-  NotificationItem,
+  NotificationsState,
   SwayNode,
   SwayState,
   TrayItem,
@@ -26,7 +26,6 @@ const notifClearBtn = document.getElementById("notif-clear") as HTMLButtonElemen
 
 let defaultOutput: AudioDevice | undefined;
 let latestBluetooth: BluetoothState | undefined;
-let currentNotifications: NotificationItem[] = [];
 
 function updateClock(): void {
   const now = new Date();
@@ -192,9 +191,11 @@ function renderBluetooth(bt: BluetoothState): void {
   }
 }
 
-function renderNotifications(items: NotificationItem[]): void {
+function renderNotifications(state: NotificationsState): void {
+  const items = state.items;
   if (items.length === 0) {
     notifEl.textContent = "No notifications";
+    notifEl.title = "";
     notifEl.dataset.hasItems = "false";
     notifClearBtn.hidden = true;
     return;
@@ -229,7 +230,8 @@ btButton.addEventListener("click", () => {
 });
 
 notifEl.addEventListener("click", () => {
-  const current = currentNotifications[currentNotifications.length - 1];
+  const items = notifications.get().items;
+  const current = items[items.length - 1];
   if (current) {
     notifications.dismiss(current.id);
   }
@@ -244,10 +246,7 @@ tray.onChange(renderTray);
 audio.onChange(renderAudio);
 network.onChange(renderNetwork);
 bluetooth.onChange(renderBluetooth);
-notifications.onChange((items) => {
-  currentNotifications = items;
-  renderNotifications(items);
-});
+notifications.onChange(renderNotifications);
 
 updateClock();
 setInterval(updateClock, 10_000);

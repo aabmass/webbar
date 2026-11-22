@@ -142,3 +142,9 @@ function ThemeBadge() {
   );
 }
 ```
+
+---
+
+## Themed Icons
+
+`webbar` automatically recolors KDE/Breeze/Papirus `current-color-scheme` and `currentColor` SVG icons for both `tray` and `notifications` using the active theme palette, and refreshes them live whenever the desktop color scheme or GTK icon theme changes. `icon_name` and `app_icon_name` are also exposed on tray/notification items so frontends can still apply CSS `mask-image` for `-symbolic` icons when desired.

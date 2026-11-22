@@ -283,6 +283,14 @@ echo "update-screenshots: capturing popover-display.png..."
 launch_bar "theme=dark&open=display" 2.0
 grim -g "1000,0 600x400" "$OUT_DIR/popover-display.png"
 
+echo "update-screenshots: capturing popover-notifications.png..."
+launch_bar "theme=dark&open=notifications" 2.0
+grim -g "1000,0 600x520" "$OUT_DIR/popover-notifications.png"
+
+echo "update-screenshots: capturing notifications-toasts.png..."
+launch_bar "theme=dark&toasts=1" 2.0
+grim -g "1000,0 600x480" "$OUT_DIR/notifications-toasts.png"
+
 echo "update-screenshots: switching to light theme and capturing hero-light.png..."
 set_wallpaper "$WORK_DIR/light.png"
 swaymsg "client.focused #2b6de0 #fafafc #18181f #2b6de0 #2b6de0" >/dev/null
@@ -299,7 +307,9 @@ oxipng -o 3 --strip safe --quiet \
   "$OUT_DIR/popover-audio.png" \
   "$OUT_DIR/popover-calendar.png" \
   "$OUT_DIR/popover-bluetooth.png" \
-  "$OUT_DIR/popover-display.png"
+  "$OUT_DIR/popover-display.png" \
+  "$OUT_DIR/popover-notifications.png" \
+  "$OUT_DIR/notifications-toasts.png"
 
 echo "update-screenshots: done! Wrote screenshots to $OUT_DIR"
 ls -lh "$OUT_DIR"

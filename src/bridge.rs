@@ -114,11 +114,24 @@ pub enum BridgeRequest {
     DismissNotification {
         id: u32,
     },
+    HideNotificationPopup {
+        id: u32,
+    },
     InvokeNotificationAction {
         id: u32,
         action_key: String,
     },
     ClearNotifications,
+    SetNotificationsDnd {
+        enabled: bool,
+    },
+    MarkNotificationsRead,
+    PauseNotificationTimeout {
+        id: u32,
+    },
+    ResumeNotificationTimeout {
+        id: u32,
+    },
     AudioSetVolume {
         id: u32,
         device_id: u32,
@@ -169,6 +182,9 @@ pub enum BridgeRequest {
         display_id: Option<String>,
     },
     SetInputRegion {
+        rects: Vec<InputRect>,
+    },
+    SetInteractiveRegions {
         rects: Vec<InputRect>,
     },
     SetOverlay {
@@ -250,8 +266,9 @@ pub enum BridgeEvent {
         menu_path: String,
         items: Vec<crate::tray::TrayMenuItem>,
     },
-    Notifications {
-        items: Vec<crate::notifications::NotificationItem>,
+    NotificationsState(crate::notifications::NotificationsState),
+    HostAction {
+        action: String,
     },
     AudioState {
         available: bool,
@@ -332,7 +349,7 @@ impl BridgeEvent {
             BridgeEvent::Theme(_) => Some(SnapshotKey::Theme),
             BridgeEvent::SwayState(_) => Some(SnapshotKey::Sway),
             BridgeEvent::Tray { .. } => Some(SnapshotKey::Tray),
-            BridgeEvent::Notifications { .. } => Some(SnapshotKey::Notifications),
+            BridgeEvent::NotificationsState(_) => Some(SnapshotKey::Notifications),
             BridgeEvent::AudioState { .. } => Some(SnapshotKey::Audio),
             BridgeEvent::BluetoothState { .. } => Some(SnapshotKey::Bluetooth),
             BridgeEvent::NetworkState { .. } => Some(SnapshotKey::Network),

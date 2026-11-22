@@ -1,11 +1,16 @@
-import type { TrayItem, TrayMenuItem } from "@webbar/types";
+import type {
+  NotificationItem,
+  NotificationsState,
+  TrayItem,
+  TrayMenuItem,
+} from "@webbar/types";
 
 /**
  * Dev-only fixtures for previewing the bar in a plain browser.
  *
- * Headless `--ws-bridge` mode does not claim the StatusNotifierWatcher, so the
- * tray is always empty there. Append `&mockTray` to the dev URL to populate it
- * with a few fake items so tray styling can be inspected.
+ * Headless `--ws-bridge` mode does not claim StatusNotifierWatcher or
+ * org.freedesktop.Notifications. Append `&mockTray` or `&mockNotifications` to
+ * the dev URL to populate them with sample items for styling inspection.
  */
 
 function svgIcon(body: string, color: string): string {
@@ -81,10 +86,7 @@ const MOCK_MENU: TrayMenuItem[] = [
   entry("Quit"),
 ];
 
-export function installDevMocks(): void {
-  const params = new URLSearchParams(window.location.search);
-  if (!params.has("mockTray")) return;
-
+function installTrayMocks(): void {
   const mockMenuStore = {
     get: () => MOCK_MENU,
     subscribe: () => () => {},
@@ -104,4 +106,132 @@ export function installDevMocks(): void {
     menu: () => mockMenuStore,
     menuEvent: () => {},
   };
+}
+
+function installNotificationMocks(): void {
+  const now = Date.now();
+  const initialItems: NotificationItem[] = [
+    {
+      id: 1,
+      app_name: "Signal",
+      app_icon_name: "signal-desktop",
+      app_icon_url: svgIcon(
+        '<circle cx="12" cy="12" r="9"/>',
+        "#3a76f0",
+      ),
+      image_url: "",
+      summary: "Alice",
+      body: "Are we still on for lunch at 12:30?",
+      urgency: "normal",
+      actions: [
+        { key: "default", label: "Open" },
+        { key: "reply", label: "Reply" },
+        { key: "mark-read", label: "Mark Read" },
+      ],
+      timestamp_ms: now - 45_000,
+      category: "im.received",
+      desktop_entry: "signal-desktop",
+      progress: null,
+      transient: false,
+      resident: false,
+      popup: true,
+      read: false,
+    },
+    {
+      id: 2,
+      app_name: "System",
+      app_icon_name: "battery-caution",
+      app_icon_url: "",
+      image_url: "",
+      summary: "Battery Critically Low",
+      body: "5% remaining — plug in AC power soon.",
+      urgency: "critical",
+      actions: [],
+      timestamp_ms: now - 3 * 60_000,
+      category: "device",
+      desktop_entry: "",
+      progress: null,
+      transient: false,
+      resident: false,
+      popup: true,
+      read: false,
+    },
+    {
+      id: 3,
+      app_name: "Downloads",
+      app_icon_name: "folder-download",
+      app_icon_url: "",
+      image_url: "",
+      summary: "nixos-unstable.iso",
+      body: "Downloading 68% (42 MB/s)",
+      urgency: "low",
+      actions: [],
+      timestamp_ms: now - 14 * 60_000,
+      category: "transfer",
+      desktop_entry: "",
+      progress: 68,
+      transient: false,
+      resident: false,
+      popup: false,
+      read: true,
+    },
+  ];
+
+  let state: NotificationsState = {
+    available: true,
+    dnd: false,
+    unread_count: initialItems.filter((i) => !i.read).length,
+    items: initialItems,
+  };
+  const subs = new Set<() => void>();
+
+  const update = (next: NotificationsState) => {
+    state = {
+      ...next,
+      unread_count: next.items.filter((i) => !i.read).length,
+    };
+    for (const cb of subs) cb();
+  };
+
+  const subscribe = (cb: () => void) => {
+    subs.add(cb);
+    return () => {
+      subs.delete(cb);
+    };
+  };
+
+  window.webbar.notifications = {
+    get: () => state,
+    subscribe,
+    onChange: (cb) => {
+      cb(state);
+      return subscribe(() => cb(state));
+    },
+    dismiss: (id) =>
+      update({ ...state, items: state.items.filter((i) => i.id !== id) }),
+    hidePopup: (id) =>
+      update({
+        ...state,
+        items: state.items.map((i) =>
+          i.id === id ? { ...i, popup: false } : i,
+        ),
+      }),
+    invokeAction: (id) =>
+      update({ ...state, items: state.items.filter((i) => i.id !== id) }),
+    clearAll: () => update({ ...state, items: [] }),
+    setDnd: (dnd) => update({ ...state, dnd }),
+    markAllRead: () =>
+      update({
+        ...state,
+        items: state.items.map((i) => ({ ...i, read: true })),
+      }),
+    pauseTimeout: () => {},
+    resumeTimeout: () => {},
+  };
+}
+
+export function installDevMocks(): void {
+  const params = new URLSearchParams(window.location.search);
+  if (params.has("mockTray")) installTrayMocks();
+  if (params.has("mockNotifications")) installNotificationMocks();
 }

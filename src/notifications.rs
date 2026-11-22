@@ -1,10 +1,13 @@
-//! Minimal `org.freedesktop.Notifications` D-Bus server using `zbus`.
+//! Full `org.freedesktop.Notifications` D-Bus daemon using `zbus`.
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU32, Ordering};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Condvar, Mutex, OnceLock};
 use std::thread;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use quick_xml::events::Event;
+use quick_xml::Reader;
 use serde::Serialize;
 use zbus::blocking::connection::Builder as ConnectionBuilder;
 use zbus::blocking::Connection;
@@ -13,8 +16,14 @@ use zbus::object_server::SignalEmitter;
 use zbus::zvariant::{OwnedValue, Value};
 
 use crate::bridge::{BridgeEvent, SendEvent};
+use crate::icons::{
+    lookup_desktop_entry, resolve_icon_or_path, rgba_image_data_to_png_data_url, IconPalette,
+    SharedIconPalette,
+};
 
 const MAX_HISTORY: usize = 50;
+const DEFAULT_EXPIRE_MS: u64 = 5000;
+const RESUME_MIN_MS: u64 = 500;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, ts_rs::TS)]
 #[ts(export, export_to = "../preload/src/generated/")]
@@ -37,19 +46,134 @@ pub struct NotificationAction {
 pub struct NotificationItem {
     pub id: u32,
     pub app_name: String,
-    pub icon: String,
+    pub app_icon_name: String,
+    pub app_icon_url: String,
+    pub image_url: String,
     pub summary: String,
     pub body: String,
     pub urgency: NotificationUrgency,
     pub actions: Vec<NotificationAction>,
+    #[ts(type = "number")]
+    pub timestamp_ms: u64,
+    pub category: String,
+    pub desktop_entry: String,
+    pub progress: Option<u8>,
+    pub transient: bool,
+    pub resident: bool,
+    pub popup: bool,
+    pub read: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, ts_rs::TS)]
+#[ts(export, export_to = "../preload/src/generated/")]
+pub struct NotificationsState {
+    pub available: bool,
+    pub dnd: bool,
+    pub unread_count: u32,
+    pub items: Vec<NotificationItem>,
+}
+
+#[derive(Debug, Clone)]
+enum TimerState {
+    Sticky,
+    Running { deadline: Instant },
+    Paused { remaining: Duration },
+}
+
+#[derive(Clone)]
+struct NotificationEntry {
+    item: NotificationItem,
+    sync_tag: String,
+    raw_app_icon: String,
+    raw_image_path: String,
+    timer: TimerState,
+}
+
+struct StoreData {
+    available: bool,
+    dnd: bool,
+    entries: Vec<NotificationEntry>,
+    shutdown: bool,
+}
+
+impl StoreData {
+    fn snapshot(&self) -> NotificationsState {
+        let items: Vec<NotificationItem> = self.entries.iter().map(|e| e.item.clone()).collect();
+        let unread_count = items.iter().filter(|item| !item.read).count() as u32;
+        NotificationsState {
+            available: self.available,
+            dnd: self.dnd,
+            unread_count,
+            items,
+        }
+    }
+}
+
+struct StoreInner {
+    next_id: AtomicU32,
+    data: Mutex<StoreData>,
+    cvar: Condvar,
+    send: SendEvent,
+    conn: OnceLock<Connection>,
+    theme: SharedIconPalette,
+}
+
+struct StoreHandle {
+    inner: Arc<StoreInner>,
+}
+
+impl Drop for StoreHandle {
+    fn drop(&mut self) {
+        if let Ok(mut guard) = self.inner.data.lock() {
+            guard.shutdown = true;
+            self.inner.cvar.notify_all();
+        }
+    }
 }
 
 #[derive(Clone)]
 pub struct NotificationStore {
-    next_id: Arc<AtomicU32>,
-    items: Arc<Mutex<Vec<NotificationItem>>>,
-    send: SendEvent,
-    conn: Arc<OnceLock<Connection>>,
+    handle: Arc<StoreHandle>,
+}
+
+fn now_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
+}
+
+fn hint_string(hints: &HashMap<String, OwnedValue>, keys: &[&str]) -> String {
+    for key in keys {
+        if let Some(val) = hints.get(*key) {
+            if let Value::Str(s) = &**val {
+                return s.as_str().to_string();
+            }
+        }
+    }
+    String::new()
+}
+
+fn hint_bool(hints: &HashMap<String, OwnedValue>, key: &str) -> bool {
+    hints.get(key).is_some_and(|v| match &**v {
+        Value::Bool(b) => *b,
+        Value::U8(n) => *n != 0,
+        Value::I32(n) => *n != 0,
+        Value::U32(n) => *n != 0,
+        _ => false,
+    })
+}
+
+fn hint_progress(hints: &HashMap<String, OwnedValue>) -> Option<u8> {
+    let raw = hints.get("value").and_then(|v| match &**v {
+        Value::U8(n) => Some(i64::from(*n)),
+        Value::I32(n) => Some(i64::from(*n)),
+        Value::U32(n) => Some(i64::from(*n)),
+        Value::I64(n) => Some(*n),
+        Value::U64(n) => i64::try_from(*n).ok(),
+        _ => None,
+    })?;
+    Some(raw.clamp(0, 100) as u8)
 }
 
 pub fn parse_urgency(hints: &HashMap<String, OwnedValue>) -> NotificationUrgency {
@@ -78,134 +202,650 @@ pub fn parse_actions(raw: &[String]) -> Vec<NotificationAction> {
         .collect()
 }
 
-impl NotificationStore {
-    pub fn new(send: SendEvent) -> Self {
-        Self {
-            next_id: Arc::new(AtomicU32::new(1)),
-            items: Arc::new(Mutex::new(Vec::new())),
-            send,
-            conn: Arc::new(OnceLock::new()),
+type RawImageData = (i32, i32, i32, bool, i32, i32, Vec<u8>);
+
+fn parse_image_data_hint(hints: &HashMap<String, OwnedValue>, keys: &[&str]) -> Option<String> {
+    for key in keys {
+        let Some(val) = hints.get(*key) else {
+            continue;
+        };
+        if let Ok((w, h, rowstride, has_alpha, bps, channels, bytes)) =
+            RawImageData::try_from(val.clone())
+        {
+            if let Some(url) =
+                rgba_image_data_to_png_data_url(w, h, rowstride, has_alpha, bps, channels, &bytes)
+            {
+                return Some(url);
+            }
         }
+    }
+    None
+}
+
+pub fn strip_markup(raw: &str) -> String {
+    if !raw.contains('<') && !raw.contains('&') {
+        return raw.to_string();
+    }
+    let mut reader = Reader::from_str(raw);
+    reader.config_mut().check_end_names = false;
+    reader.config_mut().check_comments = false;
+
+    let mut out = String::with_capacity(raw.len());
+    loop {
+        match reader.read_event() {
+            Ok(Event::Text(t)) => {
+                if let Ok(unescaped) = t.unescape() {
+                    out.push_str(&unescaped);
+                } else {
+                    out.push_str(&String::from_utf8_lossy(t.as_ref()));
+                }
+            }
+            Ok(Event::CData(c)) => {
+                out.push_str(&String::from_utf8_lossy(c.as_ref()));
+            }
+            Ok(Event::Start(e)) | Ok(Event::Empty(e)) => {
+                if e.local_name().as_ref().eq_ignore_ascii_case(b"br") {
+                    out.push('\n');
+                }
+            }
+            Ok(Event::Eof) => break,
+            Ok(_) => {}
+            Err(_) => return raw.to_string(),
+        }
+    }
+    out
+}
+
+fn initial_timer(urgency: NotificationUrgency, expire_timeout: i32, popup: bool) -> TimerState {
+    if !popup || urgency == NotificationUrgency::Critical || expire_timeout == 0 {
+        return TimerState::Sticky;
+    }
+    let ms = if expire_timeout > 0 {
+        expire_timeout as u64
+    } else {
+        DEFAULT_EXPIRE_MS
+    };
+    TimerState::Running {
+        deadline: Instant::now() + Duration::from_millis(ms),
+    }
+}
+
+fn resolve_entry_icons(
+    raw_app_icon: &str,
+    desktop_entry: &str,
+    raw_image_path: &str,
+    need_desktop_name: bool,
+    palette: &IconPalette,
+) -> (String, String, Option<String>, Option<String>) {
+    let mut desktop_name = None;
+    let mut desktop_icon = None;
+    if !desktop_entry.is_empty() && (raw_app_icon.is_empty() || need_desktop_name) {
+        if let Some(info) = lookup_desktop_entry(desktop_entry) {
+            desktop_name = info.name;
+            desktop_icon = info.icon;
+        }
+    }
+
+    let app_icon_name = if !raw_app_icon.is_empty() {
+        raw_app_icon.to_string()
+    } else {
+        desktop_icon.unwrap_or_default()
+    };
+
+    let app_icon_url =
+        resolve_icon_or_path(&app_icon_name, "", 24, palette).unwrap_or_default();
+
+    let image_url = if !raw_image_path.is_empty() {
+        resolve_icon_or_path(raw_image_path, "", 64, palette)
+    } else {
+        None
+    };
+
+    (app_icon_name, app_icon_url, image_url, desktop_name)
+}
+
+impl NotificationStore {
+    pub fn new(send: SendEvent, theme: SharedIconPalette) -> Self {
+        let inner = Arc::new(StoreInner {
+            next_id: AtomicU32::new(1),
+            data: Mutex::new(StoreData {
+                available: false,
+                dnd: false,
+                entries: Vec::new(),
+                shutdown: false,
+            }),
+            cvar: Condvar::new(),
+            send,
+            conn: OnceLock::new(),
+            theme,
+        });
+        let store = Self {
+            handle: Arc::new(StoreHandle {
+                inner: Arc::clone(&inner),
+            }),
+        };
+        spawn_timer_thread(inner);
+        store
+    }
+
+    #[cfg(test)]
+    pub fn test_new(send: SendEvent) -> Self {
+        Self::new(send, SharedIconPalette::default())
+    }
+
+    fn emit_snapshot(&self, snapshot: NotificationsState) {
+        (self.handle.inner.send)(BridgeEvent::NotificationsState(snapshot));
+    }
+
+    fn emit_closed(&self, id: u32, reason: u32) {
+        emit_closed_on(&self.handle.inner.conn, id, reason);
+    }
+
+    pub fn set_available(&self, available: bool) {
+        let mut guard = self.handle.inner.data.lock().unwrap();
+        guard.available = available;
+        let snapshot = guard.snapshot();
+        drop(guard);
+        self.emit_snapshot(snapshot);
     }
 
     #[cfg(test)]
     pub fn push(&self, replaces_id: u32, app_name: String, summary: String, body: String) -> u32 {
-        self.push_full(
-            replaces_id,
+        self.push_notification(
             app_name,
+            replaces_id,
             String::new(),
             summary,
             body,
-            NotificationUrgency::Normal,
             Vec::new(),
+            HashMap::new(),
+            -1,
         )
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub fn push_full(
+    pub fn push_notification(
         &self,
+        mut app_name: String,
         replaces_id: u32,
-        app_name: String,
-        icon: String,
+        app_icon: String,
         summary: String,
         body: String,
-        urgency: NotificationUrgency,
-        actions: Vec<NotificationAction>,
+        actions: Vec<String>,
+        hints: HashMap<String, OwnedValue>,
+        expire_timeout: i32,
     ) -> u32 {
-        let mut items = self.items.lock().unwrap();
-        let id = if replaces_id != 0 {
-            if let Some(existing) = items.iter_mut().find(|n| n.id == replaces_id) {
-                existing.app_name = app_name;
-                existing.icon = icon;
-                existing.summary = summary;
-                existing.body = body;
-                existing.urgency = urgency;
-                existing.actions = actions;
-                let snapshot = items.clone();
-                drop(items);
-                (self.send)(BridgeEvent::Notifications { items: snapshot });
-                return replaces_id;
+        let urgency = parse_urgency(&hints);
+        let actions = parse_actions(&actions);
+        let category = hint_string(&hints, &["category"]);
+        let desktop_entry = hint_string(&hints, &["desktop-entry"]);
+        let transient = hint_bool(&hints, "transient");
+        let resident = hint_bool(&hints, "resident");
+        let progress = hint_progress(&hints);
+        let sync_tag = hint_string(&hints, &["synchronous", "x-canonical-private-synchronous"]);
+        let raw_image_path = hint_string(&hints, &["image-path", "image_path"]);
+        let image_data_url = parse_image_data_hint(&hints, &["image-data", "image_data"]);
+
+        let palette = self.handle.inner.theme.palette();
+        let (app_icon_name, app_icon_url, resolved_image_path_url, desktop_name) =
+            resolve_entry_icons(
+                &app_icon,
+                &desktop_entry,
+                &raw_image_path,
+                app_name.is_empty(),
+                &palette,
+            );
+        if app_name.is_empty() {
+            if let Some(name) = desktop_name {
+                app_name = name;
             }
-            replaces_id
+        }
+        let stored_image_path = if image_data_url.is_none() && resolved_image_path_url.is_some() {
+            raw_image_path
         } else {
-            self.next_id.fetch_add(1, Ordering::Relaxed)
+            String::new()
+        };
+        let image_url = image_data_url
+            .or(resolved_image_path_url)
+            .or_else(|| {
+                if app_icon_url.is_empty() {
+                    parse_image_data_hint(&hints, &["icon_data"])
+                } else {
+                    None
+                }
+            })
+            .unwrap_or_default();
+        let clean_body = strip_markup(&body);
+        let ts = now_ms();
+
+        let mut guard = self.handle.inner.data.lock().unwrap();
+        let popup = !guard.dnd || urgency == NotificationUrgency::Critical;
+
+        let existing_idx = if replaces_id != 0 {
+            guard.entries.iter().position(|e| e.item.id == replaces_id)
+        } else if !sync_tag.is_empty() {
+            guard.entries.iter().position(|e| e.sync_tag == sync_tag)
+        } else {
+            None
         };
 
-        items.push(NotificationItem {
-            id,
-            app_name,
-            icon,
-            summary,
-            body,
-            urgency,
-            actions,
-        });
-        if items.len() > MAX_HISTORY {
-            let drain = items.len() - MAX_HISTORY;
-            items.drain(0..drain);
+        if !popup && transient {
+            let id = if let Some(idx) = existing_idx {
+                let removed = guard.entries.remove(idx).item.id;
+                let snapshot = guard.snapshot();
+                self.handle.inner.cvar.notify_all();
+                drop(guard);
+                self.emit_snapshot(snapshot);
+                self.emit_closed(removed, 1);
+                return removed;
+            } else if replaces_id != 0 {
+                self.handle
+                    .inner
+                    .next_id
+                    .fetch_max(replaces_id.saturating_add(1), Ordering::Relaxed);
+                replaces_id
+            } else {
+                self.handle.inner.next_id.fetch_add(1, Ordering::Relaxed)
+            };
+            drop(guard);
+            self.emit_closed(id, 1);
+            return id;
         }
-        let snapshot = items.clone();
-        drop(items);
-        (self.send)(BridgeEvent::Notifications { items: snapshot });
+
+        let timer = initial_timer(urgency, expire_timeout, popup);
+
+        let id = if let Some(idx) = existing_idx {
+            let existing = &mut guard.entries[idx];
+            let id = existing.item.id;
+            existing.item = NotificationItem {
+                id,
+                app_name,
+                app_icon_name,
+                app_icon_url,
+                image_url,
+                summary,
+                body: clean_body,
+                urgency,
+                actions,
+                timestamp_ms: ts,
+                category,
+                desktop_entry,
+                progress,
+                transient,
+                resident,
+                popup,
+                read: false,
+            };
+            existing.sync_tag = sync_tag;
+            existing.raw_app_icon = app_icon;
+            existing.raw_image_path = stored_image_path;
+            existing.timer = timer;
+            let snapshot = guard.snapshot();
+            self.handle.inner.cvar.notify_all();
+            drop(guard);
+            self.emit_snapshot(snapshot);
+            return id;
+        } else if replaces_id != 0 {
+            self.handle
+                .inner
+                .next_id
+                .fetch_max(replaces_id.saturating_add(1), Ordering::Relaxed);
+            replaces_id
+        } else {
+            self.handle.inner.next_id.fetch_add(1, Ordering::Relaxed)
+        };
+
+        guard.entries.push(NotificationEntry {
+            item: NotificationItem {
+                id,
+                app_name,
+                app_icon_name,
+                app_icon_url,
+                image_url,
+                summary,
+                body: clean_body,
+                urgency,
+                actions,
+                timestamp_ms: ts,
+                category,
+                desktop_entry,
+                progress,
+                transient,
+                resident,
+                popup,
+                read: false,
+            },
+            sync_tag,
+            raw_app_icon: app_icon,
+            raw_image_path: stored_image_path,
+            timer,
+        });
+
+        let mut evicted_ids = Vec::new();
+        if guard.entries.len() > MAX_HISTORY {
+            let drain = guard.entries.len() - MAX_HISTORY;
+            evicted_ids.extend(guard.entries.drain(0..drain).map(|e| e.item.id));
+        }
+
+        let snapshot = guard.snapshot();
+        self.handle.inner.cvar.notify_all();
+        drop(guard);
+
+        self.emit_snapshot(snapshot);
+        for evicted_id in evicted_ids {
+            self.emit_closed(evicted_id, 4);
+        }
         id
     }
 
-    pub fn dismiss(&self, id: u32) -> bool {
-        let mut items = self.items.lock().unwrap();
-        let before = items.len();
-        items.retain(|n| n.id != id);
-        let removed = items.len() != before;
-        if removed {
-            let snapshot = items.clone();
-            drop(items);
-            (self.send)(BridgeEvent::Notifications { items: snapshot });
+    pub fn hide_popup(&self, id: u32) {
+        let mut guard = self.handle.inner.data.lock().unwrap();
+        let Some(idx) = guard.entries.iter().position(|e| e.item.id == id) else {
+            return;
+        };
+        if guard.entries[idx].item.transient {
+            guard.entries.remove(idx);
+            let snapshot = guard.snapshot();
+            self.handle.inner.cvar.notify_all();
+            drop(guard);
+            self.emit_snapshot(snapshot);
             self.emit_closed(id, 2);
+            return;
+        }
+        if !guard.entries[idx].item.popup {
+            return;
+        }
+        guard.entries[idx].item.popup = false;
+        guard.entries[idx].timer = TimerState::Sticky;
+        let snapshot = guard.snapshot();
+        self.handle.inner.cvar.notify_all();
+        drop(guard);
+        self.emit_snapshot(snapshot);
+    }
+
+    pub fn dismiss(&self, id: u32) -> bool {
+        self.remove_with_reason(id, 2)
+    }
+
+    pub fn close_by_app(&self, id: u32) -> bool {
+        self.remove_with_reason(id, 3)
+    }
+
+    fn remove_with_reason(&self, id: u32, reason: u32) -> bool {
+        let mut guard = self.handle.inner.data.lock().unwrap();
+        let before = guard.entries.len();
+        guard.entries.retain(|e| e.item.id != id);
+        let removed = guard.entries.len() != before;
+        if removed {
+            let snapshot = guard.snapshot();
+            self.handle.inner.cvar.notify_all();
+            drop(guard);
+            self.emit_snapshot(snapshot);
+            self.emit_closed(id, reason);
         }
         removed
     }
 
-    pub fn invoke_action(&self, id: u32, action_key: &str) {
-        if let Some(conn) = self.conn.get() {
-            if let Ok(iface) = conn
-                .object_server()
-                .interface::<_, NotificationsServer>("/org/freedesktop/Notifications")
-            {
-                let _ = async_io::block_on(NotificationsServer::action_invoked(
-                    iface.signal_emitter(),
-                    id,
-                    action_key,
-                ));
-            }
+    pub fn dismiss_latest(&self) {
+        let latest_id = {
+            let guard = self.handle.inner.data.lock().unwrap();
+            guard
+                .entries
+                .iter()
+                .rev()
+                .find(|e| e.item.popup)
+                .or_else(|| guard.entries.last())
+                .map(|e| e.item.id)
+        };
+        if let Some(id) = latest_id {
+            self.dismiss(id);
         }
     }
 
-    fn emit_closed(&self, id: u32, reason: u32) {
-        if let Some(conn) = self.conn.get() {
-            if let Ok(iface) = conn
-                .object_server()
-                .interface::<_, NotificationsServer>("/org/freedesktop/Notifications")
-            {
-                let _ = async_io::block_on(NotificationsServer::notification_closed(
-                    iface.signal_emitter(),
-                    id,
-                    reason,
-                ));
+    pub fn invoke_action(&self, id: u32, action_key: &str) {
+        let Some(is_resident) = ({
+            let guard = self.handle.inner.data.lock().unwrap();
+            guard
+                .entries
+                .iter()
+                .find(|e| e.item.id == id)
+                .map(|e| e.item.resident)
+        }) else {
+            return;
+        };
+        if let Some(iface) = server_iface(&self.handle.inner.conn) {
+            let _ = async_io::block_on(NotificationsServer::action_invoked(
+                iface.signal_emitter(),
+                id,
+                action_key,
+            ));
+        }
+        if !is_resident {
+            self.dismiss(id);
+        }
+    }
+
+    pub fn set_dnd(&self, enabled: bool) {
+        let mut guard = self.handle.inner.data.lock().unwrap();
+        if guard.dnd == enabled {
+            return;
+        }
+        guard.dnd = enabled;
+        let snapshot = guard.snapshot();
+        drop(guard);
+        self.emit_snapshot(snapshot);
+    }
+
+    pub fn toggle_dnd(&self) {
+        let mut guard = self.handle.inner.data.lock().unwrap();
+        guard.dnd = !guard.dnd;
+        let snapshot = guard.snapshot();
+        drop(guard);
+        self.emit_snapshot(snapshot);
+    }
+
+    pub fn mark_all_read(&self) {
+        let mut guard = self.handle.inner.data.lock().unwrap();
+        let mut changed = false;
+        for entry in &mut guard.entries {
+            if !entry.item.read {
+                entry.item.read = true;
+                changed = true;
             }
         }
+        if !changed {
+            return;
+        }
+        let snapshot = guard.snapshot();
+        drop(guard);
+        self.emit_snapshot(snapshot);
     }
 
     pub fn clear_all(&self) {
-        let mut items = self.items.lock().unwrap();
-        if !items.is_empty() {
-            let ids: Vec<u32> = items.iter().map(|n| n.id).collect();
-            items.clear();
-            drop(items);
-            (self.send)(BridgeEvent::Notifications { items: Vec::new() });
-            for id in ids {
-                self.emit_closed(id, 2);
+        let mut guard = self.handle.inner.data.lock().unwrap();
+        if guard.entries.is_empty() {
+            return;
+        }
+        let ids: Vec<u32> = guard.entries.iter().map(|e| e.item.id).collect();
+        guard.entries.clear();
+        let snapshot = guard.snapshot();
+        self.handle.inner.cvar.notify_all();
+        drop(guard);
+        self.emit_snapshot(snapshot);
+        for id in ids {
+            self.emit_closed(id, 2);
+        }
+    }
+
+    pub fn pause_timeout(&self, id: u32) {
+        let mut guard = self.handle.inner.data.lock().unwrap();
+        let Some(entry) = guard.entries.iter_mut().find(|e| e.item.id == id) else {
+            return;
+        };
+        if let TimerState::Running { deadline } = entry.timer {
+            entry.timer = TimerState::Paused {
+                remaining: deadline.saturating_duration_since(Instant::now()),
+            };
+        }
+    }
+
+    pub fn resume_timeout(&self, id: u32) {
+        let mut guard = self.handle.inner.data.lock().unwrap();
+        let Some(entry) = guard.entries.iter_mut().find(|e| e.item.id == id) else {
+            return;
+        };
+        if let TimerState::Paused { remaining } = entry.timer {
+            if entry.item.popup {
+                let dur = remaining.max(Duration::from_millis(RESUME_MIN_MS));
+                entry.timer = TimerState::Running {
+                    deadline: Instant::now() + dur,
+                };
+                self.handle.inner.cvar.notify_all();
             }
         }
     }
+
+    pub fn refresh_icons(&self) {
+        let sources: Vec<(u32, String, String, String)> = {
+            let guard = self.handle.inner.data.lock().unwrap();
+            guard
+                .entries
+                .iter()
+                .map(|e| {
+                    (
+                        e.item.id,
+                        e.raw_app_icon.clone(),
+                        e.item.desktop_entry.clone(),
+                        e.raw_image_path.clone(),
+                    )
+                })
+                .collect()
+        };
+        if sources.is_empty() {
+            return;
+        }
+
+        let palette = self.handle.inner.theme.palette();
+        let resolved: Vec<(u32, String, String, Option<String>)> = sources
+            .into_iter()
+            .map(|(id, raw_app, desktop_entry, raw_img)| {
+                let (icon_name, icon_url, img_url, _) =
+                    resolve_entry_icons(&raw_app, &desktop_entry, &raw_img, false, &palette);
+                (id, icon_name, icon_url, img_url)
+            })
+            .collect();
+
+        let mut guard = self.handle.inner.data.lock().unwrap();
+        let mut changed = false;
+        for (id, icon_name, icon_url, img_url) in resolved {
+            if let Some(entry) = guard.entries.iter_mut().find(|e| e.item.id == id) {
+                if entry.item.app_icon_name != icon_name || entry.item.app_icon_url != icon_url {
+                    entry.item.app_icon_name = icon_name;
+                    entry.item.app_icon_url = icon_url;
+                    changed = true;
+                }
+                if !entry.raw_image_path.is_empty() {
+                    let next_img = img_url.unwrap_or_default();
+                    if entry.item.image_url != next_img {
+                        entry.item.image_url = next_img;
+                        changed = true;
+                    }
+                }
+            }
+        }
+        if !changed {
+            return;
+        }
+        let snapshot = guard.snapshot();
+        drop(guard);
+        self.emit_snapshot(snapshot);
+    }
+}
+
+fn server_iface(
+    conn_lock: &OnceLock<Connection>,
+) -> Option<zbus::blocking::object_server::InterfaceRef<NotificationsServer>> {
+    conn_lock
+        .get()?
+        .object_server()
+        .interface::<_, NotificationsServer>("/org/freedesktop/Notifications")
+        .ok()
+}
+
+fn emit_closed_on(conn_lock: &OnceLock<Connection>, id: u32, reason: u32) {
+    if let Some(iface) = server_iface(conn_lock) {
+        let _ = async_io::block_on(NotificationsServer::notification_closed(
+            iface.signal_emitter(),
+            id,
+            reason,
+        ));
+    }
+}
+
+fn spawn_timer_thread(inner: Arc<StoreInner>) {
+    thread::spawn(move || {
+        let mut guard = inner.data.lock().unwrap();
+        loop {
+            if guard.shutdown {
+                break;
+            }
+            let now = Instant::now();
+            let mut expired_transient_ids = Vec::new();
+            let mut changed = false;
+
+            let mut idx = 0;
+            while idx < guard.entries.len() {
+                let expired = matches!(
+                    guard.entries[idx].timer,
+                    TimerState::Running { deadline } if guard.entries[idx].item.popup && deadline <= now
+                );
+                if expired {
+                    changed = true;
+                    if guard.entries[idx].item.transient {
+                        let id = guard.entries.remove(idx).item.id;
+                        expired_transient_ids.push(id);
+                        continue;
+                    } else {
+                        guard.entries[idx].item.popup = false;
+                        guard.entries[idx].timer = TimerState::Sticky;
+                    }
+                }
+                idx += 1;
+            }
+
+            if changed {
+                let snapshot = guard.snapshot();
+                drop(guard);
+                (inner.send)(BridgeEvent::NotificationsState(snapshot));
+                for id in expired_transient_ids {
+                    emit_closed_on(&inner.conn, id, 1);
+                }
+                guard = inner.data.lock().unwrap();
+                continue;
+            }
+
+            let next_deadline = guard
+                .entries
+                .iter()
+                .filter(|e| e.item.popup)
+                .filter_map(|e| match e.timer {
+                    TimerState::Running { deadline } => Some(deadline),
+                    _ => None,
+                })
+                .min();
+
+            guard = match next_deadline {
+                Some(deadline) => {
+                    let wait = deadline.saturating_duration_since(Instant::now());
+                    if wait.is_zero() {
+                        continue;
+                    }
+                    inner.cvar.wait_timeout(guard, wait).unwrap().0
+                }
+                None => inner.cvar.wait(guard).unwrap(),
+            };
+        }
+    });
 }
 
 struct NotificationsServer {
@@ -217,8 +857,10 @@ impl NotificationsServer {
     fn get_capabilities(&self) -> Vec<String> {
         vec![
             "body".to_string(),
+            "body-markup".to_string(),
             "persistence".to_string(),
             "actions".to_string(),
+            "icon-static".to_string(),
         ]
     }
 
@@ -232,28 +874,29 @@ impl NotificationsServer {
         body: String,
         actions: Vec<String>,
         hints: HashMap<String, OwnedValue>,
-        _expire_timeout: i32,
+        expire_timeout: i32,
     ) -> u32 {
-        self.store.push_full(
-            replaces_id,
+        self.store.push_notification(
             app_name,
+            replaces_id,
             app_icon,
             summary,
             body,
-            parse_urgency(&hints),
-            parse_actions(&actions),
+            actions,
+            hints,
+            expire_timeout,
         )
     }
 
     fn close_notification(&self, id: u32) {
-        self.store.dismiss(id);
+        self.store.close_by_app(id);
     }
 
     fn get_server_information(&self) -> (String, String, String, String) {
         (
             "webbar".to_string(),
             "webbar".to_string(),
-            "0.1.0".to_string(),
+            env!("CARGO_PKG_VERSION").to_string(),
             "1.2".to_string(),
         )
     }
@@ -284,13 +927,11 @@ pub fn spawn_server(store: NotificationStore) {
             .and_then(|b| b.build())
         {
             Ok(conn) => {
-                let _ = store.conn.set(conn);
-                // Keep the connection alive for the lifetime of the bar.
-                loop {
-                    thread::park();
-                }
+                let _ = store.handle.inner.conn.set(conn);
+                store.set_available(true);
             }
             Err(err) => {
+                store.set_available(false);
                 eprintln!(
                     "webbar: could not claim org.freedesktop.Notifications ({err}). \
                      If another daemon (mako/dunst/swaync) is running, stop it first to see notifications here."
@@ -304,12 +945,12 @@ pub fn spawn_server(store: NotificationStore) {
 mod tests {
     use super::*;
 
-    fn capture() -> (SendEvent, Arc<Mutex<Vec<Vec<NotificationItem>>>>) {
+    fn capture() -> (SendEvent, Arc<Mutex<Vec<NotificationsState>>>) {
         let log = Arc::new(Mutex::new(Vec::new()));
         let log_clone = log.clone();
         let send: SendEvent = Arc::new(move |event| {
-            if let BridgeEvent::Notifications { items } = event {
-                log_clone.lock().unwrap().push(items);
+            if let BridgeEvent::NotificationsState(state) = event {
+                log_clone.lock().unwrap().push(state);
             }
         });
         (send, log)
@@ -318,7 +959,7 @@ mod tests {
     #[test]
     fn assigns_sequential_ids_and_emits_snapshots() {
         let (send, log) = capture();
-        let store = NotificationStore::new(send);
+        let store = NotificationStore::test_new(send);
 
         let id1 = store.push(0, "app1".into(), "sum1".into(), "body1".into());
         let id2 = store.push(0, "app2".into(), "sum2".into(), "body2".into());
@@ -328,14 +969,15 @@ mod tests {
 
         let snapshots = log.lock().unwrap();
         assert_eq!(snapshots.len(), 3);
-        let ids: Vec<u32> = snapshots[2].iter().map(|n| n.id).collect();
+        let ids: Vec<u32> = snapshots[2].items.iter().map(|n| n.id).collect();
         assert_eq!(ids, vec![1, 2, 3]);
+        assert_eq!(snapshots[2].unread_count, 3);
     }
 
     #[test]
-    fn replaces_id_updates_in_place_without_duplicate() {
+    fn replaces_id_and_synchronous_tags_update_in_place() {
         let (send, log) = capture();
-        let store = NotificationStore::new(send);
+        let store = NotificationStore::test_new(send);
 
         let id1 = store.push(0, "mail".into(), "New mail".into(), "From Alice".into());
         let id2 = store.push(0, "chat".into(), "Ping".into(), "Hey".into());
@@ -345,62 +987,80 @@ mod tests {
             "2 new mails".into(),
             "From Alice & Bob".into(),
         );
-
         assert_eq!(replaced, id1);
+
+        let mut hints1 = HashMap::new();
+        hints1.insert(
+            "synchronous".into(),
+            OwnedValue::from(zbus::zvariant::Str::from("volume")),
+        );
+        hints1.insert("value".into(), OwnedValue::from(40i32));
+        let sync1 = store.push_notification(
+            "vol".into(),
+            0,
+            String::new(),
+            "Volume".into(),
+            String::new(),
+            Vec::new(),
+            hints1,
+            1000,
+        );
+
+        let mut hints2 = HashMap::new();
+        hints2.insert(
+            "x-canonical-private-synchronous".into(),
+            OwnedValue::from(zbus::zvariant::Str::from("volume")),
+        );
+        hints2.insert("value".into(), OwnedValue::from(150i32));
+        let sync2 = store.push_notification(
+            "vol".into(),
+            0,
+            String::new(),
+            "Volume".into(),
+            String::new(),
+            Vec::new(),
+            hints2,
+            1000,
+        );
+        assert_eq!(sync2, sync1);
 
         let snapshots = log.lock().unwrap();
         let latest = snapshots.last().unwrap();
-        assert_eq!(latest.len(), 2);
-        assert_eq!(latest[0].id, id1);
-        assert_eq!(latest[0].summary, "2 new mails");
-        assert_eq!(latest[0].body, "From Alice & Bob");
-        assert_eq!(latest[1].id, id2);
+        assert_eq!(latest.items.len(), 3);
+        assert_eq!(latest.items[0].id, id1);
+        assert_eq!(latest.items[0].summary, "2 new mails");
+        assert_eq!(latest.items[1].id, id2);
+        assert_eq!(latest.items[2].id, sync1);
+        assert_eq!(latest.items[2].progress, Some(100));
     }
 
     #[test]
-    fn dismiss_returns_whether_found_and_emits_only_when_removed() {
+    fn dismiss_and_clear_all_and_mark_read_work() {
         let (send, log) = capture();
-        let store = NotificationStore::new(send);
+        let store = NotificationStore::test_new(send);
 
         assert!(!store.dismiss(42));
+        store.clear_all();
         assert_eq!(log.lock().unwrap().len(), 0);
 
         let id1 = store.push(0, "a".into(), "s1".into(), "b1".into());
         let id2 = store.push(0, "b".into(), "s2".into(), "b2".into());
 
-        assert!(!store.dismiss(999));
-        assert_eq!(log.lock().unwrap().len(), 2);
+        store.mark_all_read();
+        assert_eq!(log.lock().unwrap().last().unwrap().unread_count, 0);
 
         assert!(store.dismiss(id1));
         assert!(!store.dismiss(id1));
-
-        let snapshots = log.lock().unwrap();
-        assert_eq!(snapshots.len(), 3);
-        assert_eq!(snapshots[2].len(), 1);
-        assert_eq!(snapshots[2][0].id, id2);
-    }
-
-    #[test]
-    fn clear_all_is_noop_when_empty_and_clears_when_populated() {
-        let (send, log) = capture();
-        let store = NotificationStore::new(send);
+        assert_eq!(log.lock().unwrap().last().unwrap().items[0].id, id2);
 
         store.clear_all();
-        assert_eq!(log.lock().unwrap().len(), 0);
-
-        store.push(0, "app".into(), "sum".into(), "body".into());
-        store.clear_all();
-        store.clear_all();
-
-        let snapshots = log.lock().unwrap();
-        assert_eq!(snapshots.len(), 2);
-        assert!(snapshots[1].is_empty());
+        assert!(log.lock().unwrap().last().unwrap().items.is_empty());
     }
 
     #[test]
     fn caps_history_at_max_history_dropping_oldest() {
         let (send, log) = capture();
-        let store = NotificationStore::new(send);
+        let store = NotificationStore::test_new(send);
 
         let total = MAX_HISTORY + 5;
         for i in 0..total {
@@ -409,41 +1069,336 @@ mod tests {
 
         let snapshots = log.lock().unwrap();
         let latest = snapshots.last().unwrap();
-        assert_eq!(latest.len(), MAX_HISTORY);
-        assert_eq!(latest.first().unwrap().id, 6);
-        assert_eq!(latest.last().unwrap().id, total as u32);
+        assert_eq!(latest.items.len(), MAX_HISTORY);
+        assert_eq!(latest.items.first().unwrap().id, 6);
+        assert_eq!(latest.items.last().unwrap().id, total as u32);
     }
 
     #[test]
-    fn parses_urgency_and_action_pairs() {
-        let mut hints = HashMap::new();
-        assert_eq!(parse_urgency(&hints), NotificationUrgency::Normal);
+    fn dnd_suppresses_normal_popups_but_allows_critical() {
+        let (send, log) = capture();
+        let store = NotificationStore::test_new(send);
 
-        hints.insert("urgency".into(), OwnedValue::from(0u8));
-        assert_eq!(parse_urgency(&hints), NotificationUrgency::Low);
-
-        hints.insert("urgency".into(), OwnedValue::from(2u8));
-        assert_eq!(parse_urgency(&hints), NotificationUrgency::Critical);
-
-        let actions = parse_actions(&[
-            "default".into(),
-            "Open".into(),
-            "reply".into(),
-            "Reply".into(),
-            "dangling".into(),
-        ]);
-        assert_eq!(
-            actions,
-            vec![
-                NotificationAction {
-                    key: "default".into(),
-                    label: "Open".into(),
-                },
-                NotificationAction {
-                    key: "reply".into(),
-                    label: "Reply".into(),
-                },
-            ]
+        store.set_dnd(true);
+        store.push_notification(
+            "mail".into(),
+            0,
+            String::new(),
+            "Normal".into(),
+            String::new(),
+            Vec::new(),
+            HashMap::new(),
+            5000,
         );
+
+        let mut crit_hints = HashMap::new();
+        crit_hints.insert("urgency".into(), OwnedValue::from(2u8));
+        store.push_notification(
+            "power".into(),
+            0,
+            String::new(),
+            "Critical".into(),
+            String::new(),
+            Vec::new(),
+            crit_hints,
+            5000,
+        );
+
+        let snapshots = log.lock().unwrap();
+        let latest = snapshots.last().unwrap();
+        assert!(latest.dnd);
+        assert_eq!(latest.items.len(), 2);
+        assert!(!latest.items[0].popup);
+        assert!(latest.items[1].popup);
+    }
+
+    #[test]
+    fn popup_expires_keeps_persistent_and_drops_transient_and_supports_pause() {
+        let (send, log) = capture();
+        let store = NotificationStore::test_new(send);
+
+        // Persistent with short timeout
+        let id_persist = store.push_notification(
+            "app".into(),
+            0,
+            String::new(),
+            "Persist".into(),
+            String::new(),
+            Vec::new(),
+            HashMap::new(),
+            40,
+        );
+
+        // Transient with short timeout
+        let mut t_hints = HashMap::new();
+        t_hints.insert("transient".into(), OwnedValue::from(true));
+        let id_transient = store.push_notification(
+            "app".into(),
+            0,
+            String::new(),
+            "Transient".into(),
+            String::new(),
+            Vec::new(),
+            t_hints,
+            40,
+        );
+
+        // Paused item should survive past its initial 150ms timeout
+        let id_paused = store.push_notification(
+            "app".into(),
+            0,
+            String::new(),
+            "Paused".into(),
+            String::new(),
+            Vec::new(),
+            HashMap::new(),
+            150,
+        );
+        store.pause_timeout(id_paused);
+
+        thread::sleep(Duration::from_millis(220));
+
+        {
+            let snapshots = log.lock().unwrap();
+            let latest = snapshots.last().unwrap();
+            let persist = latest.items.iter().find(|n| n.id == id_persist).unwrap();
+            assert!(!persist.popup);
+            assert!(latest.items.iter().all(|n| n.id != id_transient));
+            let paused = latest.items.iter().find(|n| n.id == id_paused).unwrap();
+            assert!(paused.popup);
+        }
+
+        store.resume_timeout(id_paused);
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            let expired = {
+                let snapshots = log.lock().unwrap();
+                snapshots
+                    .last()
+                    .and_then(|s| s.items.iter().find(|n| n.id == id_paused))
+                    .is_some_and(|n| !n.popup)
+            };
+            if expired {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "paused notification did not expire within 2s after resume"
+            );
+            thread::sleep(Duration::from_millis(20));
+        }
+    }
+
+    #[test]
+    fn parses_hints_image_data_and_strips_markup() {
+        let mut hints = HashMap::new();
+        hints.insert("urgency".into(), OwnedValue::from(2u8));
+        let pixel_data = vec![255u8; 4 * 4 * 4];
+        hints.insert(
+            "image-data".into(),
+            OwnedValue::try_from(Value::from((4i32, 4i32, 16i32, true, 8i32, 4i32, pixel_data)))
+                .unwrap(),
+        );
+
+        let (send, log) = capture();
+        let store = NotificationStore::test_new(send);
+        store.push_notification(
+            "chat".into(),
+            0,
+            String::new(),
+            "Hi".into(),
+            "<b>Hello</b> &amp; <a href=\"https://example.com\">link</a><br/>next".into(),
+            vec!["default".into(), "Open".into(), "dangling".into()],
+            hints,
+            -1,
+        );
+
+        let snapshots = log.lock().unwrap();
+        let item = &snapshots.last().unwrap().items[0];
+        assert_eq!(item.urgency, NotificationUrgency::Critical);
+        assert_eq!(item.body, "Hello & link\nnext");
+        assert!(item.image_url.starts_with("data:image/png;base64,"));
+        assert_eq!(
+            item.actions,
+            vec![NotificationAction {
+                key: "default".into(),
+                label: "Open".into(),
+            }]
+        );
+    }
+
+    #[test]
+    fn hide_popup_keeps_persistent_and_removes_transient() {
+        let (send, log) = capture();
+        let store = NotificationStore::test_new(send);
+
+        let id_persist = store.push(0, "app".into(), "Persist".into(), String::new());
+        let mut t_hints = HashMap::new();
+        t_hints.insert("transient".into(), OwnedValue::from(true));
+        let id_transient = store.push_notification(
+            "app".into(),
+            0,
+            String::new(),
+            "Transient".into(),
+            String::new(),
+            Vec::new(),
+            t_hints,
+            -1,
+        );
+
+        store.hide_popup(id_persist);
+        store.hide_popup(id_transient);
+
+        let snapshots = log.lock().unwrap();
+        let latest = snapshots.last().unwrap();
+        assert_eq!(latest.items.len(), 1);
+        assert_eq!(latest.items[0].id, id_persist);
+        assert!(!latest.items[0].popup);
+    }
+
+    #[test]
+    fn invoke_action_dismisses_non_resident_and_preserves_resident() {
+        let (send, log) = capture();
+        let store = NotificationStore::test_new(send);
+
+        let id_ephemeral = store.push(0, "app".into(), "Normal".into(), String::new());
+        let mut r_hints = HashMap::new();
+        r_hints.insert("resident".into(), OwnedValue::from(true));
+        let id_resident = store.push_notification(
+            "app".into(),
+            0,
+            String::new(),
+            "Resident".into(),
+            String::new(),
+            vec!["open".into(), "Open".into()],
+            r_hints,
+            -1,
+        );
+
+        store.invoke_action(id_ephemeral, "open");
+        store.invoke_action(id_resident, "open");
+
+        let snapshots = log.lock().unwrap();
+        let latest = snapshots.last().unwrap();
+        assert_eq!(latest.items.len(), 1);
+        assert_eq!(latest.items[0].id, id_resident);
+    }
+
+    #[test]
+    fn dismiss_latest_prefers_active_popup_then_falls_back_to_history() {
+        let (send, log) = capture();
+        let store = NotificationStore::test_new(send);
+
+        let _id1 = store.push(0, "app".into(), "First".into(), String::new());
+        let id2 = store.push(0, "app".into(), "Second".into(), String::new());
+        store.hide_popup(id2);
+
+        // id1 is still an active popup while id2 is hidden in history -> id1 dismissed first
+        store.dismiss_latest();
+        {
+            let snapshots = log.lock().unwrap();
+            let latest = snapshots.last().unwrap();
+            assert_eq!(latest.items.len(), 1);
+            assert_eq!(latest.items[0].id, id2);
+        }
+
+        // No active popups remain -> falls back to newest history item (id2)
+        store.dismiss_latest();
+        assert!(log.lock().unwrap().last().unwrap().items.is_empty());
+    }
+
+    #[test]
+    fn dnd_drops_transient_and_removes_existing_replaced_entry() {
+        let (send, log) = capture();
+        let store = NotificationStore::test_new(send);
+
+        let id1 = store.push(0, "app".into(), "Existing".into(), String::new());
+        store.set_dnd(true);
+
+        // New transient under DND is dropped without entering history
+        let mut t1 = HashMap::new();
+        t1.insert("transient".into(), OwnedValue::from(true));
+        store.push_notification(
+            "app".into(),
+            0,
+            String::new(),
+            "Dropped".into(),
+            String::new(),
+            Vec::new(),
+            t1,
+            -1,
+        );
+        assert_eq!(log.lock().unwrap().last().unwrap().items.len(), 1);
+
+        // Replacing existing entry with transient:true under DND removes the old entry
+        let mut t2 = HashMap::new();
+        t2.insert("transient".into(), OwnedValue::from(true));
+        store.push_notification(
+            "app".into(),
+            id1,
+            String::new(),
+            "Replaced Transient".into(),
+            String::new(),
+            Vec::new(),
+            t2,
+            -1,
+        );
+        assert!(log.lock().unwrap().last().unwrap().items.is_empty());
+    }
+
+    #[test]
+    fn refresh_icons_recolors_svg_app_icon_on_theme_change() {
+        use std::fs;
+        use base64::engine::general_purpose::STANDARD as BASE64;
+        use base64::Engine;
+        use crate::theme::ThemeState;
+
+        let dir = std::env::temp_dir().join(format!("webbar-notif-icon-test-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let svg_path = dir.join("notif-test.svg");
+        fs::write(
+            &svg_path,
+            br#"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24"><style id="current-color-scheme">.ColorScheme-Text { color:#dfdfdf; }</style><path class="ColorScheme-Text" fill="currentColor" d="M0 0h24v24H0z"/></svg>"#,
+        )
+        .unwrap();
+
+        let (send, log) = capture();
+        let palette = SharedIconPalette::new(&ThemeState {
+            dark: true,
+            ..ThemeState::default()
+        });
+        let store = NotificationStore::new(send, palette.clone());
+
+        store.push_notification(
+            "app".into(),
+            0,
+            svg_path.to_string_lossy().to_string(),
+            "Icon Test".into(),
+            String::new(),
+            Vec::new(),
+            HashMap::new(),
+            -1,
+        );
+
+        let initial_url = log.lock().unwrap().last().unwrap().items[0]
+            .app_icon_url
+            .clone();
+        assert!(palette.update(&ThemeState {
+            dark: false,
+            ..ThemeState::default()
+        }));
+        store.refresh_icons();
+
+        let updated_url = log.lock().unwrap().last().unwrap().items[0]
+            .app_icon_url
+            .clone();
+        assert_ne!(initial_url, updated_url);
+        let b64 = updated_url
+            .strip_prefix("data:image/svg+xml;base64,")
+            .expect("svg data url");
+        let decoded = String::from_utf8(BASE64.decode(b64).unwrap()).unwrap();
+        assert!(decoded.contains(".ColorScheme-Text { color: #18181f; }"));
+
+        let _ = fs::remove_dir_all(&dir);
     }
 }

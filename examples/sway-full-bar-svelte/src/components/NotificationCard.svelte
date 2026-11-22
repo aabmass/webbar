@@ -1,0 +1,143 @@
+<script lang="ts">
+  import type { NotificationItem } from "@webbar/types";
+  import {
+    formatRelativeTime,
+    hasDefaultAction,
+    visibleActions,
+  } from "@webbar/sway-full-bar-shared/notifications";
+
+  let {
+    item,
+    nowMs,
+    isToast = false,
+  }: {
+    item: NotificationItem;
+    nowMs: number;
+    isToast?: boolean;
+  } = $props();
+
+  let hovered = false;
+  let hasDefault = $derived(hasDefaultAction(item));
+  let actions = $derived(visibleActions(item));
+  let canClickBody = $derived(isToast || hasDefault);
+
+  $effect(() => {
+    if (!isToast) return;
+    const id = item.id;
+    return () => {
+      if (hovered) {
+        hovered = false;
+        window.webbar.notifications.resumeTimeout(id);
+      }
+    };
+  });
+
+  function onBodyClick() {
+    if (hasDefault) {
+      window.webbar.notifications.invokeAction(item.id, "default");
+    } else if (isToast) {
+      window.webbar.notifications.hidePopup(item.id);
+    }
+  }
+</script>
+
+<article
+  class="notif-card"
+  class:notif-toast={isToast}
+  class:is-critical={item.urgency === "critical"}
+  data-webbar-interactive={isToast ? "" : undefined}
+  onpointerenter={isToast
+    ? () => {
+        hovered = true;
+        window.webbar.notifications.pauseTimeout(item.id);
+      }
+    : undefined}
+  onpointerleave={isToast
+    ? () => {
+        hovered = false;
+        window.webbar.notifications.resumeTimeout(item.id);
+      }
+    : undefined}
+>
+  <div class="notif-card-head">
+    <div class="notif-card-app">
+      {#if item.app_icon_url}
+        <img
+          class="notif-app-icon"
+          src={item.app_icon_url}
+          alt=""
+          aria-hidden="true"
+        />
+      {/if}
+      <span class="notif-card-app-name">
+        {item.app_name || "Notification"}
+      </span>
+    </div>
+    <div class="notif-card-meta">
+      <span class="notif-time">
+        {formatRelativeTime(item.timestamp_ms, nowMs)}
+      </span>
+      <button
+        type="button"
+        class="notif-close-btn"
+        title="Dismiss notification"
+        aria-label="Dismiss notification"
+        onclick={() => window.webbar.notifications.dismiss(item.id)}
+      >
+        ×
+      </button>
+    </div>
+  </div>
+
+  <!-- svelte-ignore a11y_click_events_have_key_events -->
+  <!-- svelte-ignore a11y_no_static_element_interactions -->
+  <div
+    class="notif-card-body-row"
+    class:is-clickable={canClickBody}
+    onclick={canClickBody ? onBodyClick : undefined}
+  >
+    {#if item.image_url}
+      <img
+        class="notif-image"
+        src={item.image_url}
+        alt=""
+        aria-hidden="true"
+      />
+    {/if}
+    <div class="notif-text">
+      {#if item.summary}
+        <div class="notif-summary">{item.summary}</div>
+      {/if}
+      {#if item.body}
+        <div class="notif-body">{item.body}</div>
+      {/if}
+    </div>
+  </div>
+
+  {#if item.progress !== null}
+    <div
+      class="notif-progress-track"
+      role="progressbar"
+      aria-valuenow={item.progress}
+      aria-valuemin={0}
+      aria-valuemax={100}
+    >
+      <div class="notif-progress-fill" style="width: {item.progress}%"></div>
+    </div>
+  {/if}
+
+  {#if actions.length > 0}
+    <div class="notif-actions">
+      {#each actions as action (action.key)}
+        <button
+          type="button"
+          class="notif-action-btn"
+          onclick={() =>
+            window.webbar.notifications.invokeAction(item.id, action.key)}
+        >
+          {action.label}
+        </button>
+      {/each}
+    </div>
+  {/if}
+</article>

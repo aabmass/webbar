@@ -62,14 +62,105 @@ if (!window.webbar) {
     notifyOverlayChange();
   };
 
+  // Interactive non-bar elements (e.g. floating notification toasts) opt in
+  // via `[data-webbar-interactive]` so their rects stay clickable with
+  // KeyboardMode::None without stealing Sway focus.
+  let lastInteractiveKey = "";
+  let interactiveRaf = 0;
+  const observedInteractive = new Set<Element>();
+  const interactiveResizeObserver =
+    typeof ResizeObserver !== "undefined"
+      ? new ResizeObserver(() => scheduleInteractiveSync())
+      : null;
+
+  const syncInteractiveRegions = () => {
+    interactiveRaf = 0;
+    const nodes = document.querySelectorAll("[data-webbar-interactive]");
+    const currentSet = new Set(nodes);
+    if (interactiveResizeObserver) {
+      for (const el of observedInteractive) {
+        if (!currentSet.has(el)) {
+          interactiveResizeObserver.unobserve(el);
+          observedInteractive.delete(el);
+        }
+      }
+      for (const el of currentSet) {
+        if (!observedInteractive.has(el)) {
+          interactiveResizeObserver.observe(el);
+          observedInteractive.add(el);
+        }
+      }
+    }
+
+    const rects: { x: number; y: number; width: number; height: number }[] = [];
+    for (const el of nodes) {
+      const r = el.getBoundingClientRect();
+      const width = Math.round(r.width);
+      const height = Math.round(r.height);
+      if (width > 0 && height > 0) {
+        rects.push({
+          x: Math.round(r.left),
+          y: Math.round(r.top),
+          width,
+          height,
+        });
+      }
+    }
+    const key = rects.map((r) => `${r.x},${r.y},${r.width},${r.height}`).join(";");
+    if (key !== lastInteractiveKey) {
+      lastInteractiveKey = key;
+      api.setInteractiveRegions(rects);
+    }
+  };
+
+  function scheduleInteractiveSync(): void {
+    if (interactiveRaf !== 0) return;
+    interactiveRaf = window.requestAnimationFrame(syncInteractiveRegions);
+  }
+
+  const startInteractiveObserver = () => {
+    if (!document.documentElement) return;
+    const observer = new MutationObserver(() => {
+      if (
+        observedInteractive.size === 0 &&
+        lastInteractiveKey === "" &&
+        !document.querySelector("[data-webbar-interactive]")
+      ) {
+        return;
+      }
+      scheduleInteractiveSync();
+    });
+    observer.observe(document.documentElement, {
+      childList: true,
+      subtree: true,
+      attributes: true,
+      attributeFilter: ["data-webbar-interactive", "style", "class", "hidden"],
+    });
+    const onMotionEnd = () => {
+      if (observedInteractive.size > 0) {
+        scheduleInteractiveSync();
+      }
+    };
+    window.addEventListener("resize", scheduleInteractiveSync);
+    window.addEventListener("transitionend", onMotionEnd, true);
+    window.addEventListener("animationend", onMotionEnd, true);
+    syncInteractiveRegions();
+  };
+
   window.webbar = api;
   document.addEventListener("toggle", syncNativePopover, true);
   if (document.readyState === "loading") {
-    window.addEventListener("DOMContentLoaded", syncNativePopover, {
-      once: true,
-    });
+    window.addEventListener(
+      "DOMContentLoaded",
+      () => {
+        syncNativePopover();
+        startInteractiveObserver();
+      },
+      { once: true },
+    );
   } else {
     syncNativePopover();
+    startInteractiveObserver();
   }
 
   const connect = () => {

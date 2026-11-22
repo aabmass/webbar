@@ -4,6 +4,7 @@ mod bluetooth;
 mod bridge;
 mod dbus_bridge;
 mod dbus_json;
+mod icons;
 mod network;
 mod notifications;
 mod process_bridge;
@@ -67,8 +68,10 @@ struct Config {
     overlay_height: Option<i32>,
     replace: bool,
     devtools: bool,
+    notifications: bool,
     ws_bridge: Option<u16>,
     ws_token: Option<String>,
+    ws_claim_notifications: bool,
 }
 
 impl Config {
@@ -83,8 +86,10 @@ impl Config {
         let mut overlay_height: Option<i32> = None;
         let mut replace = false;
         let mut devtools = false;
+        let mut notifications = true;
         let mut ws_bridge: Option<u16> = None;
         let mut ws_token: Option<String> = None;
+        let mut ws_claim_notifications = false;
         let mut args = args.into_iter();
         while let Some(arg) = args.next() {
             match arg.as_str() {
@@ -131,6 +136,8 @@ impl Config {
                 }
                 "--replace" => replace = true,
                 "--devtools" => devtools = true,
+                "--no-notifications" => notifications = false,
+                "--ws-claim-notifications" => ws_claim_notifications = true,
                 other => return Err(format!("unknown argument: {other}")),
             }
         }
@@ -150,8 +157,10 @@ impl Config {
             overlay_height,
             replace,
             devtools,
+            notifications,
             ws_bridge,
             ws_token,
+            ws_claim_notifications,
         })
     }
 
@@ -171,35 +180,46 @@ struct HostServices {
     backlight: BacklightController,
     sway: sway_ipc::SwayCommands,
     tray_menus: tray::TrayMenuWatcher,
-    tray_theme: tray::TrayTheme,
+    icon_palette: icons::SharedIconPalette,
 }
 
 impl HostServices {
-    fn start(send_event: SendEvent, claim_dbus_servers: bool) -> (Arc<Self>, theme::ThemeState) {
-        let tray_theme = tray::TrayTheme::default();
-        let tray_menus = tray::TrayMenuWatcher::new(send_event.clone(), tray_theme.clone());
+    fn start(
+        send_event: SendEvent,
+        claim_dbus_servers: bool,
+        claim_notifications: bool,
+    ) -> (Arc<Self>, theme::ThemeState) {
+        let icon_palette = icons::SharedIconPalette::default();
+        let tray_menus = tray::TrayMenuWatcher::new(send_event.clone(), icon_palette.clone());
         let tray_store = if claim_dbus_servers {
-            tray::spawn_server(send_event.clone(), tray_theme.clone())
+            tray::spawn_server(send_event.clone(), icon_palette.clone())
         } else {
-            tray::spawn_observer(send_event.clone(), tray_theme.clone())
+            tray::spawn_observer(send_event.clone(), icon_palette.clone())
         };
+        let notifications = NotificationStore::new(send_event.clone(), icon_palette.clone());
         let theme_send: SendEvent = Arc::new({
             let send_event = send_event.clone();
-            let tray_theme = tray_theme.clone();
+            let icon_palette = icon_palette.clone();
+            let notifications = notifications.clone();
             move |ev| {
                 if let BridgeEvent::Theme(ref next) = ev {
-                    if tray_theme.update(next) {
-                        let store = tray_store.clone();
-                        std::thread::spawn(move || store.refresh_icons());
+                    if icon_palette.update(next) {
+                        let tray_store = tray_store.clone();
+                        let notifications = notifications.clone();
+                        std::thread::spawn(move || {
+                            tray_store.refresh_icons();
+                            notifications.refresh_icons();
+                        });
                     }
                 }
                 send_event(ev);
             }
         });
         let initial_theme = theme::start_theme_watcher(theme_send);
-        let notifications = NotificationStore::new(send_event.clone());
-        if claim_dbus_servers {
+        if claim_notifications {
             notifications::spawn_server(notifications.clone());
+        } else {
+            notifications.set_available(false);
         }
         sway_ipc::spawn(send_event.clone());
         let audio = audio::spawn(send_event.clone());
@@ -215,7 +235,7 @@ impl HostServices {
                 backlight,
                 sway: sway_ipc::SwayCommands::spawn(),
                 tray_menus,
-                tray_theme,
+                icon_palette,
             }),
             initial_theme,
         )
@@ -261,11 +281,26 @@ impl HostServices {
             BridgeRequest::DismissNotification { id } => {
                 self.notifications.dismiss(id);
             }
+            BridgeRequest::HideNotificationPopup { id } => {
+                self.notifications.hide_popup(id);
+            }
             BridgeRequest::InvokeNotificationAction { id, action_key } => {
                 self.notifications.invoke_action(id, &action_key);
             }
             BridgeRequest::ClearNotifications => {
                 self.notifications.clear_all();
+            }
+            BridgeRequest::SetNotificationsDnd { enabled } => {
+                self.notifications.set_dnd(enabled);
+            }
+            BridgeRequest::MarkNotificationsRead => {
+                self.notifications.mark_all_read();
+            }
+            BridgeRequest::PauseNotificationTimeout { id } => {
+                self.notifications.pause_timeout(id);
+            }
+            BridgeRequest::ResumeNotificationTimeout { id } => {
+                self.notifications.resume_timeout(id);
             }
             BridgeRequest::ProcessSpawn { id, argv, cwd, env } => {
                 processes.spawn(id, argv, cwd, env);
@@ -339,7 +374,7 @@ impl HostServices {
                 tray::activate(bus, path);
             }
             BridgeRequest::TrayGetMenu { id, bus, menu_path } => {
-                tray::get_menu(id, bus, menu_path, reply_send.clone(), self.tray_theme.clone());
+                tray::get_menu(id, bus, menu_path, reply_send.clone(), self.icon_palette.clone());
             }
             BridgeRequest::TrayWatchMenu { bus, menu_path } => {
                 self.tray_menus.watch(bus, menu_path);
@@ -355,38 +390,40 @@ impl HostServices {
                 tray::menu_event(bus, menu_path, item_id);
             }
             BridgeRequest::SetInputRegion { rects } => {
-                if let Some(output) = output.map(str::to_owned) {
-                    glib::idle_add_once(move || {
-                        WINDOWS.with(|cell| {
-                            if let Some(handle) = cell.borrow().get(&output) {
-                                handle.input_state.borrow_mut().set_custom_rects(rects);
-                                if let Some(win) = handle.window.upgrade() {
-                                    apply_window_input_state(&win, &handle.input_state.borrow());
-                                }
-                            }
-                        });
-                    });
-                }
+                update_window_input_state(output, |s| s.set_custom_rects(rects));
+            }
+            BridgeRequest::SetInteractiveRegions { rects } => {
+                update_window_input_state(output, |s| s.set_interactive_rects(rects));
             }
             BridgeRequest::SetOverlay { active } => {
-                if let Some(output) = output.map(str::to_owned) {
-                    glib::idle_add_once(move || {
-                        WINDOWS.with(|cell| {
-                            if let Some(handle) = cell.borrow().get(&output) {
-                                handle.input_state.borrow_mut().set_overlay(active);
-                                if let Some(win) = handle.window.upgrade() {
-                                    apply_window_input_state(&win, &handle.input_state.borrow());
-                                }
-                            }
-                        });
-                    });
-                }
+                update_window_input_state(output, move |s| s.set_overlay(active));
             }
         }
     }
 }
 
-fn start_ws_bridge(config: &Config, claim_dbus_servers: bool) -> (u16, String, theme::ThemeState) {
+fn update_window_input_state<F>(output: Option<&str>, f: F)
+where
+    F: FnOnce(&mut WindowInputState) + Send + 'static,
+{
+    if let Some(output) = output.map(str::to_owned) {
+        glib::idle_add_once(move || {
+            WINDOWS.with(|cell| {
+                if let Some(handle) = cell.borrow().get(&output) {
+                    f(&mut handle.input_state.borrow_mut());
+                    if let Some(win) = handle.window.upgrade() {
+                        apply_window_input_state(&win, &handle.input_state.borrow());
+                    }
+                }
+            });
+        });
+    }
+}
+
+fn start_ws_bridge(
+    config: &Config,
+    claim_dbus_servers: bool,
+) -> (u16, String, theme::ThemeState, Arc<HostServices>, SendEvent) {
     let snapshots = SnapshotCache::new();
     let broadcaster = ws_bridge::WsBroadcaster::new();
     let send_event: SendEvent = {
@@ -401,12 +438,17 @@ fn start_ws_bridge(config: &Config, claim_dbus_servers: bool) -> (u16, String, t
         })
     };
 
-    let (services, initial_theme) = HostServices::start(send_event, claim_dbus_servers);
+    let (services, initial_theme) = HostServices::start(
+        send_event.clone(),
+        claim_dbus_servers,
+        (claim_dbus_servers && config.notifications) || config.ws_claim_notifications,
+    );
     let requested_port = config.ws_bridge.unwrap_or(0);
     let token = config
         .ws_token
         .clone()
         .unwrap_or_else(ws_bridge::generate_token);
+    let dispatch_services = Arc::clone(&services);
     let bound_port = match ws_bridge::spawn(
         requested_port,
         config.ws_bridge.is_some(),
@@ -414,7 +456,7 @@ fn start_ws_bridge(config: &Config, claim_dbus_servers: bool) -> (u16, String, t
         broadcaster,
         snapshots,
         move |output, req, client_dbus, client_procs, client_send| {
-            services.dispatch(output, req, client_dbus, client_procs, client_send);
+            dispatch_services.dispatch(output, req, client_dbus, client_procs, client_send);
         },
     ) {
         Ok(port) => port,
@@ -423,14 +465,14 @@ fn start_ws_bridge(config: &Config, claim_dbus_servers: bool) -> (u16, String, t
             std::process::exit(1);
         }
     };
-    (bound_port, token, initial_theme)
+    (bound_port, token, initial_theme, services, send_event)
 }
 
 fn main() {
     let config = match Config::from_args() {
         Ok(c) => c,
         Err(err) => {
-            eprintln!("webbar: {err}\nUsage: webbar (--dir <path> | --url <url>) [--height <px>] [--overlay-height <px>] [--replace] [--devtools]");
+            eprintln!("webbar: {err}\nUsage: webbar (--dir <path> | --url <url>) [--height <px>] [--overlay-height <px>] [--replace] [--devtools] [--no-notifications]");
             std::process::exit(1);
         }
     };
@@ -457,7 +499,7 @@ fn activate(app: &Application, config: &Config) {
         register_webbar_scheme(dir.clone());
     }
 
-    let (ws_port, ws_token, initial_theme) = start_ws_bridge(config, true);
+    let (ws_port, ws_token, initial_theme, services, send_event) = start_ws_bridge(config, true);
 
     let Some(display) = gdk::Display::default() else {
         eprintln!("webbar: no GDK display available");
@@ -534,6 +576,41 @@ fn activate(app: &Application, config: &Config) {
         open_devtools_first();
     });
     app.add_action(&devtools_action);
+
+    let toggle_center_action = gio::SimpleAction::new("notifications-toggle-center", None);
+    toggle_center_action.connect_activate(move |_, _| {
+        send_event(BridgeEvent::HostAction {
+            action: "notifications_toggle_center".to_string(),
+        });
+    });
+    app.add_action(&toggle_center_action);
+
+    let toggle_dnd_action = gio::SimpleAction::new("notifications-toggle-dnd", None);
+    {
+        let notifications = services.notifications.clone();
+        toggle_dnd_action.connect_activate(move |_, _| {
+            notifications.toggle_dnd();
+        });
+    }
+    app.add_action(&toggle_dnd_action);
+
+    let dismiss_latest_action = gio::SimpleAction::new("notifications-dismiss-latest", None);
+    {
+        let notifications = services.notifications.clone();
+        dismiss_latest_action.connect_activate(move |_, _| {
+            notifications.dismiss_latest();
+        });
+    }
+    app.add_action(&dismiss_latest_action);
+
+    let clear_all_action = gio::SimpleAction::new("notifications-clear-all", None);
+    {
+        let notifications = services.notifications.clone();
+        clear_all_action.connect_activate(move |_, _| {
+            notifications.clear_all();
+        });
+    }
+    app.add_action(&clear_all_action);
 }
 
 fn open_devtools(web_view: &WebView) {
@@ -659,11 +736,19 @@ fn mime_for(rel: &str) -> &'static str {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum InputMode {
-    BarOnly,
-    Overlay,
-    CustomRects(Vec<(i32, i32, i32, i32)>),
+fn sanitize_rects(rects: Vec<crate::bridge::InputRect>) -> Vec<(i32, i32, i32, i32)> {
+    rects
+        .into_iter()
+        .map(|r| {
+            (
+                r.x.round() as i32,
+                r.y.round() as i32,
+                r.width.round() as i32,
+                r.height.round() as i32,
+            )
+        })
+        .filter(|&(_, _, w, h)| w > 0 && h > 0)
+        .collect()
 }
 
 #[derive(Debug, Clone)]
@@ -672,7 +757,9 @@ struct WindowInputState {
     fixed_overlay_height: Option<i32>,
     monitor_width: i32,
     overlay_height: i32,
-    mode: InputMode,
+    overlay_active: bool,
+    interactive_rects: Vec<(i32, i32, i32, i32)>,
+    custom_rects: Option<Vec<(i32, i32, i32, i32)>>,
 }
 
 impl WindowInputState {
@@ -691,7 +778,9 @@ impl WindowInputState {
             fixed_overlay_height,
             monitor_width,
             overlay_height,
-            mode: InputMode::BarOnly,
+            overlay_active: false,
+            interactive_rects: Vec::new(),
+            custom_rects: None,
         }
     }
 
@@ -705,50 +794,51 @@ impl WindowInputState {
     }
 
     fn set_overlay(&mut self, active: bool) {
-        self.mode = if active {
-            InputMode::Overlay
-        } else {
-            InputMode::BarOnly
-        };
+        self.overlay_active = active;
+    }
+
+    fn set_interactive_rects(&mut self, rects: Vec<crate::bridge::InputRect>) {
+        self.interactive_rects = sanitize_rects(rects);
     }
 
     fn set_custom_rects(&mut self, rects: Vec<crate::bridge::InputRect>) {
-        let filtered: Vec<(i32, i32, i32, i32)> = rects
-            .into_iter()
-            .map(|r| {
-                (
-                    r.x.round() as i32,
-                    r.y.round() as i32,
-                    r.width.round() as i32,
-                    r.height.round() as i32,
-                )
-            })
-            .filter(|&(_, _, w, h)| w > 0 && h > 0)
-            .collect();
-        self.mode = if filtered.is_empty() {
-            InputMode::BarOnly
+        let filtered = sanitize_rects(rects);
+        self.custom_rects = if filtered.is_empty() {
+            None
         } else {
-            InputMode::CustomRects(filtered)
+            Some(filtered)
         };
     }
 
     fn reset(&mut self) {
-        self.mode = InputMode::BarOnly;
+        self.overlay_active = false;
+        self.interactive_rects.clear();
+        self.custom_rects = None;
     }
 
     fn keyboard_mode(&self) -> KeyboardMode {
-        match self.mode {
-            InputMode::BarOnly => KeyboardMode::None,
-            InputMode::Overlay => KeyboardMode::Exclusive,
-            InputMode::CustomRects(_) => KeyboardMode::OnDemand,
+        if self.overlay_active {
+            KeyboardMode::Exclusive
+        } else if self.custom_rects.is_some() {
+            KeyboardMode::OnDemand
+        } else {
+            KeyboardMode::None
         }
     }
 
     fn rect_tuples(&self) -> Vec<(i32, i32, i32, i32)> {
-        match &self.mode {
-            InputMode::BarOnly => vec![(0, 0, self.monitor_width, self.bar_height)],
-            InputMode::Overlay => vec![(0, 0, self.monitor_width, self.overlay_height)],
-            InputMode::CustomRects(rects) => rects.clone(),
+        if self.overlay_active {
+            vec![(0, 0, self.monitor_width, self.overlay_height)]
+        } else if let Some(custom) = &self.custom_rects {
+            let mut rects = Vec::with_capacity(custom.len() + self.interactive_rects.len());
+            rects.extend_from_slice(custom);
+            rects.extend_from_slice(&self.interactive_rects);
+            rects
+        } else {
+            let mut rects = Vec::with_capacity(1 + self.interactive_rects.len());
+            rects.push((0, 0, self.monitor_width, self.bar_height));
+            rects.extend_from_slice(&self.interactive_rects);
+            rects
         }
     }
 
@@ -975,6 +1065,7 @@ mod tests {
         let cfg = parse(&["--dir", "/tmp/ui"]).unwrap();
         assert!(!cfg.replace);
         assert!(!cfg.devtools);
+        assert!(cfg.notifications);
         assert_eq!(cfg.height, DEFAULT_BAR_HEIGHT);
         assert_eq!(cfg.overlay_height, None);
         assert_eq!(
@@ -984,9 +1075,14 @@ mod tests {
     }
 
     #[test]
-    fn devtools_flag_enables_devtools() {
-        let cfg = parse(&["--dir", "/tmp/ui", "--devtools"]).unwrap();
+    fn devtools_and_no_notifications_flags_parse() {
+        let cfg = parse(&["--dir", "/tmp/ui", "--devtools", "--no-notifications"]).unwrap();
         assert!(cfg.devtools);
+        assert!(!cfg.notifications);
+        assert!(!cfg.ws_claim_notifications);
+
+        let ws_cfg = parse(&["--ws-bridge", "9123", "--ws-claim-notifications"]).unwrap();
+        assert!(ws_cfg.ws_claim_notifications);
     }
 
     #[test]
@@ -1059,6 +1155,34 @@ mod tests {
 
         state.set_custom_rects(Vec::new());
         assert_eq!(state.keyboard_mode(), KeyboardMode::None);
+        assert_eq!(state.rect_tuples(), vec![(0, 0, 2560, 86)]);
+
+        // Interactive rects (e.g. notification toasts) compose with BarOnly and
+        // survive opening/closing an overlay without stealing keyboard focus.
+        state.set_interactive_rects(vec![crate::bridge::InputRect {
+            x: 2200.0,
+            y: 96.0,
+            width: 340.0,
+            height: 88.0,
+        }]);
+        assert_eq!(state.keyboard_mode(), KeyboardMode::None);
+        assert_eq!(
+            state.rect_tuples(),
+            vec![(0, 0, 2560, 86), (2200, 96, 340, 88)]
+        );
+
+        state.set_overlay(true);
+        assert_eq!(state.keyboard_mode(), KeyboardMode::Exclusive);
+        assert_eq!(state.rect_tuples(), vec![(0, 0, 2560, 1440)]);
+
+        state.set_overlay(false);
+        assert_eq!(state.keyboard_mode(), KeyboardMode::None);
+        assert_eq!(
+            state.rect_tuples(),
+            vec![(0, 0, 2560, 86), (2200, 96, 340, 88)]
+        );
+
+        state.reset();
         assert_eq!(state.rect_tuples(), vec![(0, 0, 2560, 86)]);
     }
 

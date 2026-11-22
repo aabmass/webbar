@@ -75,7 +75,7 @@ fi
 WS_PORT="$(harness_pick_port)"
 WS_TOKEN="integration-test-token"
 harness_register_log "$WORK_DIR/webbar.log"
-webbar --ws-bridge "$WS_PORT" --ws-token "$WS_TOKEN" >"$WORK_DIR/webbar.log" 2>&1 &
+webbar --ws-bridge "$WS_PORT" --ws-token "$WS_TOKEN" --ws-claim-notifications >"$WORK_DIR/webbar.log" 2>&1 &
 WEBBAR_PID="$!"
 harness_register_pid "$WEBBAR_PID"
 
@@ -95,6 +95,7 @@ if [ "$WS_READY" -ne 1 ]; then
   echo "run-parity-test: timed out waiting for webbar ws-bridge" >&2
   exit 1
 fi
+harness_wait_dbus_name session org.freedesktop.Notifications
 
 # 7. Serve built UI
 UI_PORT="$(harness_pick_port)"

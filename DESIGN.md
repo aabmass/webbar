@@ -28,6 +28,7 @@ Let users build a Sway status bar in plain HTML, CSS, and TypeScript/React—wit
 │  - bridge.rs (protocol types + SnapshotCache + ts-rs bindings)       │
 │  - sway_ipc.rs (swayipc: tree, workspaces, mode, commands)           │
 │  - tray.rs (StatusNotifierWatcher + DBusMenu) + notifications.rs     │
+│  - icons.rs (shared IconTheme lookup, SVG recoloring, .desktop)      │
 │  - audio.rs (libpulse) + bluetooth.rs (BlueZ) + network.rs (NM)      │
 │  - backlight.rs (ddcutil D-Bus + /sys/class/backlight + logind)      │
 │  - theme.rs (adw::StyleManager + gtk4::Settings + StyleContext)      │
@@ -45,7 +46,7 @@ Let users build a Sway status bar in plain HTML, CSS, and TypeScript/React—wit
 2. **System state aggregation in Rust, web-native stores in JS**
    - Instead of pushing raw D-Bus signals or subprocesses into every monitor's `WebView`, Rust runs one shared watcher per subsystem (`audio`, `bluetooth`, `network`, `backlight`, `sway`, `tray`, `notifications`), deduplicates/debounces updates, and caches the latest snapshot in `SnapshotCache` for instant replay on WebSocket connect or Vite HMR reload.
    - Each store exposes `{ get(), subscribe(cb), onChange(cb) }`, working directly with React's `useSyncExternalStore(store.subscribe, store.get)` as well as vanilla TS listeners, while mutations return standard `Promise`s.
-   - `window.webbar.dbus` and `window.webbar.exec` remain available as Promise-based escape hatches for custom widgets.
+   - `window.webbar.dbus`, `window.webbar.exec`, and `window.webbar.execStream` remain available as Promise-based escape hatches for custom widgets.
 
 3. **Sway IPC in Rust (`src/sway_ipc.rs`, `src/sway_state.rs`, `build.rs`)**
    - `sway_ipc.rs` uses `swayipc` to subscribe to `workspace`, `window`, `mode`, and `output` events with exponential-backoff reconnect, coalesces event bursts, and emits full `SwayState` snapshots (`tree`, `workspaces`, `mode`) using Sway's own IPC types.
@@ -56,17 +57,26 @@ Let users build a Sway status bar in plain HTML, CSS, and TypeScript/React—wit
    - `webbar` takes `--dir <path>` (served over a hardened `webbar://app/...` URI scheme), `--url <url>` (e.g., a Vite dev server for live reload), or `--ws-bridge <port>` alone for headless browser-dev mode.
    - `flake.nix` provides a reproducible `devShell`, `packages.default` (the `webbar` binary), and `sway-full-bar` / `sway-full-bar-dev` / `sway-full-bar-browser-dev` wrappers.
 
-5. **Tray & DBusMenu icons resolved in Rust to `data:` URLs (`src/tray.rs`)**
-   - Tray apps expose icons over D-Bus in multiple formats: theme icon names (`IconName` / `icon-name`), file paths, raw ARGB32 pixmaps (`IconPixmap`), or raw PNG bytes (`icon-data`).
-   - Rust resolves all of these on the host (using GTK4's `IconTheme` for theme names and `gdk_pixbuf` for ARGB pixmaps) and sends the frontend a ready-to-render base64 `data:` URL in `icon_url`.
-   - `icon_name` is also passed through so frontends can identify freedesktop `-symbolic` icons and recolor them with CSS `mask-image` to match the bar theme.
+5. **Tray & notification icons resolved in Rust to `data:` URLs (`src/icons.rs`, `src/tray.rs`, `src/notifications.rs`)**
+   - Tray items and notifications expose icons over D-Bus in multiple formats: theme icon names (`IconName` / `app_icon`), `.desktop` entry fallbacks (`desktop-entry`), `file://` URIs (percent-decoded, 4 MiB cap), raw ARGB32 pixmaps (`IconPixmap`), or raw RGBA/RGB `image-data` (bounds-checked and downscaled to 128px max).
+   - Rust resolves all of these on the host in `src/icons.rs` (using GTK4's `IconTheme` on the GLib main thread and `gdk_pixbuf` for raw pixel buffers), recolors `current-color-scheme` and `currentColor` SVGs from `SharedIconPalette` (`ThemeState`) with live refreshes on theme/icon-theme changes, and sends ready-to-render base64 `data:` URLs (`icon_url` / `app_icon_url` / `image_url`).
+   - `icon_name` / `app_icon_name` are also passed through so frontends can identify freedesktop `-symbolic` icons and style them with CSS `mask-image`.
 
 6. **OS theming via `SnapshotCache` + `:root` CSS variables (`src/theme.rs`, `preload/src/preload.ts`)**
    - WebKitGTK does not expose GTK4/Libadwaita colors or `gtk-font-name` to web content. `src/theme.rs` uses `libadwaita::StyleManager`, `gtk4::Settings`, `gtk4::pango::FontDescription`, and `gtk4::StyleContext::lookup_color` to watch dark/light mode, accent color, font, and GTK/Libadwaita named colors.
    - `ThemeState` is broadcast as `BridgeEvent::Theme` through `SnapshotCache` and `ws_bridge.rs`, so both WebKitGTK bar windows and `--ws-bridge` external browsers receive live updates on `window.webbar.theme` and `:root` (`--desktop-*` semantic tokens, `--gtk-*` GTK named colors, `color-scheme`, and `data-desktop-theme`).
    - In WebKitGTK mode, `src/main.rs` also injects the initial `:root` CSS block as a `UserStyleSheet` (`UserStyleLevel::Author`) so the first paint has zero flash before the WebSocket connects, after which `preload.ts` updates `document.documentElement.style` in place. See [THEMING.md](THEMING.md) for the user-facing variable reference.
 
-7. **Web-standard Popovers and Dynamic Wayland Input Regions (`src/main.rs`, `preload/src/index.ts`)**
+7. **Web-standard Popovers and Composable Wayland Input Regions (`src/main.rs`, `preload/src/index.ts`)**
    - Each monitor's `gtk4-layer-shell` window is sized to full monitor height (or `--overlay-height`) with `exclusive_zone` set to `--height` and a transparent WebView. At `UserStyleLevel::User`, `src/main.rs` injects `--webbar-height: <height>px` on `:root` and `html, body { background: transparent; }` so bars get a transparent canvas and the configured height by default while remaining overridable by author CSS.
-   - Normally (`InputMode::BarOnly`), the Wayland input region is clipped to the bar strip with `KeyboardMode::None`, letting clicks below the bar pass through. When an overlay is active (`InputMode::Overlay`), the input region expands to the full overlay height with `KeyboardMode::Exclusive` for clicks, `Escape`, and click-outside light-dismiss.
-   - `preload/src/index.ts` automatically tracks native HTML `[popover]` elements via capturing `toggle` events and `:popover-open` (with a lazy `MutationObserver` while open to recover if a framework unmounts an open popover without hiding it). Non-popover overlays can opt in via `window.webbar.acquireOverlay()` or `setInputRegion()`/`resetInputRegion()`.
+   - `WindowInputState` composes three layers:
+     - **Base bar strip + `interactive_rects`** (`[data-webbar-interactive]` / `setInteractiveRegions()`): the top bar strip unioned with floating interactive regions (such as notification toasts) under `KeyboardMode::None`, keeping them clickable and hoverable without stealing Sway focus.
+     - **Custom regions** (`setInputRegion()` / `resetInputRegion()`): explicit rects unioned with `interactive_rects` under `KeyboardMode::OnDemand`.
+     - **Active overlay** (`[popover]` / `acquireOverlay()`): expands to `(0, 0, monitor_width, overlay_height)` under `KeyboardMode::Exclusive` for clicks, `Escape`, and click-outside light-dismiss.
+   - `preload/src/index.ts` automatically tracks native HTML `[popover]` elements (via capturing `toggle` events and `:popover-open`, with a lazy `MutationObserver` while open) and `[data-webbar-interactive]` elements (via `MutationObserver`, `ResizeObserver`, `transitionend`/`animationend`, and `requestAnimationFrame` coalescing), replaying `interactive_rects` on WebSocket reconnect.
+
+8. **Notification Daemon (`org.freedesktop.Notifications` v1.2) & Host Actions (`src/notifications.rs`, `src/main.rs`)**
+   - By default in bar mode, `webbar` claims `org.freedesktop.Notifications` (supporting `GetCapabilities`, `Notify`, `CloseNotification`, `GetServerInformation`, `NotificationClosed` reasons 1–4, `ActionInvoked`, `replaces_id`, `synchronous` / `x-canonical-private-synchronous`, `transient`, `resident`, `value` progress, urgency/DND, 50-item history cap, `quick-xml` markup stripping, and a `Condvar` popup-expiry thread with hover pause/resume).
+   - `window.webbar.notifications` exposes a reactive `Store<NotificationsState>` (`{ available, dnd, unread_count, items }`) plus `dismiss`, `hidePopup`, `invokeAction`, `clearAll`, `setDnd`, `markAllRead`, `pauseTimeout`, and `resumeTimeout`.
+   - Passing `--no-notifications` leaves `org.freedesktop.Notifications` unclaimed (`available: false`); headless `--ws-bridge` skips claiming both D-Bus daemons by default (using `tray::spawn_observer`) unless `--ws-claim-notifications` is passed.
+   - `dev.local.webbar` exposes `gio::SimpleAction`s for Sway keybindings (`devtools`, `notifications-toggle-center`, `notifications-toggle-dnd`, `notifications-dismiss-latest`, `notifications-clear-all`); `notifications-toggle-center` broadcasts `BridgeEvent::HostAction` to frontends via `window.webbar.onHostAction(cb)`.

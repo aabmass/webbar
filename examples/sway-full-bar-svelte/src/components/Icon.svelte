@@ -4,6 +4,7 @@
     | { name: "idle"; inhibited: boolean }
     | { name: "mic"; muted: boolean }
     | { name: "chevron"; expanded: boolean }
+    | { name: "bell"; dnd: boolean }
     | { name: "display" | "bluetooth" | "mixer" | "sun" | "moon" };
 
   let props: Props = $props();
@@ -170,5 +171,23 @@
     aria-hidden="true"
   >
     <path d="M6 4l4 4-4 4" />
+  </svg>
+{:else if props.name === "bell"}
+  <svg
+    width="16"
+    height="16"
+    viewBox="0 0 16 16"
+    fill="none"
+    stroke="currentColor"
+    stroke-width="1.5"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+    aria-hidden="true"
+  >
+    <path d="M4.2 6.6a3.8 3.8 0 0 1 7.6 0c0 2.6 1 3.7 1.7 4.4H2.5c.7-.7 1.7-1.8 1.7-4.4z" />
+    <path d="M6.6 13a1.6 1.6 0 0 0 2.8 0" />
+    {#if props.dnd}
+      <path d="M2.5 13.5l11-11" />
+    {/if}
   </svg>
 {/if}

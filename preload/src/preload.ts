@@ -15,6 +15,7 @@ import type { NetworkLink } from "./generated/NetworkLink";
 import type { NetworkState } from "./generated/NetworkState";
 import type { NotificationAction } from "./generated/NotificationAction";
 import type { NotificationItem } from "./generated/NotificationItem";
+import type { NotificationsState } from "./generated/NotificationsState";
 import type { NotificationUrgency } from "./generated/NotificationUrgency";
 import type { SwayCommandError as SwayCommandErrorData } from "./generated/SwayCommandError";
 import type { SwayNode, SwayState, SwayWorkspace } from "./generated/sway";
@@ -52,6 +53,7 @@ export type {
   NetworkState,
   NotificationAction,
   NotificationItem,
+  NotificationsState,
   NotificationUrgency,
   ThemeState,
   TrayItem,
@@ -124,10 +126,15 @@ export type WebbarApi = {
     menu: (bus: string, menuPath: string) => Store<TrayMenuItem[]>;
     menuEvent: (bus: string, menuPath: string, itemId: number) => void;
   };
-  notifications: Store<NotificationItem[]> & {
+  notifications: Store<NotificationsState> & {
     dismiss: (id: number) => void;
+    hidePopup: (id: number) => void;
     invokeAction: (id: number, actionKey: string) => void;
     clearAll: () => void;
+    setDnd: (enabled: boolean) => void;
+    markAllRead: () => void;
+    pauseTimeout: (id: number) => void;
+    resumeTimeout: (id: number) => void;
   };
   audio: Store<AudioState> & {
     setVolume: (
@@ -157,6 +164,8 @@ export type WebbarApi = {
   acquireOverlay: () => () => void;
   setInputRegion: (rects: InputRect[]) => void;
   resetInputRegion: () => void;
+  setInteractiveRegions: (rects: InputRect[]) => void;
+  onHostAction: (listener: (action: string) => void) => () => void;
   dbus: {
     call: (
       opts: DbusCallOptions,
@@ -390,6 +399,9 @@ export function createWebbarBridge(
   let explicitOverlayCount = 0;
   let sentOverlayActive = false;
   let deactivateScheduled = false;
+  let interactiveRects: InputRect[] = [];
+  let sentInteractiveRegions = false;
+  const hostActionListeners = new Set<(action: string) => void>();
   const pending = new Map<
     number,
     {
@@ -494,7 +506,12 @@ export function createWebbarBridge(
       mode: "default",
     }),
     tray: createStore<TrayItem[]>([]),
-    notifications: createStore<NotificationItem[]>([]),
+    notifications: createStore<NotificationsState>({
+      available: false,
+      dnd: false,
+      unread_count: 0,
+      items: [],
+    }),
     audio: createStore<AudioState>({
       available: false,
       outputs: [],
@@ -620,8 +637,13 @@ export function createWebbarBridge(
         entry.store._update((e.items as TrayMenuItem[]) ?? []);
       }
     },
-    notifications: (e) =>
-      stores.notifications._update((e.items as NotificationItem[]) ?? []),
+    notifications_state: (e) =>
+      stores.notifications._update({
+        available: Boolean(e.available),
+        dnd: Boolean(e.dnd),
+        unread_count: typeof e.unread_count === "number" ? e.unread_count : 0,
+        items: (e.items as NotificationItem[]) ?? [],
+      }),
     audio_state: (e) =>
       stores.audio._update({
         available: Boolean(e.available),
@@ -788,6 +810,15 @@ export function createWebbarBridge(
         });
         break;
       }
+      case "host_action": {
+        const action = event.action;
+        if (typeof action === "string") {
+          for (const listener of hostActionListeners) {
+            listener(action);
+          }
+        }
+        break;
+      }
     }
   }
 
@@ -823,6 +854,7 @@ export function createWebbarBridge(
     }),
     notifications: storeView(stores.notifications, {
       dismiss: (id: number) => send({ type: "dismiss_notification", id }),
+      hidePopup: (id: number) => send({ type: "hide_notification_popup", id }),
       invokeAction: (id: number, actionKey: string) =>
         send({
           type: "invoke_notification_action",
@@ -830,6 +862,13 @@ export function createWebbarBridge(
           action_key: actionKey,
         }),
       clearAll: () => send({ type: "clear_notifications" }),
+      setDnd: (enabled: boolean) =>
+        send({ type: "set_notifications_dnd", enabled }),
+      markAllRead: () => send({ type: "mark_notifications_read" }),
+      pauseTimeout: (id: number) =>
+        send({ type: "pause_notification_timeout", id }),
+      resumeTimeout: (id: number) =>
+        send({ type: "resume_notification_timeout", id }),
     }),
     audio: storeView(stores.audio, {
       setVolume: (deviceId: number, volume: number, kind?: AudioDeviceKind) =>
@@ -883,6 +922,19 @@ export function createWebbarBridge(
     setInputRegion: (rects: InputRect[]) =>
       send({ type: "set_input_region", rects }),
     resetInputRegion: () => send({ type: "set_input_region", rects: [] }),
+    setInteractiveRegions: (rects: InputRect[]) => {
+      interactiveRects = [...rects];
+      if (interactiveRects.length > 0) {
+        sentInteractiveRegions = true;
+      }
+      send({ type: "set_interactive_regions", rects: interactiveRects });
+    },
+    onHostAction: (listener: (action: string) => void) => {
+      hostActionListeners.add(listener);
+      return () => {
+        hostActionListeners.delete(listener);
+      };
+    },
     dbus: {
       call: (opts: DbusCallOptions) =>
         rpc("dbus_call", {
@@ -1018,6 +1070,10 @@ export function createWebbarBridge(
     deactivateScheduled = false;
     sentOverlayActive = computeOverlayActive();
     send({ type: "set_overlay", active: sentOverlayActive });
+    if (interactiveRects.length > 0 || sentInteractiveRegions) {
+      sentInteractiveRegions = interactiveRects.length > 0;
+      send({ type: "set_interactive_regions", rects: interactiveRects });
+    }
     for (const entry of menuStores.values()) {
       if (entry.subCount > 0) {
         send({

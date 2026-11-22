@@ -16,7 +16,7 @@ webbar --dir ./examples/sway-full-bar/dist --height 86
 
 ## Example Bar Screenshots
 
-`webbar` itself imposes no layout or styling—you build whatever bar you want with standard web technologies (HTML, CSS, and JavaScript/TypeScript). The screenshots below show [`examples/sway-full-bar`](examples/sway-full-bar), an included reference bar built for Sway that demonstrates workspaces, clock/calendar, system tray, idle controls, audio mixer, display brightness, Bluetooth, and automatic dark/light theming (see [THEMING.md](THEMING.md)).
+`webbar` itself imposes no layout or styling—you build whatever bar you want with standard web technologies (HTML, CSS, and JavaScript/TypeScript). The screenshots below show [`examples/sway-full-bar`](examples/sway-full-bar), an included reference bar built for Sway that demonstrates workspaces, clock/calendar, notifications, system tray, idle controls, audio mixer, display brightness, Bluetooth, and automatic dark/light theming (see [THEMING.md](THEMING.md)).
 
 ### Dark Theme
 
@@ -33,6 +33,8 @@ webbar --dir ./examples/sway-full-bar/dist --height 86
 | ![Audio mixer popover](docs/screenshots/popover-audio.png) | ![Clock and calendar popover](docs/screenshots/popover-calendar.png) |
 | **Bluetooth** | **Display & Appearance** |
 | ![Bluetooth popover](docs/screenshots/popover-bluetooth.png) | ![Display and appearance popover](docs/screenshots/popover-display.png) |
+| **Notification Center** | **Floating Toasts** |
+| ![Notification center popover](docs/screenshots/popover-notifications.png) | ![Floating notification toasts](docs/screenshots/notifications-toasts.png) |
 
 <!-- Regenerate example screenshots in an isolated headless Sway session with: nix run .#update-screenshots -->
 
@@ -108,18 +110,21 @@ npm --workspace=@webbar/types run build
 npm --workspace=examples/sway-full-bar run dev -- --port 5173 --strictPort
 ```
 
-### DevTools (WebKit Web Inspector)
+## Sway Keybindings & DevTools
 
-WebKitGTK includes a built-in Web Inspector (DOM, Console, Sources, Network, Storage). You can open it in a detached window in any of these ways:
+You can bind Sway keys directly to `webbar`'s notification and DevTools `gapplication` actions (these work even when the bar does not have keyboard focus):
 
-- **Sway keybinding** (works even when the bar does not have keyboard focus):
-  ```sway
-  bindsym $mod+Shift+i exec gapplication action dev.local.webbar devtools
-  ```
-- **On startup:** pass `--devtools` to `webbar`.
-- **When the bar has keyboard focus** (e.g. while an overlay is open): press `F12` or `Ctrl+Shift+I`, or right-click the bar and choose **Inspect Element**.
+```sway
+bindsym $mod+n       exec gapplication action dev.local.webbar notifications-toggle-center
+bindsym $mod+Shift+n exec gapplication action dev.local.webbar notifications-toggle-dnd
+bindsym $mod+x       exec gapplication action dev.local.webbar notifications-dismiss-latest
+bindsym $mod+Shift+x exec gapplication action dev.local.webbar notifications-clear-all
+bindsym $mod+Shift+i exec gapplication action dev.local.webbar devtools
+```
 
-> **Note:** Only one daemon can own `org.freedesktop.Notifications` or `org.kde.StatusNotifierWatcher` on your session D-Bus at a time. If another bar or notification daemon (`waybar`, `mako`, `swaync`) is already running, `webbar` logs a warning and still runs, but notifications/tray items stay with the existing daemon until it is stopped.
+You can also open the WebKit Web Inspector (DOM, Console, Sources, Network, Storage) by passing `--devtools` on startup, or—when the bar has keyboard focus (e.g. while an overlay is open)—by pressing `F12` / `Ctrl+Shift+I` or right-clicking the bar and choosing **Inspect Element**.
+
+> **Note:** Only one daemon can own `org.freedesktop.Notifications` or `org.kde.StatusNotifierWatcher` on your session D-Bus at a time. If another bar or notification daemon (`waybar`, `mako`, `swaync`) is already running, `webbar` logs a warning and still runs, but notifications/tray items stay with the existing daemon until it is stopped. Pass `--no-notifications` if you want `webbar` to leave `org.freedesktop.Notifications` unclaimed for another daemon.
 
 ## Testing & Checks
 
@@ -142,12 +147,14 @@ npm install
 # Preload bridge (@webbar/types) build, typecheck, and contract tests
 npm --workspace=@webbar/types run build && npm --workspace=@webbar/types test
 
-# Typecheck and build all workspaces (preload, examples/minimal, examples/sway-full-bar, examples/react-tray)
+# Typecheck and build all workspaces (preload, examples/minimal, examples/sway-full-bar, examples/sway-full-bar-shared, examples/sway-full-bar-svelte, examples/react-tray)
 npm run --workspaces typecheck
 npm run --workspaces build
 ```
 
 ## Architecture & Credits
+
+- See [DESIGN.md](DESIGN.md) for the three-layer architecture, store contracts, composable Wayland input regions, and daemon lifecycle, and [THEMING.md](THEMING.md) for `--desktop-*`/`--gtk-*` CSS tokens and themed icons.
 
 - Rust payload types use `ts-rs` to generate `preload/src/generated/*.ts` (verified in sync by `nix flake check`).
 - `preload/` is packaged as the `@webbar/types` workspace (`preload/src/preload.ts` and `preload/src/index.ts`), compiling `generated/preload.js` and `preload/dist/` while providing `{ get, subscribe, onChange }` stores compatible with React's `useSyncExternalStore` and vanilla TypeScript, `window.webbar.output` per monitor, and `AbortSignal` cancellation on `exec` and `dbus.watch`.

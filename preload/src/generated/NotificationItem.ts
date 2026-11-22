@@ -2,4 +2,4 @@
 import type { NotificationAction } from "./NotificationAction";
 import type { NotificationUrgency } from "./NotificationUrgency";
 
-export type NotificationItem = { id: number, app_name: string, icon: string, summary: string, body: string, urgency: NotificationUrgency, actions: Array<NotificationAction>, };
+export type NotificationItem = { id: number, app_name: string, app_icon_name: string, app_icon_url: string, image_url: string, summary: string, body: string, urgency: NotificationUrgency, actions: Array<NotificationAction>, timestamp_ms: number, category: string, desktop_entry: string, progress: number | null, transient: boolean, resident: boolean, popup: boolean, read: boolean, };

@@ -140,14 +140,38 @@ test("all window.webbar stores follow snapshot + subscribe + onChange contract",
       name: "notifications",
       store: api.notifications,
       event: {
-        type: "notifications",
+        type: "notifications_state",
+        available: true,
+        dnd: false,
+        unread_count: 1,
         items: [
-          { id: 7, app_name: "notify-send", summary: "Hi", body: "World" },
+          {
+            id: 7,
+            app_name: "notify-send",
+            app_icon_name: "",
+            app_icon_url: "",
+            image_url: "",
+            summary: "Hi",
+            body: "World",
+            urgency: "normal",
+            actions: [],
+            timestamp_ms: 1700000000000,
+            category: "",
+            desktop_entry: "",
+            progress: null,
+            transient: false,
+            resident: false,
+            popup: true,
+            read: false,
+          },
         ],
       },
       assertState: (s) => {
-        assert.equal(s.length, 1);
-        assert.equal(s[0].id, 7);
+        assert.equal(s.available, true);
+        assert.equal(s.dnd, false);
+        assert.equal(s.unread_count, 1);
+        assert.equal(s.items.length, 1);
+        assert.equal(s.items[0].id, 7);
       },
     },
     {
@@ -1167,4 +1191,54 @@ test("bridge theme events sync api.theme store and document.documentElement", ()
       globalThis.document = prevDocument;
     }
   }
+});
+
+test("notification actions, onHostAction, and setInteractiveRegions reconnect replay work", () => {
+  const sent = [];
+  const { api, receive, onConnect } = createWebbarBridge((json) => {
+    sent.push(JSON.parse(json));
+  }, "DP-1");
+
+  api.notifications.hidePopup(3);
+  api.notifications.setDnd(true);
+  api.notifications.markAllRead();
+  api.notifications.pauseTimeout(3);
+  api.notifications.resumeTimeout(3);
+
+  assert.deepEqual(sent.slice(0, 5), [
+    { type: "hide_notification_popup", id: 3 },
+    { type: "set_notifications_dnd", enabled: true },
+    { type: "mark_notifications_read" },
+    { type: "pause_notification_timeout", id: 3 },
+    { type: "resume_notification_timeout", id: 3 },
+  ]);
+
+  const actions = [];
+  const unsub = api.onHostAction((action) => actions.push(action));
+  receive({ type: "host_action", action: "notifications_toggle_center" });
+  unsub();
+  receive({ type: "host_action", action: "notifications_toggle_center" });
+  assert.deepEqual(actions, ["notifications_toggle_center"]);
+
+  const region = [{ x: 100, y: 96, width: 340, height: 80 }];
+  api.setInteractiveRegions(region);
+  sent.length = 0;
+  onConnect();
+  assert.deepEqual(sent, [
+    { type: "set_overlay", active: false },
+    { type: "set_interactive_regions", rects: region },
+  ]);
+
+  // Clearing regions while disconnected still clears stale host state on reconnect
+  api.setInteractiveRegions([]);
+  sent.length = 0;
+  onConnect();
+  assert.deepEqual(sent, [
+    { type: "set_overlay", active: false },
+    { type: "set_interactive_regions", rects: [] },
+  ]);
+
+  sent.length = 0;
+  onConnect();
+  assert.deepEqual(sent, [{ type: "set_overlay", active: false }]);
 });
