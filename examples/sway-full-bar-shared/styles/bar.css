@@ -105,43 +105,48 @@ button:focus-visible {
 }
 
 .ws-btn {
+  position: relative;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   border-radius: var(--radius-sm);
   background: var(--surface-color);
   color: var(--fg-color);
-  padding: 0 6px;
+  padding: 0 6px 2px;
   font-size: 12px;
   font-weight: 700;
   text-transform: uppercase;
 }
 
-.ws-btn {
-  position: relative;
-}
-
-.ws-btn:has(.ws-dots) {
-  padding-bottom: 5px;
-}
-
 .ws-dots {
   position: absolute;
-  bottom: 4px;
+  bottom: 3.5px;
   left: 0;
   right: 0;
   display: flex;
   justify-content: center;
-  gap: 2px;
+  gap: 2.5px;
   pointer-events: none;
 }
 
 .ws-dots i {
-  width: 3px;
-  height: 3px;
+  width: 2.5px;
+  height: 2.5px;
   border-radius: 50%;
   background: currentColor;
-  opacity: 0.7;
+  opacity: 0.78;
+  animation: ws-dot-in var(--dur-fast) var(--ease-out) both;
+}
+
+@keyframes ws-dot-in {
+  from {
+    opacity: 0;
+    scale: 0.4;
+  }
+  to {
+    opacity: 0.78;
+    scale: 1;
+  }
 }
 
 .ws-btn:hover {
