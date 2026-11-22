@@ -1,10 +1,13 @@
 import { test, expect } from "@playwright/test";
 import { execFileSync, spawn } from "node:child_process";
+import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const INHIBIT_SCRIPT = path.join(__dirname, "dbus-inhibit.py");
+const TRAY_ITEM_SCRIPT = path.join(__dirname, "dbus-tray-item.py");
 const PRELOAD_JS = process.env.WEBBAR_PRELOAD_JS;
 
 if (!PRELOAD_JS) {
@@ -123,6 +126,33 @@ for (const target of TARGETS) {
       await expect(calendarPopover).toBeVisible();
       await page.keyboard.press("Escape");
       await expect(calendarPopover).toBeHidden();
+
+      // 6. Real StatusNotifierItem SVG current-color-scheme recoloring
+      const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "webbar-tray-e2e-"));
+      const svgPath = path.join(tmpDir, "panel-test.svg");
+      fs.writeFileSync(
+        svgPath,
+        `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24"><style id="current-color-scheme">.ColorScheme-Text { color:#dfdfdf; }</style><path class="ColorScheme-Text" fill="currentColor" d="M0 0h24v24H0z"/></svg>`,
+      );
+      const trayProc = spawn("python3", [TRAY_ITEM_SCRIPT, svgPath], {
+        stdio: "inherit",
+      });
+      try {
+        const trayIcon = page.locator(".tray .tray-item img.tray-icon");
+        await expect(trayIcon).toBeVisible();
+        const src = await trayIcon.getAttribute("src");
+        expect(src).toMatch(/^data:image\/svg\+xml;base64,/);
+        const decodedSvg = Buffer.from(
+          src.slice("data:image/svg+xml;base64,".length),
+          "base64",
+        ).toString("utf8");
+        expect(decodedSvg).toContain(".ColorScheme-Text { color:");
+        expect(decodedSvg).not.toContain("#dfdfdf");
+      } finally {
+        trayProc.kill();
+        fs.rmSync(tmpDir, { recursive: true, force: true });
+      }
+      await expect(page.locator(".tray")).toBeHidden();
 
       expect(errors).toEqual([]);
     });

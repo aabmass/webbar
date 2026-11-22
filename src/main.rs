@@ -171,18 +171,35 @@ struct HostServices {
     backlight: BacklightController,
     sway: sway_ipc::SwayCommands,
     tray_menus: tray::TrayMenuWatcher,
+    tray_theme: tray::TrayTheme,
 }
 
 impl HostServices {
     fn start(send_event: SendEvent, claim_dbus_servers: bool) -> (Arc<Self>, theme::ThemeState) {
-        let initial_theme = theme::start_theme_watcher(send_event.clone());
+        let tray_theme = tray::TrayTheme::default();
+        let tray_menus = tray::TrayMenuWatcher::new(send_event.clone(), tray_theme.clone());
+        let tray_store = if claim_dbus_servers {
+            tray::spawn_server(send_event.clone(), tray_theme.clone())
+        } else {
+            tray::spawn_observer(send_event.clone(), tray_theme.clone())
+        };
+        let theme_send: SendEvent = Arc::new({
+            let send_event = send_event.clone();
+            let tray_theme = tray_theme.clone();
+            move |ev| {
+                if let BridgeEvent::Theme(ref next) = ev {
+                    if tray_theme.update(next) {
+                        let store = tray_store.clone();
+                        std::thread::spawn(move || store.refresh_icons());
+                    }
+                }
+                send_event(ev);
+            }
+        });
+        let initial_theme = theme::start_theme_watcher(theme_send);
         let notifications = NotificationStore::new(send_event.clone());
-        let tray_menus = tray::TrayMenuWatcher::new(send_event.clone());
         if claim_dbus_servers {
             notifications::spawn_server(notifications.clone());
-            tray::spawn_server(send_event.clone());
-        } else {
-            tray::spawn_observer(send_event.clone());
         }
         sway_ipc::spawn(send_event.clone());
         let audio = audio::spawn(send_event.clone());
@@ -198,6 +215,7 @@ impl HostServices {
                 backlight,
                 sway: sway_ipc::SwayCommands::spawn(),
                 tray_menus,
+                tray_theme,
             }),
             initial_theme,
         )
@@ -321,7 +339,7 @@ impl HostServices {
                 tray::activate(bus, path);
             }
             BridgeRequest::TrayGetMenu { id, bus, menu_path } => {
-                tray::get_menu(id, bus, menu_path, reply_send.clone());
+                tray::get_menu(id, bus, menu_path, reply_send.clone(), self.tray_theme.clone());
             }
             BridgeRequest::TrayWatchMenu { bus, menu_path } => {
                 self.tray_menus.watch(bus, menu_path);

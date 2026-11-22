@@ -16,9 +16,11 @@ use gtk4::gdk_pixbuf::{Colorspace, Pixbuf};
 use gtk4::glib;
 use gtk4::prelude::*;
 use gtk4::{IconLookupFlags, IconTheme, TextDirection};
-use serde::Serialize;
 use futures_channel::oneshot;
 use futures_util::{select, FutureExt, StreamExt};
+use quick_xml::events::{BytesStart, BytesText, Event};
+use quick_xml::{Reader, Writer};
+use serde::Serialize;
 use zbus::blocking::connection::Builder as ConnectionBuilder;
 use zbus::blocking::Connection;
 use zbus::interface;
@@ -28,6 +30,130 @@ use zbus::zvariant::{OwnedObjectPath, OwnedValue, Value};
 use zbus::{MatchRule, MessageStream};
 
 use crate::bridge::{BridgeEvent, SendEvent};
+use crate::theme::ThemeState;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TrayColorPalette {
+    // Included for PartialEq change detection when gtk-icon-theme-name changes.
+    pub icon_theme_name: String,
+    pub text: String,
+    pub background: String,
+    pub highlight: String,
+    pub accent: String,
+    pub button_text: String,
+    pub positive_text: String,
+    pub neutral_text: String,
+    pub negative_text: String,
+}
+
+impl Default for TrayColorPalette {
+    fn default() -> Self {
+        Self::from_theme_state(&ThemeState::default())
+    }
+}
+
+fn pick_theme_color(
+    theme: &ThemeState,
+    key: &str,
+    dark_fallback: &str,
+    light_fallback: &str,
+) -> String {
+    theme
+        .desktop_colors
+        .get(key)
+        .map(|c| c.trim())
+        .filter(|c| !c.is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| {
+            if theme.dark {
+                dark_fallback.to_string()
+            } else {
+                light_fallback.to_string()
+            }
+        })
+}
+
+impl TrayColorPalette {
+    pub fn from_theme_state(theme: &ThemeState) -> Self {
+        let text = pick_theme_color(theme, "theme_fg_color", "#ececf1", "#18181f");
+        let background = pick_theme_color(theme, "theme_bg_color", "#1c1c21", "#f4f4f7");
+        let accent = theme
+            .accent_color
+            .as_deref()
+            .map(str::trim)
+            .filter(|c| !c.is_empty())
+            .map(str::to_string)
+            .unwrap_or_else(|| {
+                if theme.dark {
+                    "#8ab4f8".to_string()
+                } else {
+                    "#2b6de0".to_string()
+                }
+            });
+        let highlight = pick_theme_color(theme, "theme_selected_bg_color", &accent, &accent);
+
+        Self {
+            icon_theme_name: theme.icon_theme_name.clone(),
+            button_text: text.clone(),
+            text,
+            background,
+            highlight,
+            accent,
+            positive_text: if theme.dark { "#6fcf97" } else { "#1f8f54" }.to_string(),
+            neutral_text: if theme.dark { "#f2c94c" } else { "#c5820a" }.to_string(),
+            negative_text: if theme.dark { "#f2726f" } else { "#d63638" }.to_string(),
+        }
+    }
+
+    pub fn stylesheet(&self) -> String {
+        format!(
+            ".ColorScheme-Text {{ color: {text}; }} \
+             .ColorScheme-Background {{ color: {bg}; }} \
+             .ColorScheme-Highlight {{ color: {hl}; }} \
+             .ColorScheme-Accent {{ color: {accent}; }} \
+             .ColorScheme-ButtonText {{ color: {btn}; }} \
+             .ColorScheme-PositiveText {{ color: {pos}; }} \
+             .ColorScheme-NeutralText {{ color: {neu}; }} \
+             .ColorScheme-NegativeText {{ color: {neg}; }}",
+            text = self.text,
+            bg = self.background,
+            hl = self.highlight,
+            accent = self.accent,
+            btn = self.button_text,
+            pos = self.positive_text,
+            neu = self.neutral_text,
+            neg = self.negative_text,
+        )
+    }
+}
+
+#[derive(Clone, Default)]
+pub struct TrayTheme {
+    palette: Arc<Mutex<TrayColorPalette>>,
+}
+
+impl TrayTheme {
+    #[cfg(test)]
+    pub fn new(theme: &ThemeState) -> Self {
+        Self {
+            palette: Arc::new(Mutex::new(TrayColorPalette::from_theme_state(theme))),
+        }
+    }
+
+    pub fn palette(&self) -> TrayColorPalette {
+        self.palette.lock().unwrap().clone()
+    }
+
+    pub fn update(&self, theme: &ThemeState) -> bool {
+        let next = TrayColorPalette::from_theme_state(theme);
+        let mut guard = self.palette.lock().unwrap();
+        if *guard == next {
+            return false;
+        }
+        *guard = next;
+        true
+    }
+}
 
 #[derive(Debug, Clone, Serialize, ts_rs::TS)]
 #[ts(export, export_to = "../preload/src/generated/")]
@@ -56,23 +182,42 @@ pub struct TrayMenuItem {
     pub children: Vec<TrayMenuItem>,
 }
 
+type ArgbPixmap = (i32, i32, Vec<u8>);
+
+struct TrayIconSource {
+    bus: String,
+    path: String,
+    icon_name: String,
+    icon_theme_path: String,
+    pixmaps: Vec<ArgbPixmap>,
+}
+
 #[derive(Clone)]
 struct TrayEntry {
     item: TrayItem,
     unique_bus: String,
+    icon_theme_path: String,
+    pixmaps: Vec<ArgbPixmap>,
 }
 
 #[derive(Clone)]
-struct TrayStore {
+pub struct TrayStore {
     items: Arc<Mutex<Vec<TrayEntry>>>,
     send: SendEvent,
+    theme: TrayTheme,
 }
 
 impl TrayStore {
+    #[cfg(test)]
     fn new(send: SendEvent) -> Self {
+        Self::with_theme(send, TrayTheme::default())
+    }
+
+    fn with_theme(send: SendEvent, theme: TrayTheme) -> Self {
         Self {
             items: Arc::new(Mutex::new(Vec::new())),
             send,
+            theme,
         }
     }
 
@@ -80,24 +225,59 @@ impl TrayStore {
         entries.iter().map(|e| e.item.clone()).collect()
     }
 
+    #[cfg(test)]
     fn upsert(&self, item: TrayItem, unique_bus: String) {
+        self.upsert_with_sources(item, unique_bus, String::new(), Vec::new());
+    }
+
+    fn upsert_from_fetched(&self, bus: String, path: String, unique_bus: String, fetched: FetchedItemProperties) {
+        self.upsert_with_sources(
+            TrayItem {
+                bus,
+                path,
+                title: fetched.title,
+                icon_name: fetched.icon_name,
+                icon_url: fetched.icon_url,
+                menu_path: fetched.menu_path,
+            },
+            unique_bus,
+            fetched.icon_theme_path,
+            fetched.pixmaps,
+        );
+    }
+
+    fn upsert_with_sources(
+        &self,
+        item: TrayItem,
+        unique_bus: String,
+        icon_theme_path: String,
+        pixmaps: Vec<ArgbPixmap>,
+    ) {
         let mut guard = self.items.lock().unwrap();
         if let Some(existing) = guard
             .iter_mut()
             .find(|e| e.item.bus == item.bus && e.item.path == item.path)
         {
             existing.item = item;
+            existing.icon_theme_path = icon_theme_path;
+            existing.pixmaps = pixmaps;
             if !unique_bus.is_empty() {
                 existing.unique_bus = unique_bus;
             }
         } else {
-            guard.push(TrayEntry { item, unique_bus });
+            guard.push(TrayEntry {
+                item,
+                unique_bus,
+                icon_theme_path,
+                pixmaps,
+            });
         }
         let snapshot = Self::snapshot_locked(&guard);
         drop(guard);
         (self.send)(BridgeEvent::Tray { items: snapshot });
     }
 
+    #[cfg(test)]
     fn update_if_present(
         &self,
         bus: &str,
@@ -107,6 +287,21 @@ impl TrayStore {
         icon_url: String,
         menu_path: String,
     ) -> bool {
+        self.update_from_fetched(
+            bus,
+            path,
+            FetchedItemProperties {
+                title,
+                icon_name,
+                icon_theme_path: String::new(),
+                pixmaps: Vec::new(),
+                icon_url,
+                menu_path,
+            },
+        )
+    }
+
+    fn update_from_fetched(&self, bus: &str, path: &str, fetched: FetchedItemProperties) -> bool {
         let mut guard = self.items.lock().unwrap();
         let Some(existing) = guard
             .iter_mut()
@@ -115,23 +310,81 @@ impl TrayStore {
             return false;
         };
 
-        if existing.item.title == title
-            && existing.item.icon_name == icon_name
-            && existing.item.icon_url == icon_url
-            && existing.item.menu_path == menu_path
+        if existing.item.title == fetched.title
+            && existing.item.icon_name == fetched.icon_name
+            && existing.item.icon_url == fetched.icon_url
+            && existing.item.menu_path == fetched.menu_path
+            && existing.icon_theme_path == fetched.icon_theme_path
+            && existing.pixmaps == fetched.pixmaps
         {
             return false;
         }
 
-        existing.item.title = title;
-        existing.item.icon_name = icon_name;
-        existing.item.icon_url = icon_url;
-        existing.item.menu_path = menu_path;
+        existing.item.title = fetched.title;
+        existing.item.icon_name = fetched.icon_name;
+        existing.item.icon_url = fetched.icon_url;
+        existing.item.menu_path = fetched.menu_path;
+        existing.icon_theme_path = fetched.icon_theme_path;
+        existing.pixmaps = fetched.pixmaps;
 
         let snapshot = Self::snapshot_locked(&guard);
         drop(guard);
         (self.send)(BridgeEvent::Tray { items: snapshot });
         true
+    }
+
+    pub fn refresh_icons(&self) {
+        let palette = self.theme.palette();
+        let sources: Vec<TrayIconSource> = {
+            let guard = self.items.lock().unwrap();
+            guard
+                .iter()
+                .map(|e| TrayIconSource {
+                    bus: e.item.bus.clone(),
+                    path: e.item.path.clone(),
+                    icon_name: e.item.icon_name.clone(),
+                    icon_theme_path: e.icon_theme_path.clone(),
+                    pixmaps: e.pixmaps.clone(),
+                })
+                .collect()
+        };
+
+        if sources.is_empty() {
+            return;
+        }
+
+        let resolved: Vec<(String, String, String)> = sources
+            .into_iter()
+            .map(|src| {
+                let url = resolve_icon_url(
+                    &src.icon_name,
+                    &src.icon_theme_path,
+                    &src.pixmaps,
+                    &palette,
+                );
+                (src.bus, src.path, url)
+            })
+            .collect();
+
+        let mut guard = self.items.lock().unwrap();
+        let mut changed = false;
+        for (bus, path, url) in resolved {
+            if let Some(entry) = guard
+                .iter_mut()
+                .find(|e| e.item.bus == bus && e.item.path == path)
+            {
+                if entry.item.icon_url != url {
+                    entry.item.icon_url = url;
+                    changed = true;
+                }
+            }
+        }
+        if !changed {
+            return;
+        }
+        let snapshot = Self::snapshot_locked(&guard);
+        drop(guard);
+        (self.send)(BridgeEvent::Tray { items: snapshot });
     }
 
     fn find_target(&self, sender: &str, path: &str) -> Option<(String, String)> {
@@ -202,18 +455,9 @@ impl StatusNotifierWatcher {
 
         let store = self.store.clone();
         thread::spawn(move || {
-            let (title, icon_name, icon_url, menu_path) = fetch_item_properties(&bus, &path);
-            store.upsert(
-                TrayItem {
-                    bus,
-                    path,
-                    title,
-                    icon_name,
-                    icon_url,
-                    menu_path,
-                },
-                unique_bus,
-            );
+            let palette = store.theme.palette();
+            let fetched = fetch_item_properties(&bus, &path, &palette);
+            store.upsert_from_fetched(bus, path, unique_bus, fetched);
         });
     }
 
@@ -241,10 +485,24 @@ impl StatusNotifierWatcher {
     ) -> zbus::Result<()>;
 }
 
-fn fetch_item_properties(bus: &str, path: &str) -> (String, String, String, String) {
+#[derive(Default)]
+struct FetchedItemProperties {
+    title: String,
+    icon_name: String,
+    icon_theme_path: String,
+    pixmaps: Vec<(i32, i32, Vec<u8>)>,
+    icon_url: String,
+    menu_path: String,
+}
+
+fn fetch_item_properties(
+    bus: &str,
+    path: &str,
+    palette: &TrayColorPalette,
+) -> FetchedItemProperties {
     let conn = match Connection::session() {
         Ok(c) => c,
-        Err(_) => return (String::new(), String::new(), String::new(), String::new()),
+        Err(_) => return FetchedItemProperties::default(),
     };
 
     let reply = conn.call_method(
@@ -256,11 +514,11 @@ fn fetch_item_properties(bus: &str, path: &str) -> (String, String, String, Stri
     );
 
     let Ok(msg) = reply else {
-        return (String::new(), String::new(), String::new(), String::new());
+        return FetchedItemProperties::default();
     };
 
     let Ok(props) = msg.body().deserialize::<HashMap<String, OwnedValue>>() else {
-        return (String::new(), String::new(), String::new(), String::new());
+        return FetchedItemProperties::default();
     };
 
     let id = props
@@ -303,28 +561,36 @@ fn fetch_item_properties(bus: &str, path: &str) -> (String, String, String, Stri
         .map(|p| p.to_string())
         .unwrap_or_default();
 
-    let icon_url = resolve_icon_url(&icon_name, &icon_theme_path, pixmaps);
-    (title, icon_name, icon_url, menu_path)
+    let icon_url = resolve_icon_url(&icon_name, &icon_theme_path, &pixmaps, palette);
+    FetchedItemProperties {
+        title,
+        icon_name,
+        icon_theme_path,
+        pixmaps,
+        icon_url,
+        menu_path,
+    }
 }
 
 fn resolve_icon_url(
     icon_name: &str,
     icon_theme_path: &str,
-    pixmaps: Vec<(i32, i32, Vec<u8>)>,
+    pixmaps: &[ArgbPixmap],
+    palette: &TrayColorPalette,
 ) -> String {
     if !icon_name.is_empty() {
         if Path::new(icon_name).is_file() {
-            if let Some(url) = file_to_data_url(Path::new(icon_name)) {
+            if let Some(url) = file_to_data_url(Path::new(icon_name), palette) {
                 return url;
             }
         }
-        if let Some(url) = lookup_theme_icon_data_url(icon_name, icon_theme_path) {
+        if let Some(url) = lookup_theme_icon_data_url(icon_name, icon_theme_path, palette) {
             return url;
         }
     }
 
     if let Some((w, h, argb)) = select_best_pixmap(pixmaps) {
-        if let Some(url) = argb_pixmap_to_png_data_url(w, h, &argb) {
+        if let Some(url) = argb_pixmap_to_png_data_url(w, h, argb) {
             return url;
         }
     }
@@ -332,11 +598,12 @@ fn resolve_icon_url(
     String::new()
 }
 
-fn select_best_pixmap(pixmaps: Vec<(i32, i32, Vec<u8>)>) -> Option<(i32, i32, Vec<u8>)> {
+fn select_best_pixmap(pixmaps: &[ArgbPixmap]) -> Option<(i32, i32, &[u8])> {
     pixmaps
-        .into_iter()
+        .iter()
         .filter(|(w, h, bytes)| *w > 0 && *h > 0 && bytes.len() == (*w as usize) * (*h as usize) * 4)
         .max_by_key(|(w, h, _)| (*w).min(*h))
+        .map(|(w, h, bytes)| (*w, *h, bytes.as_slice()))
 }
 
 fn argb_pixmap_to_png_data_url(width: i32, height: i32, argb: &[u8]) -> Option<String> {
@@ -360,7 +627,115 @@ fn argb_pixmap_to_png_data_url(width: i32, height: i32, argb: &[u8]) -> Option<S
     Some(format!("data:image/png;base64,{}", BASE64.encode(png)))
 }
 
-fn file_to_data_url(path: &Path) -> Option<String> {
+fn bytes_contain(haystack: &[u8], needle: &[u8]) -> bool {
+    !needle.is_empty() && haystack.windows(needle.len()).any(|w| w == needle)
+}
+
+fn has_id_current_color_scheme(elem: &BytesStart<'_>) -> bool {
+    elem.attributes().flatten().any(|attr| {
+        attr.key.local_name().as_ref() == b"id"
+            && attr.unescape_value().ok().as_deref() == Some("current-color-scheme")
+    })
+}
+
+fn with_root_svg_color(elem: BytesStart<'_>, color: &str) -> BytesStart<'static> {
+    let tag_name = String::from_utf8_lossy(elem.name().as_ref()).into_owned();
+    let mut updated = BytesStart::new(tag_name);
+    for attr in elem.attributes().flatten() {
+        if attr.key.local_name().as_ref() != b"color" {
+            updated.push_attribute(attr);
+        }
+    }
+    updated.push_attribute(("color", color));
+    updated.into_owned()
+}
+
+fn recolor_svg_bytes(bytes: &[u8], palette: &TrayColorPalette) -> Vec<u8> {
+    let has_color_scheme = bytes_contain(bytes, b"current-color-scheme");
+    let has_current_color = bytes_contain(bytes, b"currentColor");
+    if !has_color_scheme && !has_current_color {
+        return bytes.to_vec();
+    }
+
+    let mut reader = Reader::from_reader(bytes);
+    let mut writer = Writer::new(Vec::with_capacity(bytes.len() + 256));
+    let mut in_current_color_scheme = false;
+    let mut wrote_style_body = false;
+    let mut saw_root_svg = false;
+
+    loop {
+        match reader.read_event() {
+            Ok(Event::Start(e)) => {
+                if !saw_root_svg && e.local_name().as_ref() == b"svg" {
+                    saw_root_svg = true;
+                    if !has_color_scheme && has_current_color {
+                        let updated = with_root_svg_color(e, &palette.text);
+                        if writer.write_event(Event::Start(updated)).is_err() {
+                            return bytes.to_vec();
+                        }
+                        let mut out = writer.into_inner();
+                        out.extend_from_slice(&bytes[reader.buffer_position() as usize..]);
+                        return out;
+                    }
+                } else if e.local_name().as_ref() == b"style" && has_id_current_color_scheme(&e) {
+                    in_current_color_scheme = true;
+                    wrote_style_body = false;
+                }
+
+                if writer.write_event(Event::Start(e)).is_err() {
+                    return bytes.to_vec();
+                }
+            }
+            Ok(Event::End(e)) => {
+                if in_current_color_scheme && e.local_name().as_ref() == b"style" {
+                    if !wrote_style_body
+                        && writer
+                            .write_event(Event::Text(BytesText::new(&palette.stylesheet())))
+                            .is_err()
+                    {
+                        return bytes.to_vec();
+                    }
+                    if writer.write_event(Event::End(e)).is_err() {
+                        return bytes.to_vec();
+                    }
+                    let mut out = writer.into_inner();
+                    out.extend_from_slice(&bytes[reader.buffer_position() as usize..]);
+                    return out;
+                }
+                if writer.write_event(Event::End(e)).is_err() {
+                    return bytes.to_vec();
+                }
+            }
+            Ok(Event::Text(_)) | Ok(Event::CData(_)) if in_current_color_scheme => {
+                if !wrote_style_body {
+                    if writer
+                        .write_event(Event::Text(BytesText::new(&palette.stylesheet())))
+                        .is_err()
+                    {
+                        return bytes.to_vec();
+                    }
+                    wrote_style_body = true;
+                }
+            }
+            Ok(Event::Eof) => {
+                if in_current_color_scheme {
+                    return bytes.to_vec();
+                }
+                break;
+            }
+            Ok(ev) => {
+                if writer.write_event(ev).is_err() {
+                    return bytes.to_vec();
+                }
+            }
+            Err(_) => return bytes.to_vec(),
+        }
+    }
+
+    writer.into_inner()
+}
+
+fn file_to_data_url(path: &Path, palette: &TrayColorPalette) -> Option<String> {
     let bytes = fs::read(path).ok()?;
     let mime = match path.extension().and_then(|e| e.to_str()) {
         Some("svg") => "image/svg+xml",
@@ -369,10 +744,19 @@ fn file_to_data_url(path: &Path) -> Option<String> {
         Some("xpm") => "image/x-xpixmap",
         _ => "application/octet-stream",
     };
-    Some(format!("data:{mime};base64,{}", BASE64.encode(bytes)))
+    let encoded = if mime == "image/svg+xml" {
+        BASE64.encode(recolor_svg_bytes(&bytes, palette))
+    } else {
+        BASE64.encode(bytes)
+    };
+    Some(format!("data:{mime};base64,{encoded}"))
 }
 
-fn lookup_theme_icon_data_url(icon_name: &str, icon_theme_path: &str) -> Option<String> {
+fn lookup_theme_icon_data_url(
+    icon_name: &str,
+    icon_theme_path: &str,
+    palette: &TrayColorPalette,
+) -> Option<String> {
     if !gtk4::is_initialized() {
         return None;
     }
@@ -396,11 +780,11 @@ fn lookup_theme_icon_data_url(icon_name: &str, icon_theme_path: &str) -> Option<
             TextDirection::None,
             IconLookupFlags::empty(),
         );
-        let file_path = paintable.file().and_then(|f| f.path());
-        let _ = tx.send(file_path.and_then(|p| file_to_data_url(&p)));
+        let _ = tx.send(paintable.file().and_then(|f| f.path()));
     });
 
-    rx.recv().ok().flatten()
+    let file_path = rx.recv().ok().flatten()?;
+    file_to_data_url(&file_path, palette)
 }
 
 fn handle_name_owner_changed(store: &TrayStore, name: &str, new_owner: &str) -> Vec<String> {
@@ -433,14 +817,17 @@ fn should_refresh_sni_signal(msg: &zbus::Message) -> bool {
 
 fn spawn_item_refresh(store: TrayStore, bus: String, path: String) {
     thread::spawn(move || {
-        let (title, icon_name, icon_url, menu_path) = fetch_item_properties(&bus, &path);
-        store.update_if_present(&bus, &path, title, icon_name, icon_url, menu_path);
+        let palette = store.theme.palette();
+        let fetched = fetch_item_properties(&bus, &path, &palette);
+        store.update_from_fetched(&bus, &path, fetched);
     });
 }
 
-pub fn spawn_server(send: SendEvent) {
+pub fn spawn_server(send: SendEvent, theme: TrayTheme) -> TrayStore {
+    let store = TrayStore::with_theme(send, theme);
+    let server_store = store.clone();
     thread::spawn(move || {
-        let store = TrayStore::new(send);
+        let store = server_store;
         let watcher = StatusNotifierWatcher {
             store: store.clone(),
         };
@@ -559,6 +946,7 @@ pub fn spawn_server(send: SendEvent) {
             thread::park();
         }
     });
+    store
 }
 
 fn split_registered_service(service: &str) -> (String, String) {
@@ -595,27 +983,20 @@ fn spawn_observed_item_fetch(store: TrayStore, service: String) {
             .ok()
             .map(|c| resolve_unique_bus(&c, &bus))
             .unwrap_or_default();
-        let (title, icon_name, icon_url, menu_path) = fetch_item_properties(&bus, &path);
-        store.upsert(
-            TrayItem {
-                bus,
-                path,
-                title,
-                icon_name,
-                icon_url,
-                menu_path,
-            },
-            unique_bus,
-        );
+        let palette = store.theme.palette();
+        let fetched = fetch_item_properties(&bus, &path, &palette);
+        store.upsert_from_fetched(bus, path, unique_bus, fetched);
     });
 }
 
 /// Observe an existing `org.kde.StatusNotifierWatcher` on the session bus
 /// without claiming the well-known name. Used in headless `--ws-bridge` mode
 /// so browser dev previews receive live tray items alongside a running bar.
-pub fn spawn_observer(send: SendEvent) {
+pub fn spawn_observer(send: SendEvent, theme: TrayTheme) -> TrayStore {
+    let store = TrayStore::with_theme(send, theme);
+    let observer_store = store.clone();
     thread::spawn(move || {
-        let store = TrayStore::new(send);
+        let store = observer_store;
         let Ok(conn) = Connection::session() else {
             return;
         };
@@ -727,6 +1108,7 @@ pub fn spawn_observer(send: SendEvent) {
             }
         });
     });
+    store
 }
 
 pub fn activate(bus: String, path: String) {
@@ -758,7 +1140,7 @@ fn strip_mnemonic(raw: &str) -> String {
         .replace('\x00', "_")
 }
 
-fn parse_menu_node(node: RawMenuNode) -> TrayMenuItem {
+fn parse_menu_node(node: RawMenuNode, palette: &TrayColorPalette) -> TrayMenuItem {
     let (id, props, raw_children) = node;
     let label = props
         .get("label")
@@ -796,7 +1178,7 @@ fn parse_menu_node(node: RawMenuNode) -> TrayMenuItem {
     let icon_url = if !icon_data.is_empty() {
         format!("data:image/png;base64,{}", BASE64.encode(&icon_data))
     } else if !icon_name.is_empty() {
-        resolve_icon_url(&icon_name, "", Vec::new())
+        resolve_icon_url(&icon_name, "", &[], palette)
     } else {
         String::new()
     };
@@ -808,7 +1190,7 @@ fn parse_menu_node(node: RawMenuNode) -> TrayMenuItem {
     let children = raw_children
         .into_iter()
         .filter_map(|child_val| RawMenuNode::try_from(child_val).ok())
-        .map(parse_menu_node)
+        .map(|child| parse_menu_node(child, palette))
         .filter(|item| item.visible)
         .collect();
 
@@ -832,6 +1214,7 @@ fn fetch_menu_items_blocking(
     bus: &str,
     menu_path: &str,
     call_about_to_show: bool,
+    palette: &TrayColorPalette,
 ) -> Result<Vec<TrayMenuItem>, String> {
     if call_about_to_show {
         let _ = conn.call_method(
@@ -858,7 +1241,7 @@ fn fetch_menu_items_blocking(
         .deserialize()
         .map_err(|err| err.to_string())?;
 
-    Ok(parse_menu_node(root).children)
+    Ok(parse_menu_node(root, palette).children)
 }
 
 async fn fetch_menu_items_async(
@@ -866,6 +1249,7 @@ async fn fetch_menu_items_async(
     bus: &str,
     menu_path: &str,
     call_about_to_show: bool,
+    palette: &TrayColorPalette,
 ) -> Result<Vec<TrayMenuItem>, String> {
     if call_about_to_show {
         let _ = conn
@@ -895,7 +1279,7 @@ async fn fetch_menu_items_async(
         .deserialize()
         .map_err(|err| err.to_string())?;
 
-    Ok(parse_menu_node(root).children)
+    Ok(parse_menu_node(root, palette).children)
 }
 
 fn should_refresh_dbusmenu_signal(msg: &zbus::Message) -> bool {
@@ -921,13 +1305,15 @@ struct MenuWatchEntry {
 pub struct TrayMenuWatcher {
     watched: Arc<Mutex<HashMap<(String, String), MenuWatchEntry>>>,
     send: SendEvent,
+    theme: TrayTheme,
 }
 
 impl TrayMenuWatcher {
-    pub fn new(send: SendEvent) -> Self {
+    pub fn new(send: SendEvent, theme: TrayTheme) -> Self {
         Self {
             watched: Arc::new(Mutex::new(HashMap::new())),
             send,
+            theme,
         }
     }
 
@@ -955,11 +1341,15 @@ impl TrayMenuWatcher {
         };
 
         let send = self.send.clone();
+        let theme = self.theme.clone();
         let Some(cancel_rx) = cancel_rx else {
             // Already watching this menu; still send a fresh snapshot for the new subscriber.
             thread::spawn(move || {
                 if let Ok(conn) = Connection::session() {
-                    if let Ok(items) = fetch_menu_items_blocking(&conn, &bus, &menu_path, true) {
+                    let palette = theme.palette();
+                    if let Ok(items) =
+                        fetch_menu_items_blocking(&conn, &bus, &menu_path, true, &palette)
+                    {
                         send(BridgeEvent::TrayMenu {
                             bus,
                             menu_path,
@@ -989,7 +1379,10 @@ impl TrayMenuWatcher {
                     Err(_) => None,
                 };
 
-                if let Ok(items) = fetch_menu_items_async(&conn, &bus, &menu_path, true).await {
+                let palette = theme.palette();
+                if let Ok(items) =
+                    fetch_menu_items_async(&conn, &bus, &menu_path, true, &palette).await
+                {
                     send(BridgeEvent::TrayMenu {
                         bus: bus.clone(),
                         menu_path: menu_path.clone(),
@@ -1015,8 +1408,9 @@ impl TrayMenuWatcher {
                                 // Drain any additional queued signals before re-fetching to
                                 // coalesce rapid LayoutUpdated bursts.
                                 while let Some(Some(_)) = signals.next().now_or_never() {}
+                                let palette = theme.palette();
                                 if let Ok(items) =
-                                    fetch_menu_items_async(&conn, &bus, &menu_path, false).await
+                                    fetch_menu_items_async(&conn, &bus, &menu_path, false, &palette).await
                                 {
                                     send(BridgeEvent::TrayMenu {
                                         bus: bus.clone(),
@@ -1052,7 +1446,7 @@ impl TrayMenuWatcher {
     }
 }
 
-pub fn get_menu(id: u32, bus: String, menu_path: String, send: SendEvent) {
+pub fn get_menu(id: u32, bus: String, menu_path: String, send: SendEvent, theme: TrayTheme) {
     thread::spawn(move || {
         let send_err = |msg: String| {
             crate::bridge::reply_err(&send, id, msg);
@@ -1063,7 +1457,8 @@ pub fn get_menu(id: u32, bus: String, menu_path: String, send: SendEvent) {
             Err(err) => return send_err(err.to_string()),
         };
 
-        match fetch_menu_items_blocking(&conn, &bus, &menu_path, true) {
+        let palette = theme.palette();
+        match fetch_menu_items_blocking(&conn, &bus, &menu_path, true, &palette) {
             Ok(items) => crate::bridge::reply_data(&send, id, items),
             Err(err) => send_err(err),
         }
@@ -1108,7 +1503,7 @@ mod tests {
         let child_val: OwnedValue = Value::from(child_tuple).try_into().unwrap();
 
         let root_props: HashMap<String, OwnedValue> = HashMap::new();
-        let parsed = parse_menu_node((0, root_props, vec![child_val]));
+        let parsed = parse_menu_node((0, root_props, vec![child_val]), &TrayColorPalette::default());
         assert_eq!(parsed.children.len(), 1);
         assert_eq!(parsed.children[0].id, 65536);
         assert_eq!(parsed.children[0].label, "Turn Bluetooth Off");
@@ -1299,7 +1694,7 @@ mod tests {
     #[test]
     fn menu_watcher_refcounts_and_cancels_on_last_unwatch() {
         let send: SendEvent = Arc::new(|_| {});
-        let watcher = TrayMenuWatcher::new(send);
+        let watcher = TrayMenuWatcher::new(send, TrayTheme::default());
         let key = (
             ":1.7".to_string(),
             "/org/ayatana/NotificationItem/nm_applet/Menu".to_string(),
@@ -1343,7 +1738,7 @@ mod tests {
             OwnedValue::from(zbus::zvariant::Str::from("MyWiFi: 80%, secure.")),
         );
 
-        let item = parse_menu_node((7, props, Vec::new()));
+        let item = parse_menu_node((7, props, Vec::new()), &TrayColorPalette::default());
         assert_eq!(item.label, "MyWiFi");
         assert_eq!(item.icon_name, "network-wireless-symbolic");
         assert_eq!(item.icon_url, "data:image/png;base64,iVBORw==");
@@ -1373,5 +1768,127 @@ mod tests {
                 "/StatusNotifierItem".to_string()
             )
         );
+    }
+
+    #[test]
+    fn recolors_current_color_scheme_svg_for_light_and_dark_themes() {
+        let papirus_svg = br#"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24">
+ <defs>
+  <style id="current-color-scheme" type="text/css">
+   .ColorScheme-Text { color:#dfdfdf; }
+   .ColorScheme-Highlight { color:#4285f4; }
+  </style>
+ </defs>
+ <path d="M4 8l8 11 8-11z" style="fill:currentColor" class="ColorScheme-Text"/>
+</svg>"#;
+
+        let light_palette = TrayColorPalette::from_theme_state(&ThemeState {
+            dark: false,
+            ..ThemeState::default()
+        });
+        let light_out = String::from_utf8(recolor_svg_bytes(papirus_svg, &light_palette)).unwrap();
+        assert!(light_out.contains(".ColorScheme-Text { color: #18181f; }"));
+        assert!(light_out.contains(".ColorScheme-NegativeText { color: #d63638; }"));
+        assert!(!light_out.contains("#dfdfdf"));
+
+        let dark_palette = TrayColorPalette::from_theme_state(&ThemeState {
+            dark: true,
+            ..ThemeState::default()
+        });
+        let dark_out = String::from_utf8(recolor_svg_bytes(papirus_svg, &dark_palette)).unwrap();
+        assert!(dark_out.contains(".ColorScheme-Text { color: #ececf1; }"));
+        assert!(dark_out.contains(".ColorScheme-NegativeText { color: #f2726f; }"));
+    }
+
+    #[test]
+    fn recolors_cdata_style_and_preserves_full_color_and_malformed_svgs() {
+        let cdata_svg = br#"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24">
+ <style type="text/css" id="current-color-scheme"><![CDATA[
+  .ColorScheme-Text { color:#dfdfdf; }
+ ]]></style>
+ <path class="ColorScheme-Text" fill="currentColor" d="M0 0h24v24H0z"/>
+</svg>"#;
+        let palette = TrayColorPalette::from_theme_state(&ThemeState {
+            dark: false,
+            ..ThemeState::default()
+        });
+        let cdata_out = String::from_utf8(recolor_svg_bytes(cdata_svg, &palette)).unwrap();
+        assert!(cdata_out.contains(".ColorScheme-Text { color: #18181f; }"));
+        assert!(!cdata_out.contains("#dfdfdf"));
+
+        let full_color_svg = br##"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24"><circle cx="12" cy="12" r="10" fill="#ff5500"/></svg>"##;
+        assert_eq!(recolor_svg_bytes(full_color_svg, &palette), full_color_svg);
+
+        let malformed_svg = br#"<svg xmlns="http://www.w3.org/2000/svg"><style id="current-color-scheme">.ColorScheme-Text{color:#dfdfdf}"#;
+        assert_eq!(recolor_svg_bytes(malformed_svg, &palette), malformed_svg);
+    }
+
+    #[test]
+    fn sets_root_color_for_current_color_svg_without_color_scheme() {
+        let symbolic_svg = br#"<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16"><path fill="currentColor" d="M2 2h12v12H2z"/></svg>"#;
+        let light_palette = TrayColorPalette::from_theme_state(&ThemeState {
+            dark: false,
+            ..ThemeState::default()
+        });
+        let out = String::from_utf8(recolor_svg_bytes(symbolic_svg, &light_palette)).unwrap();
+        assert!(out.contains(r##"color="#18181f""##));
+    }
+
+    #[test]
+    fn tray_store_refreshes_svg_icons_when_theme_changes() {
+        let dir = std::env::temp_dir().join(format!("webbar-tray-test-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let svg_path = dir.join("test-panel.svg");
+        fs::write(
+            &svg_path,
+            br#"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24"><style id="current-color-scheme">.ColorScheme-Text { color:#dfdfdf; }</style><path class="ColorScheme-Text" fill="currentColor" d="M0 0h24v24H0z"/></svg>"#,
+        )
+        .unwrap();
+
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let events_clone = Arc::clone(&events);
+        let send: SendEvent = Arc::new(move |ev| {
+            events_clone.lock().unwrap().push(ev);
+        });
+
+        let tray_theme = TrayTheme::new(&ThemeState {
+            dark: true,
+            ..ThemeState::default()
+        });
+        let store = TrayStore::with_theme(send, tray_theme.clone());
+        let icon_path_str = svg_path.to_string_lossy().to_string();
+        let initial_url = resolve_icon_url(&icon_path_str, "", &[], &tray_theme.palette());
+        store.upsert(
+            TrayItem {
+                bus: ":1.99".to_string(),
+                path: "/StatusNotifierItem".to_string(),
+                title: "Test".to_string(),
+                icon_name: icon_path_str,
+                icon_url: initial_url.clone(),
+                menu_path: String::new(),
+            },
+            ":1.99".to_string(),
+        );
+
+        assert!(tray_theme.update(&ThemeState {
+            dark: false,
+            ..ThemeState::default()
+        }));
+        store.refresh_icons();
+
+        let captured = events.lock().unwrap();
+        assert_eq!(captured.len(), 2);
+        let updated_url = match &captured[1] {
+            BridgeEvent::Tray { items } => items[0].icon_url.clone(),
+            other => panic!("expected BridgeEvent::Tray, got {other:?}"),
+        };
+        assert_ne!(initial_url, updated_url);
+        let encoded = updated_url
+            .strip_prefix("data:image/svg+xml;base64,")
+            .expect("svg data url");
+        let decoded = String::from_utf8(BASE64.decode(encoded).unwrap()).unwrap();
+        assert!(decoded.contains(".ColorScheme-Text { color: #18181f; }"));
+
+        let _ = fs::remove_dir_all(&dir);
     }
 }

@@ -25,6 +25,7 @@ ts-rs = "10"
 swayipc = "4"
 swayipc-types = "2"
 tungstenite = { version = "0.24", default-features = false, features = ["handshake"] }
+quick-xml = "0.37"
 
 [build-dependencies]
 swayipc-types = "2"
