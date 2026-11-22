@@ -18,9 +18,14 @@ if (!window.webbar) {
   let ws: WebSocket | null = null;
   let delay = 500;
 
+  const INTERACTIVE_SELECTOR = "[data-webbar-interactive]";
+
   const hasOpenPopover = (): boolean => {
     try {
-      return document.querySelector(":popover-open") !== null;
+      return (
+        document.querySelector(":popover-open:not([data-webbar-interactive])") !==
+        null
+      );
     } catch {
       return false;
     }
@@ -59,6 +64,7 @@ if (!window.webbar) {
       popoverRemovalObserver.disconnect();
       popoverRemovalObserver = null;
     }
+    scheduleInteractiveSync();
     notifyOverlayChange();
   };
 
@@ -75,7 +81,7 @@ if (!window.webbar) {
 
   const syncInteractiveRegions = () => {
     interactiveRaf = 0;
-    const nodes = document.querySelectorAll("[data-webbar-interactive]");
+    const nodes = document.querySelectorAll(INTERACTIVE_SELECTOR);
     const currentSet = new Set(nodes);
     if (interactiveResizeObserver) {
       for (const el of observedInteractive) {
@@ -124,7 +130,7 @@ if (!window.webbar) {
       if (
         observedInteractive.size === 0 &&
         lastInteractiveKey === "" &&
-        !document.querySelector("[data-webbar-interactive]")
+        !document.querySelector(INTERACTIVE_SELECTOR)
       ) {
         return;
       }

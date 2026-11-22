@@ -8,7 +8,6 @@ import {
 } from "react";
 import {
   activePopups,
-  isFocusedOutput,
   prefersReducedMotion,
   reconcileToastEntries,
   TOAST_EXIT_FALLBACK_MS,
@@ -21,12 +20,12 @@ export function NotificationToasts({ hidden }: { hidden: boolean }) {
     window.webbar.notifications.subscribe,
     window.webbar.notifications.get,
   );
-  const sway = useSyncExternalStore(
-    window.webbar.sway.subscribe,
-    window.webbar.sway.get,
+  const focused = useSyncExternalStore(
+    window.webbar.focused.subscribe,
+    window.webbar.focused.get,
   );
   const [nowMs, setNowMs] = useState(() => Date.now());
-  const canShow = !hidden && isFocusedOutput(sway, window.webbar.output);
+  const canShow = !hidden && focused;
   const [entries, setEntries] = useState<ToastEntry[]>(() =>
     canShow
       ? activePopups(notifState.items).map((item) => ({ item, exiting: false }))

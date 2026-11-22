@@ -189,26 +189,27 @@
 
   const DEMO_NOTIFICATION_ITEMS = [
     {
-      id: 3,
-      app_name: "Downloads",
-      app_icon_name: "folder-download",
-      app_icon_url: svgIcon(
-        '<path d="M12 3a1 1 0 0 1 1 1v7.59l2.3-2.3a1 1 0 1 1 1.4 1.42l-4 4a1 1 0 0 1-1.4 0l-4-4a1 1 0 0 1 1.4-1.42L11 11.59V4a1 1 0 0 1 1-1zm-7 14h14v2H5v-2z"/>',
-        trayGreen,
-      ),
+      id: 1,
+      app_name: "Signal",
+      app_icon_name: "signal-desktop",
+      app_icon_url: svgIcon('<circle cx="12" cy="12" r="9"/>', trayAccent),
       image_url: "",
-      summary: "nixos-unstable.iso",
-      body: "Downloading 68% (42 MB/s)",
-      urgency: "low",
-      actions: [],
-      timestamp_ms: FIXED_MS - 14 * 60_000,
-      category: "transfer",
-      desktop_entry: "",
-      progress: 68,
+      summary: "Alice",
+      body: "Are we still on for lunch at 12:30?",
+      urgency: "normal",
+      has_default_action: true,
+      actions: [
+        { key: "reply", label: "Reply" },
+        { key: "mark-read", label: "Mark Read" },
+      ],
+      timestamp_ms: FIXED_MS - 45_000,
+      category: "im.received",
+      desktop_entry: "signal-desktop",
+      progress: null,
       transient: false,
       resident: false,
-      popup: false,
-      read: true,
+      popup: showToasts,
+      read: false,
     },
     {
       id: 2,
@@ -222,6 +223,7 @@
       summary: "System Update Ready",
       body: "Rebuild complete — restart to apply kernel 6.12.",
       urgency: "normal",
+      has_default_action: false,
       actions: [{ key: "restart", label: "Restart" }],
       timestamp_ms: FIXED_MS - 3 * 60_000,
       category: "device",
@@ -233,27 +235,27 @@
       read: false,
     },
     {
-      id: 1,
-      app_name: "Signal",
-      app_icon_name: "signal-desktop",
-      app_icon_url: svgIcon('<circle cx="12" cy="12" r="9"/>', trayAccent),
+      id: 3,
+      app_name: "Downloads",
+      app_icon_name: "folder-download",
+      app_icon_url: svgIcon(
+        '<path d="M12 3a1 1 0 0 1 1 1v7.59l2.3-2.3a1 1 0 1 1 1.4 1.42l-4 4a1 1 0 0 1-1.4 0l-4-4a1 1 0 0 1 1.4-1.42L11 11.59V4a1 1 0 0 1 1-1zm-7 14h14v2H5v-2z"/>',
+        trayGreen,
+      ),
       image_url: "",
-      summary: "Alice",
-      body: "Are we still on for lunch at 12:30?",
-      urgency: "normal",
-      actions: [
-        { key: "default", label: "Open" },
-        { key: "reply", label: "Reply" },
-        { key: "mark-read", label: "Mark Read" },
-      ],
-      timestamp_ms: FIXED_MS - 45_000,
-      category: "im.received",
-      desktop_entry: "signal-desktop",
-      progress: null,
+      summary: "nixos-unstable.iso",
+      body: "Downloading 68% (42 MB/s)",
+      urgency: "low",
+      has_default_action: false,
+      actions: [],
+      timestamp_ms: FIXED_MS - 14 * 60_000,
+      category: "transfer",
+      desktop_entry: "",
+      progress: 68,
       transient: false,
       resident: false,
-      popup: showToasts,
-      read: false,
+      popup: false,
+      read: true,
     },
   ];
 
@@ -408,6 +410,18 @@
       notifSubs.add(cb);
       return () => notifSubs.delete(cb);
     };
+    const dismissNotif = (id) =>
+      updateNotifs({
+        ...notifState,
+        items: notifState.items.filter((i) => i.id !== id),
+      });
+    const hideNotifPopup = (id) =>
+      updateNotifs({
+        ...notifState,
+        items: notifState.items.map((i) =>
+          i.id === id ? { ...i, popup: false } : i,
+        ),
+      });
     wb.notifications = {
       get: () => notifState,
       subscribe: subscribeNotifs,
@@ -415,19 +429,25 @@
         cb(notifState);
         return subscribeNotifs(() => cb(notifState));
       },
-      dismiss: (id) =>
-        updateNotifs({
-          ...notifState,
-          items: notifState.items.filter((i) => i.id !== id),
-        }),
-      hidePopup: (id) =>
-        updateNotifs({
-          ...notifState,
-          items: notifState.items.map((i) =>
-            i.id === id ? { ...i, popup: false } : i,
-          ),
-        }),
-      invokeAction: () => {},
+      dismiss: dismissNotif,
+      hidePopup: hideNotifPopup,
+      invokeAction: (id) => {
+        const target = notifState.items.find((i) => i.id === id);
+        if (target && !target.resident) {
+          dismissNotif(id);
+        }
+      },
+      activate: (id) => {
+        const target = notifState.items.find((i) => i.id === id);
+        if (!target) return;
+        if (target.has_default_action) {
+          if (!target.resident) {
+            dismissNotif(id);
+          }
+        } else if (target.popup) {
+          hideNotifPopup(id);
+        }
+      },
       clearAll: () => updateNotifs({ ...notifState, items: [] }),
       setDoNotDisturb: (do_not_disturb) =>
         updateNotifs({ ...notifState, do_not_disturb }),

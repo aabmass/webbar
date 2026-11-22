@@ -123,8 +123,8 @@ function installNotificationMocks(): void {
       summary: "Alice",
       body: "Are we still on for lunch at 12:30?",
       urgency: "normal",
+      has_default_action: true,
       actions: [
-        { key: "default", label: "Open" },
         { key: "reply", label: "Reply" },
         { key: "mark-read", label: "Mark Read" },
       ],
@@ -146,6 +146,7 @@ function installNotificationMocks(): void {
       summary: "Battery Critically Low",
       body: "5% remaining — plug in AC power soon.",
       urgency: "critical",
+      has_default_action: false,
       actions: [],
       timestamp_ms: now - 3 * 60_000,
       category: "device",
@@ -165,6 +166,7 @@ function installNotificationMocks(): void {
       summary: "nixos-unstable.iso",
       body: "Downloading 68% (42 MB/s)",
       urgency: "low",
+      has_default_action: false,
       actions: [],
       timestamp_ms: now - 14 * 60_000,
       category: "transfer",
@@ -200,6 +202,16 @@ function installNotificationMocks(): void {
     };
   };
 
+  const dismiss = (id: number) =>
+    update({ ...state, items: state.items.filter((i) => i.id !== id) });
+  const hidePopup = (id: number) =>
+    update({
+      ...state,
+      items: state.items.map((i) =>
+        i.id === id ? { ...i, popup: false } : i,
+      ),
+    });
+
   window.webbar.notifications = {
     get: () => state,
     subscribe,
@@ -207,17 +219,18 @@ function installNotificationMocks(): void {
       cb(state);
       return subscribe(() => cb(state));
     },
-    dismiss: (id) =>
-      update({ ...state, items: state.items.filter((i) => i.id !== id) }),
-    hidePopup: (id) =>
-      update({
-        ...state,
-        items: state.items.map((i) =>
-          i.id === id ? { ...i, popup: false } : i,
-        ),
-      }),
-    invokeAction: (id) =>
-      update({ ...state, items: state.items.filter((i) => i.id !== id) }),
+    dismiss,
+    hidePopup,
+    invokeAction: (id) => dismiss(id),
+    activate: (id) => {
+      const target = state.items.find((i) => i.id === id);
+      if (!target) return;
+      if (target.has_default_action) {
+        dismiss(id);
+      } else if (target.popup) {
+        hidePopup(id);
+      }
+    },
     clearAll: () => update({ ...state, items: [] }),
     setDoNotDisturb: (do_not_disturb) => update({ ...state, do_not_disturb }),
     markAllRead: () =>

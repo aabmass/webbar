@@ -88,6 +88,26 @@ test.describe(`${TARGET_NAME} notifications integration`, () => {
 
     try {
       await waitForWatcherReady(watcher);
+      await page.addInitScript(() => {
+        window.__webbarSent = [];
+        const origSend = WebSocket.prototype.send;
+        WebSocket.prototype.send = function (data) {
+          if (typeof data === "string") {
+            try {
+              const parsed = JSON.parse(data);
+              if (
+                parsed.type === "set_overlay" ||
+                parsed.type === "set_interactive_regions"
+              ) {
+                window.__webbarSent.push(parsed);
+              }
+            } catch {
+              // ignore non-JSON
+            }
+          }
+          return origSend.call(this, data);
+        };
+      });
       await page.addInitScript({ path: PRELOAD_JS });
       await page.goto(TARGET_URL, { waitUntil: "domcontentloaded" });
 
@@ -115,7 +135,56 @@ test.describe(`${TARGET_NAME} notifications integration`, () => {
         "aria-valuenow",
         "65",
       );
+      await expect(toast.getByRole("button", { name: "Open" })).toBeHidden();
+      await expect(toast.getByRole("button", { name: "Reply" })).toBeVisible();
       await expect(bellBtn.locator(".notif-badge")).toHaveText("1");
+
+      // Verify toast sends interactive rects without triggering modal overlay
+      await expect
+        .poll(() =>
+          page.evaluate(() => {
+            const sent = window.__webbarSent;
+            const overlays = sent.filter((m) => m.type === "set_overlay");
+            const regions = sent.filter(
+              (m) => m.type === "set_interactive_regions",
+            );
+            return {
+              lastOverlay: overlays[overlays.length - 1]?.active ?? null,
+              lastRectsCount: regions[regions.length - 1]?.rects?.length ?? 0,
+            };
+          }),
+        )
+        .toEqual({ lastOverlay: false, lastRectsCount: 1 });
+
+      // Opening a non-modal [popover="manual"][data-webbar-interactive] must NOT trigger set_overlay(true)
+      await page.evaluate(() => {
+        const el = document.createElement("div");
+        el.id = "test-non-modal-popover";
+        el.setAttribute("popover", "manual");
+        el.setAttribute("data-webbar-interactive", "");
+        el.style.cssText =
+          "position:fixed;top:120px;left:20px;width:120px;height:40px;";
+        document.body.appendChild(el);
+        el.showPopover();
+      });
+      await expect
+        .poll(() =>
+          page.evaluate(() => {
+            const sent = window.__webbarSent;
+            const overlays = sent.filter((m) => m.type === "set_overlay");
+            const regions = sent.filter(
+              (m) => m.type === "set_interactive_regions",
+            );
+            return {
+              lastOverlay: overlays[overlays.length - 1]?.active ?? null,
+              lastRectsCount: regions[regions.length - 1]?.rects?.length ?? 0,
+            };
+          }),
+        )
+        .toEqual({ lastOverlay: false, lastRectsCount: 2 });
+      await page.evaluate(() => {
+        document.getElementById("test-non-modal-popover")?.remove();
+      });
 
       // 2. Click action button -> emits ActionInvoked + NotificationClosed(2)
       await toast.getByRole("button", { name: "Reply" }).click();
@@ -131,7 +200,7 @@ test.describe(`${TARGET_NAME} notifications integration`, () => {
           ]),
         );
 
-      // 3. Open Notification Center -> marks read & toggles DND
+      // 3. Open Notification Center -> marks read & toggles DND; clicking body without default hides popup only
       const id2 = sendNotify({
         app_name: "Mail",
         summary: "Inbox",
@@ -140,9 +209,26 @@ test.describe(`${TARGET_NAME} notifications integration`, () => {
       });
       await expect(bellBtn.locator(".notif-badge")).toHaveText("1");
 
+      const mailToast = page.locator(".notif-toast-stack .notif-toast", {
+        hasText: "Inbox",
+      });
+      await expect(mailToast).toBeVisible();
+      await mailToast.locator(".notif-card-body-row").click();
+      await expect(mailToast).toBeHidden();
+
       await bellBtn.click();
       const center = page.locator(".notif-popover");
       await expect(center).toBeVisible();
+      await expect
+        .poll(() =>
+          page.evaluate(() => {
+            const overlays = window.__webbarSent.filter(
+              (m) => m.type === "set_overlay",
+            );
+            return overlays[overlays.length - 1]?.active ?? null;
+          }),
+        )
+        .toBe(true);
       await expect(bellBtn.locator(".notif-badge")).toBeHidden();
       await expect(center).toContainText("Inbox");
 
@@ -151,6 +237,16 @@ test.describe(`${TARGET_NAME} notifications integration`, () => {
       await expect(dndSwitch).toHaveAttribute("aria-checked", "true");
       await page.keyboard.press("Escape");
       await expect(center).toBeHidden();
+      await expect
+        .poll(() =>
+          page.evaluate(() => {
+            const overlays = window.__webbarSent.filter(
+              (m) => m.type === "set_overlay",
+            );
+            return overlays[overlays.length - 1]?.active ?? null;
+          }),
+        )
+        .toBe(false);
 
       // 4. Under DND: normal notification stays out of toasts, critical still pops up
       const id3 = sendNotify({

@@ -1,10 +1,6 @@
 <script lang="ts">
   import type { NotificationItem } from "@webbar/types";
-  import {
-    formatRelativeTime,
-    hasDefaultAction,
-    visibleActions,
-  } from "@webbar/sway-full-bar-shared/notifications";
+  import { formatRelativeTime } from "@webbar/sway-full-bar-shared/notifications";
 
   function updateSheen(
     el: HTMLElement,
@@ -15,10 +11,15 @@
     const rect = el.getBoundingClientRect();
     const rawX = clientX - rect.left;
     const maxX = rect.width * 0.25;
-    const clampedY = Math.round(Math.max(0, Math.min(clientY - rect.top, rect.height)));
+    const clampedY = Math.round(
+      Math.max(0, Math.min(clientY - rect.top, rect.height)),
+    );
 
     if (isEnter) {
-      el.style.setProperty("--toast-x", `${Math.round(Math.max(0, Math.min(rawX, maxX)))}px`);
+      el.style.setProperty(
+        "--toast-x",
+        `${Math.round(Math.max(0, Math.min(rawX, maxX)))}px`,
+      );
       el.style.setProperty("--toast-y", `${clampedY}px`);
       el.dataset.sheenLocked = rawX >= maxX ? "1" : "";
       return;
@@ -44,29 +45,7 @@
     isToast?: boolean;
   } = $props();
 
-  let hovered = false;
-  let hasDefault = $derived(hasDefaultAction(item));
-  let actions = $derived(visibleActions(item));
-  let canClickBody = $derived(isToast || hasDefault);
-
-  $effect(() => {
-    if (!isToast) return;
-    const id = item.id;
-    return () => {
-      if (hovered) {
-        hovered = false;
-        window.webbar.notifications.resumeTimeout(id);
-      }
-    };
-  });
-
-  function onBodyClick() {
-    if (hasDefault) {
-      window.webbar.notifications.invokeAction(item.id, "default");
-    } else if (isToast) {
-      window.webbar.notifications.hidePopup(item.id);
-    }
-  }
+  let canClickBody = $derived(isToast || item.has_default_action);
 </script>
 
 <article
@@ -76,7 +55,6 @@
   data-webbar-interactive={isToast ? "" : undefined}
   onpointerenter={isToast
     ? (e) => {
-        hovered = true;
         window.webbar.notifications.pauseTimeout(item.id);
         updateSheen(e.currentTarget, e.clientX, e.clientY, true);
       }
@@ -88,7 +66,6 @@
     : undefined}
   onpointerleave={isToast
     ? (e) => {
-        hovered = false;
         window.webbar.notifications.resumeTimeout(item.id);
         delete e.currentTarget.dataset.sheenLocked;
       }
@@ -129,7 +106,9 @@
   <div
     class="notif-card-body-row"
     class:is-clickable={canClickBody}
-    onclick={canClickBody ? onBodyClick : undefined}
+    onclick={canClickBody
+      ? () => window.webbar.notifications.activate(item.id)
+      : undefined}
   >
     {#if item.image_url}
       <img
@@ -161,9 +140,9 @@
     </div>
   {/if}
 
-  {#if actions.length > 0}
+  {#if item.actions.length > 0}
     <div class="notif-actions">
-      {#each actions as action (action.key)}
+      {#each item.actions as action (action.key)}
         <button
           type="button"
           class="notif-action-btn"

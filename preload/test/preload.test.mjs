@@ -154,6 +154,7 @@ test("all window.webbar stores follow snapshot + subscribe + onChange contract",
             summary: "Hi",
             body: "World",
             urgency: "normal",
+            has_default_action: false,
             actions: [],
             timestamp_ms: 1700000000000,
             category: "",
@@ -1200,18 +1201,70 @@ test("notification actions, onHostAction, and setInteractiveRegions reconnect re
   }, "DP-1");
 
   api.notifications.hidePopup(3);
+  api.notifications.activate(3);
   api.notifications.setDoNotDisturb(true);
   api.notifications.markAllRead();
   api.notifications.pauseTimeout(3);
   api.notifications.resumeTimeout(3);
 
-  assert.deepEqual(sent.slice(0, 5), [
+  assert.deepEqual(sent.slice(0, 6), [
     { type: "hide_notification_popup", id: 3 },
+    { type: "activate_notification", id: 3 },
     { type: "set_notifications_do_not_disturb", enabled: true },
     { type: "mark_notifications_read" },
     { type: "pause_notification_timeout", id: 3 },
     { type: "resume_notification_timeout", id: 3 },
   ]);
+
+  assert.equal("setInputRegion" in api, false);
+  assert.equal("resetInputRegion" in api, false);
+
+  // window.webbar.focused tracks Sway focused workspace output against output
+  const focusEvents = [];
+  const unsubFocus = api.focused.subscribe(() => {
+    focusEvents.push(api.focused.get());
+  });
+  assert.equal(api.focused.get(), true);
+  receive({
+    type: "sway_state",
+    available: true,
+    tree: null,
+    workspaces: [{ name: "1", output: "HDMI-A-1", focused: true }],
+    mode: "default",
+  });
+  assert.equal(api.focused.get(), false);
+  receive({
+    type: "sway_state",
+    available: true,
+    tree: null,
+    workspaces: [{ name: "2", output: "DP-1", focused: true }],
+    mode: "default",
+  });
+  assert.equal(api.focused.get(), true);
+  receive({
+    type: "sway_state",
+    available: true,
+    tree: null,
+    workspaces: [],
+    mode: "default",
+  });
+  assert.equal(api.focused.get(), true);
+  assert.deepEqual(focusEvents, [false, true]);
+  unsubFocus();
+
+  // Empty output (e.g. external browser dev) stays focused even when another output is active
+  const { api: browserApi, receive: browserReceive } = createWebbarBridge(
+    () => {},
+    "",
+  );
+  browserReceive({
+    type: "sway_state",
+    available: true,
+    tree: null,
+    workspaces: [{ name: "1", output: "HDMI-A-1", focused: true }],
+    mode: "default",
+  });
+  assert.equal(browserApi.focused.get(), true);
 
   const actions = [];
   const unsub = api.onHostAction((action) => actions.push(action));

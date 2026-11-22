@@ -1,15 +1,4 @@
-import type {
-  NotificationAction,
-  NotificationItem,
-  NotificationsState,
-  SwayState,
-} from "@webbar/types";
-
-export function isFocusedOutput(sway: SwayState, output: string): boolean {
-  if (!output) return true;
-  const focusedOutput = sway.workspaces.find((ws) => ws.focused)?.output;
-  return !focusedOutput || focusedOutput === output;
-}
+import type { NotificationItem, NotificationsState } from "@webbar/types";
 
 export function formatRelativeTime(timestampMs: number, nowMs: number): string {
   const diffSec = Math.max(0, Math.floor((nowMs - timestampMs) / 1000));
@@ -66,25 +55,7 @@ export function activePopups(
   items: NotificationItem[],
   limit = 4,
 ): NotificationItem[] {
-  const popups: NotificationItem[] = [];
-  for (let i = items.length - 1; i >= 0 && popups.length < limit; i--) {
-    if (items[i].popup) {
-      popups.push(items[i]);
-    }
-  }
-  return popups;
-}
-
-export function historyItems(items: NotificationItem[]): NotificationItem[] {
-  return [...items].reverse();
-}
-
-export function hasDefaultAction(item: NotificationItem): boolean {
-  return item.actions.some((a) => a.key === "default");
-}
-
-export function visibleActions(item: NotificationItem): NotificationAction[] {
-  return item.actions.filter((a) => a.key !== "default");
+  return items.filter((item) => item.popup).slice(0, limit);
 }
 
 export function notificationButtonTitle(state: NotificationsState): string {

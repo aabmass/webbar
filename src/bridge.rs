@@ -121,6 +121,9 @@ pub enum BridgeRequest {
         id: u32,
         action_key: String,
     },
+    ActivateNotification {
+        id: u32,
+    },
     ClearNotifications,
     SetNotificationsDoNotDisturb {
         enabled: bool,
@@ -180,9 +183,6 @@ pub enum BridgeRequest {
         percent: f64,
         #[serde(default)]
         display_id: Option<String>,
-    },
-    SetInputRegion {
-        rects: Vec<InputRect>,
     },
     SetInteractiveRegions {
         rects: Vec<InputRect>,

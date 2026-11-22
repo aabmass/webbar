@@ -2,7 +2,7 @@
 
 `webbar` includes a built-in [`org.freedesktop.Notifications`](https://specifications.freedesktop.org/notification-spec/latest/) (v1.2) daemon in Rust and exposes reactive notification state on `window.webbar.notifications`.
 
-Because `webbar` manages expiry timers, Do Not Disturb suppression, `replaces_id`, synchronous tag replacement (`synchronous` / `x-canonical-private-synchronous`), transient/resident rules, markup stripping, icon resolution, and the 50-item history cap on the host, your bar UI only needs minimal view-local state.
+Because `webbar` manages expiry timers (including auto-resuming paused hover timers), Do Not Disturb suppression, `replaces_id`, synchronous tag replacement (`synchronous` / `x-canonical-private-synchronous`), transient/resident rules, markup stripping, icon resolution, newest-first ordering, and the 50-item history cap on the host, your bar UI only needs minimal view-local state.
 
 ---
 
@@ -15,20 +15,21 @@ type NotificationsState = {
   available: boolean;      // false if another daemon owns org.freedesktop.Notifications or --no-notifications is set
   do_not_disturb: boolean;
   unread_count: number;
-  items: NotificationItem[];
+  items: NotificationItem[]; // newest-first
 };
 ```
 
 Each `NotificationItem` provides:
 
 - **Identity & metadata:** `id`, `app_name`, `desktop_entry`, `category`, `timestamp_ms`, `urgency` (`"low" | "normal" | "critical"`)
-- **Content & icons:** `summary`, `body` (markup stripped), `app_icon_url`, `app_icon_name`, `image_url`, `progress` (`number | null`, `0..=100`), `actions` (`{ key, label }[]`)
+- **Content & icons:** `summary`, `body` (markup stripped), `app_icon_url`, `app_icon_name`, `image_url`, `progress` (`number | null`, `0..=100`), `has_default_action`, `actions` (`{ key, label }[]`, excluding `"default"` so every entry maps 1:1 to a button)
 - **Lifecycle flags:** `popup` (currently showing as a toast), `read`, `transient`, `resident`
 
 ### Methods on `window.webbar.notifications`
 
 | Method | Description |
 |---|---|
+| `activate(id)` | Invoke the `"default"` action if `has_default_action` is true, or hide the floating popup if `popup` is true |
 | `dismiss(id)` | Remove from history & popups and emit `NotificationClosed` (reason `2`: dismissed by user) |
 | `hidePopup(id)` | Hide the floating toast while keeping persistent items in history (transient items are removed) |
 | `invokeAction(id, actionKey)` | Emit `ActionInvoked(id, actionKey)` over D-Bus; dismisses unless `resident: true` |
@@ -36,65 +37,40 @@ Each `NotificationItem` provides:
 | `setDoNotDisturb(enabled)` | Enable or disable Do Not Disturb (`critical` notifications still pop up) |
 | `markAllRead()` | Mark all current items as read (`unread_count` becomes `0`) |
 | `pauseTimeout(id)` | Pause a toast's auto-expire timer (e.g. on pointer hover) |
-| `resumeTimeout(id)` | Resume a toast's auto-expire timer |
+| `resumeTimeout(id)` | Resume a toast's auto-expire timer (auto-resumed on overlay open, focus change, or disconnect) |
 
 ---
 
 ## Notification Center (`[popover]`) vs. Floating Toasts (`[data-webbar-interactive]`)
 
-`webbar` renders your bar into a transparent full-screen `gtk4-layer-shell` overlay with `exclusive_zone` set to `--height`. How Wayland input regions behave depends on whether a notification UI is a **center popover** or a **floating toast**:
+`webbar` renders your bar into a transparent full-screen `gtk4-layer-shell` overlay with `exclusive_zone` set to `--height`. Wayland input regions work in two clean modes:
 
 | Surface | HTML / Attribute | Wayland Input Region | Keyboard Focus | Items to Render |
 |---|---|---|---|---|
-| **Notification Center** | Standard `[popover]` | Expands to the full overlay while open | `KeyboardMode::Exclusive` (`Escape` and click-outside light-dismiss) | `[...state.items].reverse()` |
+| **Notification Center** | Standard `[popover]` | Expands to the full overlay while open | `KeyboardMode::Exclusive` (`Escape` and click-outside light-dismiss) | `state.items` |
 | **Floating Toasts** | `data-webbar-interactive` on each toast | Unions toast bounding rects with the bar strip | `KeyboardMode::None` (clickable & hoverable without stealing Sway focus) | `state.items.filter((i) => i.popup)` |
 
 > [!IMPORTANT]
-> Do **not** wrap floating toasts in `[popover]`, or they will grab keyboard focus and light-dismiss when you click another window. Put `data-webbar-interactive` on each clickable toast card instead—`webbar`'s preload automatically tracks them with `MutationObserver` and `ResizeObserver`.
+> Any open `[popover]` without `data-webbar-interactive` on **that `[popover]` element itself** triggers full-screen modal input capture (`KeyboardMode::Exclusive`), stealing keyboard focus and blocking clicks to underlying windows. Put `data-webbar-interactive` on each clickable toast card (and if you use `popover="manual"` for top-layer toast stacking, place both `popover="manual"` and `data-webbar-interactive` on each toast card, not a wrapper)—`webbar`'s preload automatically tracks their rects with `MutationObserver` and `ResizeObserver`.
 
 ### Floating Toast Stack Example (React)
 
 ```tsx
-import { useEffect, useRef, useSyncExternalStore } from "react";
+import { useSyncExternalStore } from "react";
 import type { NotificationItem } from "@webbar/types";
 
 function ToastCard({ item }: { item: NotificationItem }) {
-  const hoveredRef = useRef(false);
-  const hasDefault = item.actions.some((a) => a.key === "default");
-  const buttons = item.actions.filter((a) => a.key !== "default");
-
-  // If the toast unmounts while hovered (e.g. hidden when the center opens),
-  // resume its timeout so the timer is not left paused.
-  useEffect(() => {
-    return () => {
-      if (hoveredRef.current) {
-        hoveredRef.current = false;
-        window.webbar.notifications.resumeTimeout(item.id);
-      }
-    };
-  }, [item.id]);
-
   return (
     <article
       className="notif-toast"
       data-webbar-interactive=""
-      onPointerEnter={() => {
-        hoveredRef.current = true;
-        window.webbar.notifications.pauseTimeout(item.id);
-      }}
-      onPointerLeave={() => {
-        hoveredRef.current = false;
-        window.webbar.notifications.resumeTimeout(item.id);
-      }}
-      onClick={() =>
-        hasDefault
-          ? window.webbar.notifications.invokeAction(item.id, "default")
-          : window.webbar.notifications.hidePopup(item.id)
-      }
+      onPointerEnter={() => window.webbar.notifications.pauseTimeout(item.id)}
+      onPointerLeave={() => window.webbar.notifications.resumeTimeout(item.id)}
+      onClick={() => window.webbar.notifications.activate(item.id)}
     >
       <div className="notif-summary">{item.summary}</div>
       {item.body && <div className="notif-body">{item.body}</div>}
-      {buttons.map((a) => (
+      {item.actions.map((a) => (
         <button
           key={a.key}
           type="button"
@@ -115,8 +91,12 @@ export function NotificationToasts({ centerOpen }: { centerOpen: boolean }) {
     window.webbar.notifications.subscribe,
     window.webbar.notifications.get,
   );
+  const focused = useSyncExternalStore(
+    window.webbar.focused.subscribe,
+    window.webbar.focused.get,
+  );
   const popups = notifState.items.filter((i) => i.popup);
-  if (centerOpen || popups.length === 0) return null;
+  if (centerOpen || !focused || popups.length === 0) return null;
 
   return (
     <div className="notif-toast-stack">
@@ -154,20 +134,14 @@ See [examples/sway-full-bar](examples/sway-full-bar/src/components/Notifications
 
 ## Multi-Monitor Setups
 
-`webbar` runs one WebView per monitor, each sharing the same `notifications` store. To avoid showing duplicate toasts or opening the notification center on every monitor at once, check whether `window.webbar.output` matches the focused Sway output:
+`webbar` runs one WebView per monitor, each sharing the same `notifications` store:
 
-```ts
-export function isFocusedOutput(): boolean {
-  const output = window.webbar.output;
-  if (!output) return true;
-  const focused = window.webbar.sway.get().workspaces.find((ws) => ws.focused)?.output;
-  return !focused || focused === output;
-}
-```
+- **Toasts:** Subscribe to `window.webbar.focused` (`Store<boolean>`) so floating popups only appear on the currently focused monitor.
+- **Toggle Center action:** `notifications-toggle-center` is automatically routed by the Rust host to the focused Sway monitor's WebView (falling back to broadcast when single-monitor or Sway is unavailable).
 
 ---
 
 ## Remote Control & Daemon Ownership
 
 - **Keybindings & remote control:** `webbar` exposes `notifications-toggle-center`, `notifications-toggle-do-not-disturb`, `notifications-dismiss-latest`, and `notifications-clear-all` over session D-Bus (`gapplication action dev.local.webbar <action>`). See [README.md#remote-control-d-bus--gapplication](README.md#remote-control-d-bus--gapplication) for the full action table and Sway `bindsym` examples.
-- **Single-daemon ownership:** Only one daemon can own `org.freedesktop.Notifications` on your session D-Bus at a time. If another daemon (`mako`, `swaync`, `waybar`) is already running, `webbar` logs a warning and sets `available: false` in `window.webbar.notifications`. Pass `--no-notifications` if you want `webbar` to leave `org.freedesktop.Notifications` unclaimed for another daemon.
+- **Single-daemon ownership:** Only one daemon can own `org.freedesktop.Notifications` on your session D-Bus at a time. If another daemon (`mako`, `swaync`, `dunst`) is already running, `webbar` logs a warning and sets `available: false` in `window.webbar.notifications`. Pass `--no-notifications` if you want `webbar` to leave `org.freedesktop.Notifications` unclaimed for another daemon.

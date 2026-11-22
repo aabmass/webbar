@@ -19,7 +19,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 use std::rc::Rc;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use gtk4::cairo;
 use gtk4::gdk::{self, Monitor, RGBA};
@@ -181,9 +181,14 @@ struct HostServices {
     sway: sway_ipc::SwayCommands,
     tray_menus: tray::TrayMenuWatcher,
     icon_palette: icons::SharedIconPalette,
+    focused_output: Arc<Mutex<Option<String>>>,
 }
 
 impl HostServices {
+    fn focused_output(&self) -> Option<String> {
+        self.focused_output.lock().unwrap().clone()
+    }
+
     fn start(
         send_event: SendEvent,
         claim_dbus_servers: bool,
@@ -221,7 +226,32 @@ impl HostServices {
         } else {
             notifications.set_available(false);
         }
-        sway_ipc::spawn(send_event.clone());
+        let focused_output = Arc::new(Mutex::new(None::<String>));
+        let sway_send: SendEvent = Arc::new({
+            let send_event = send_event.clone();
+            let focused_output = Arc::clone(&focused_output);
+            let notifications = notifications.clone();
+            move |ev| {
+                if let BridgeEvent::SwayState(ref state) = ev {
+                    let next = state
+                        .workspaces
+                        .iter()
+                        .find(|ws| ws.focused)
+                        .map(|ws| ws.output.clone());
+                    let changed_from_existing = {
+                        let mut guard = focused_output.lock().unwrap();
+                        let changed = guard.is_some() && *guard != next;
+                        *guard = next;
+                        changed
+                    };
+                    if changed_from_existing {
+                        notifications.resume_all_paused();
+                    }
+                }
+                send_event(ev);
+            }
+        });
+        sway_ipc::spawn(sway_send);
         let audio = audio::spawn(send_event.clone());
         let bluetooth = bluetooth::spawn(send_event.clone());
         network::spawn(send_event.clone());
@@ -236,6 +266,7 @@ impl HostServices {
                 sway: sway_ipc::SwayCommands::spawn(),
                 tray_menus,
                 icon_palette,
+                focused_output,
             }),
             initial_theme,
         )
@@ -286,6 +317,9 @@ impl HostServices {
             }
             BridgeRequest::InvokeNotificationAction { id, action_key } => {
                 self.notifications.invoke_action(id, &action_key);
+            }
+            BridgeRequest::ActivateNotification { id } => {
+                self.notifications.activate(id);
             }
             BridgeRequest::ClearNotifications => {
                 self.notifications.clear_all();
@@ -389,13 +423,13 @@ impl HostServices {
             } => {
                 tray::menu_event(bus, menu_path, item_id);
             }
-            BridgeRequest::SetInputRegion { rects } => {
-                update_window_input_state(output, |s| s.set_custom_rects(rects));
-            }
             BridgeRequest::SetInteractiveRegions { rects } => {
                 update_window_input_state(output, |s| s.set_interactive_rects(rects));
             }
             BridgeRequest::SetOverlay { active } => {
+                if active {
+                    self.notifications.resume_all_paused();
+                }
                 update_window_input_state(output, move |s| s.set_overlay(active));
             }
         }
@@ -423,7 +457,13 @@ where
 fn start_ws_bridge(
     config: &Config,
     claim_dbus_servers: bool,
-) -> (u16, String, theme::ThemeState, Arc<HostServices>, SendEvent) {
+) -> (
+    u16,
+    String,
+    theme::ThemeState,
+    Arc<HostServices>,
+    ws_bridge::WsBroadcaster,
+) {
     let snapshots = SnapshotCache::new();
     let broadcaster = ws_bridge::WsBroadcaster::new();
     let send_event: SendEvent = {
@@ -439,7 +479,7 @@ fn start_ws_bridge(
     };
 
     let (services, initial_theme) = HostServices::start(
-        send_event.clone(),
+        send_event,
         claim_dbus_servers,
         (claim_dbus_servers && config.notifications) || config.ws_claim_notifications,
     );
@@ -449,14 +489,18 @@ fn start_ws_bridge(
         .clone()
         .unwrap_or_else(ws_bridge::generate_token);
     let dispatch_services = Arc::clone(&services);
+    let disconnect_services = Arc::clone(&services);
     let bound_port = match ws_bridge::spawn(
         requested_port,
         config.ws_bridge.is_some(),
         token.clone(),
-        broadcaster,
+        broadcaster.clone(),
         snapshots,
         move |output, req, client_dbus, client_procs, client_send| {
             dispatch_services.dispatch(output, req, client_dbus, client_procs, client_send);
+        },
+        move || {
+            disconnect_services.notifications.resume_all_paused();
         },
     ) {
         Ok(port) => port,
@@ -465,7 +509,7 @@ fn start_ws_bridge(
             std::process::exit(1);
         }
     };
-    (bound_port, token, initial_theme, services, send_event)
+    (bound_port, token, initial_theme, services, broadcaster)
 }
 
 fn main() {
@@ -499,7 +543,7 @@ fn activate(app: &Application, config: &Config) {
         register_webbar_scheme(dir.clone());
     }
 
-    let (ws_port, ws_token, initial_theme, services, send_event) = start_ws_bridge(config, true);
+    let (ws_port, ws_token, initial_theme, services, broadcaster) = start_ws_bridge(config, true);
 
     let Some(display) = gdk::Display::default() else {
         eprintln!("webbar: no GDK display available");
@@ -578,11 +622,17 @@ fn activate(app: &Application, config: &Config) {
     app.add_action(&devtools_action);
 
     let toggle_center_action = gio::SimpleAction::new("notifications-toggle-center", None);
-    toggle_center_action.connect_activate(move |_, _| {
-        send_event(BridgeEvent::HostAction {
-            action: "notifications_toggle_center".to_string(),
+    {
+        let services = Arc::clone(&services);
+        toggle_center_action.connect_activate(move |_, _| {
+            let ev = BridgeEvent::HostAction {
+                action: "notifications_toggle_center".to_string(),
+            };
+            if let Ok(json) = serde_json::to_string(&ev) {
+                broadcaster.send_to_output_or_all(services.focused_output().as_deref(), &json);
+            }
         });
-    });
+    }
     app.add_action(&toggle_center_action);
 
     let toggle_do_not_disturb_action =
@@ -760,7 +810,6 @@ struct WindowInputState {
     overlay_height: i32,
     overlay_active: bool,
     interactive_rects: Vec<(i32, i32, i32, i32)>,
-    custom_rects: Option<Vec<(i32, i32, i32, i32)>>,
 }
 
 impl WindowInputState {
@@ -781,7 +830,6 @@ impl WindowInputState {
             overlay_height,
             overlay_active: false,
             interactive_rects: Vec::new(),
-            custom_rects: None,
         }
     }
 
@@ -802,26 +850,14 @@ impl WindowInputState {
         self.interactive_rects = sanitize_rects(rects);
     }
 
-    fn set_custom_rects(&mut self, rects: Vec<crate::bridge::InputRect>) {
-        let filtered = sanitize_rects(rects);
-        self.custom_rects = if filtered.is_empty() {
-            None
-        } else {
-            Some(filtered)
-        };
-    }
-
     fn reset(&mut self) {
         self.overlay_active = false;
         self.interactive_rects.clear();
-        self.custom_rects = None;
     }
 
     fn keyboard_mode(&self) -> KeyboardMode {
         if self.overlay_active {
             KeyboardMode::Exclusive
-        } else if self.custom_rects.is_some() {
-            KeyboardMode::OnDemand
         } else {
             KeyboardMode::None
         }
@@ -830,11 +866,6 @@ impl WindowInputState {
     fn rect_tuples(&self) -> Vec<(i32, i32, i32, i32)> {
         if self.overlay_active {
             vec![(0, 0, self.monitor_width, self.overlay_height)]
-        } else if let Some(custom) = &self.custom_rects {
-            let mut rects = Vec::with_capacity(custom.len() + self.interactive_rects.len());
-            rects.extend_from_slice(custom);
-            rects.extend_from_slice(&self.interactive_rects);
-            rects
         } else {
             let mut rects = Vec::with_capacity(1 + self.interactive_rects.len());
             rects.push((0, 0, self.monitor_width, self.bar_height));
@@ -1127,19 +1158,14 @@ mod tests {
         assert_eq!(state.keyboard_mode(), KeyboardMode::None);
         assert_eq!(state.rect_tuples(), vec![(0, 0, 2560, 86)]);
 
-        // Custom rects round floats, filter invalid dimensions, and fall back to BarOnly when empty
-        state.set_custom_rects(vec![
+        // Interactive rects round floats, filter invalid dimensions, compose with
+        // the bar strip, and survive opening/closing an overlay without stealing focus.
+        state.set_interactive_rects(vec![
             crate::bridge::InputRect {
-                x: 0.0,
-                y: 0.0,
-                width: 2560.0,
-                height: 86.0,
-            },
-            crate::bridge::InputRect {
-                x: 100.4,
-                y: 93.6,
-                width: 260.2,
-                height: 179.8,
+                x: 2200.4,
+                y: 95.6,
+                width: 340.2,
+                height: 87.8,
             },
             crate::bridge::InputRect {
                 x: 10.0,
@@ -1148,24 +1174,6 @@ mod tests {
                 height: 50.0,
             },
         ]);
-        assert_eq!(state.keyboard_mode(), KeyboardMode::OnDemand);
-        assert_eq!(
-            state.rect_tuples(),
-            vec![(0, 0, 2560, 86), (100, 94, 260, 180)]
-        );
-
-        state.set_custom_rects(Vec::new());
-        assert_eq!(state.keyboard_mode(), KeyboardMode::None);
-        assert_eq!(state.rect_tuples(), vec![(0, 0, 2560, 86)]);
-
-        // Interactive rects (e.g. notification toasts) compose with BarOnly and
-        // survive opening/closing an overlay without stealing keyboard focus.
-        state.set_interactive_rects(vec![crate::bridge::InputRect {
-            x: 2200.0,
-            y: 96.0,
-            width: 340.0,
-            height: 88.0,
-        }]);
         assert_eq!(state.keyboard_mode(), KeyboardMode::None);
         assert_eq!(
             state.rect_tuples(),

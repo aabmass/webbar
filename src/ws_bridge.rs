@@ -26,9 +26,14 @@ const CLIENT_CHANNEL_CAPACITY: usize = 256;
 type RequestHandler =
     dyn Fn(Option<&str>, BridgeRequest, &DbusBridge, &ProcessBridge, &SendEvent) + Send + Sync;
 
+struct WsClient {
+    output: Option<String>,
+    tx: mpsc::Sender<String>,
+}
+
 #[derive(Clone, Default)]
 pub struct WsBroadcaster {
-    clients: Arc<Mutex<Vec<mpsc::Sender<String>>>>,
+    clients: Arc<Mutex<Vec<WsClient>>>,
 }
 
 impl WsBroadcaster {
@@ -40,14 +45,32 @@ impl WsBroadcaster {
         self.clients
             .lock()
             .unwrap()
-            .retain_mut(|tx| match tx.try_send(json.to_string()) {
+            .retain_mut(|client| match client.tx.try_send(json.to_string()) {
                 Ok(()) => true,
                 Err(err) => !err.is_disconnected(),
             });
     }
 
-    fn push(&self, tx: mpsc::Sender<String>) {
-        self.clients.lock().unwrap().push(tx);
+    pub fn send_to_output_or_all(&self, target_output: Option<&str>, json: &str) {
+        let mut guard = self.clients.lock().unwrap();
+        let has_target = target_output.is_some_and(|target| {
+            guard
+                .iter()
+                .any(|c| c.output.as_deref() == Some(target) && !c.tx.is_closed())
+        });
+        guard.retain_mut(|client| {
+            if has_target && client.output.as_deref() != target_output {
+                return !client.tx.is_closed();
+            }
+            match client.tx.try_send(json.to_string()) {
+                Ok(()) => true,
+                Err(err) => !err.is_disconnected(),
+            }
+        });
+    }
+
+    fn push(&self, output: Option<String>, tx: mpsc::Sender<String>) {
+        self.clients.lock().unwrap().push(WsClient { output, tx });
     }
 }
 
@@ -65,19 +88,21 @@ pub fn generate_token() -> String {
     format!("{nanos:032x}")
 }
 
-pub fn spawn<F>(
+pub fn spawn<F, D>(
     port: u16,
     log_listening: bool,
     token: String,
     broadcaster: WsBroadcaster,
     snapshots: SnapshotCache,
     on_request: F,
+    on_disconnect: D,
 ) -> std::io::Result<u16>
 where
     F: Fn(Option<&str>, BridgeRequest, &DbusBridge, &ProcessBridge, &SendEvent)
         + Send
         + Sync
         + 'static,
+    D: Fn() + Send + Sync + 'static,
 {
     let listener = TcpListener::bind(("127.0.0.1", port))?;
     let bound_port = listener.local_addr()?.port();
@@ -86,15 +111,24 @@ where
     }
 
     let on_request = Arc::new(on_request);
+    let on_disconnect = Arc::new(on_disconnect);
     let token = Arc::new(token);
     thread::spawn(move || {
         for stream in listener.incoming().flatten() {
             let broadcaster = broadcaster.clone();
             let snapshots = snapshots.clone();
             let on_request = on_request.clone();
+            let on_disconnect = on_disconnect.clone();
             let token = token.clone();
             thread::spawn(move || {
-                handle_client(stream, &token, broadcaster, snapshots, &*on_request);
+                handle_client(
+                    stream,
+                    &token,
+                    broadcaster,
+                    snapshots,
+                    &*on_request,
+                    &*on_disconnect,
+                );
             });
         }
     });
@@ -108,6 +142,7 @@ fn handle_client(
     broadcaster: WsBroadcaster,
     snapshots: SnapshotCache,
     on_request: &RequestHandler,
+    on_disconnect: &(dyn Fn() + Send + Sync),
 ) {
     let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
     let _ = stream.set_write_timeout(Some(Duration::from_secs(5)));
@@ -150,7 +185,7 @@ fn handle_client(
     for state in snapshots.snapshot_all() {
         client_send(state);
     }
-    broadcaster.push(tx);
+    broadcaster.push(client_output.clone(), tx);
 
     let client_dbus = DbusBridge::new(client_send.clone());
     let client_procs = ProcessBridge::new(client_send.clone());
@@ -210,6 +245,7 @@ fn handle_client(
             }
         }
     });
+    on_disconnect();
 }
 
 async fn flush_ws(ws: &mut WebSocket<TcpStream>, watcher: &Async<TcpStream>) -> bool {
@@ -361,6 +397,7 @@ mod tests {
         });
 
         let broadcaster = WsBroadcaster::new();
+        let (disconnect_tx, disconnect_rx) = std::sync::mpsc::channel::<()>();
         let port = spawn(
             0,
             false,
@@ -382,6 +419,9 @@ mod tests {
                     }
                     other => panic!("unexpected request: {other:?}"),
                 }
+            },
+            move || {
+                let _ = disconnect_tx.send(());
             },
         )
         .expect("spawn ws_bridge");
@@ -436,5 +476,37 @@ mod tests {
         assert_eq!(broadcast["items"], serde_json::json!([]));
 
         let _ = ws.close(None);
+        disconnect_rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("on_disconnect fired");
+    }
+
+    #[test]
+    fn send_to_output_or_all_targets_matching_client_with_broadcast_fallback() {
+        let broadcaster = WsBroadcaster::new();
+        let (tx_dp1, mut rx_dp1) = mpsc::channel(8);
+        let (tx_hdmi, mut rx_hdmi) = mpsc::channel(8);
+        broadcaster.push(Some("DP-1".to_string()), tx_dp1);
+        broadcaster.push(Some("HDMI-A-1".to_string()), tx_hdmi);
+
+        // Matching output receives targeted message only
+        broadcaster.send_to_output_or_all(Some("DP-1"), r#"{"target":"dp1"}"#);
+        assert_eq!(rx_dp1.try_recv().unwrap(), r#"{"target":"dp1"}"#);
+        assert!(rx_hdmi.try_recv().is_err());
+
+        // Unknown / missing output falls back to broadcast
+        broadcaster.send_to_output_or_all(Some("eDP-1"), r#"{"target":"fallback"}"#);
+        assert_eq!(rx_dp1.try_recv().unwrap(), r#"{"target":"fallback"}"#);
+        assert_eq!(rx_hdmi.try_recv().unwrap(), r#"{"target":"fallback"}"#);
+
+        // None target broadcasts to all
+        broadcaster.send_to_output_or_all(None, r#"{"target":"all"}"#);
+        assert_eq!(rx_dp1.try_recv().unwrap(), r#"{"target":"all"}"#);
+        assert_eq!(rx_hdmi.try_recv().unwrap(), r#"{"target":"all"}"#);
+
+        // Disconnected target client falls back to remaining connected clients
+        drop(rx_dp1);
+        broadcaster.send_to_output_or_all(Some("DP-1"), r#"{"target":"after_drop"}"#);
+        assert_eq!(rx_hdmi.try_recv().unwrap(), r#"{"target":"after_drop"}"#);
     }
 }

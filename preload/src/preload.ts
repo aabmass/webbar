@@ -117,6 +117,7 @@ export type ExecStreamHandle = {
 
 export type WebbarApi = {
   readonly output: string;
+  focused: Store<boolean>;
   sway: Store<SwayState> & {
     command: (cmd: string) => Promise<void>;
   };
@@ -130,6 +131,7 @@ export type WebbarApi = {
     dismiss: (id: number) => void;
     hidePopup: (id: number) => void;
     invokeAction: (id: number, actionKey: string) => void;
+    activate: (id: number) => void;
     clearAll: () => void;
     setDoNotDisturb: (enabled: boolean) => void;
     markAllRead: () => void;
@@ -162,8 +164,6 @@ export type WebbarApi = {
   };
   theme: Store<ThemeState>;
   acquireOverlay: () => () => void;
-  setInputRegion: (rects: InputRect[]) => void;
-  resetInputRegion: () => void;
   setInteractiveRegions: (rects: InputRect[]) => void;
   onHostAction: (listener: (action: string) => void) => () => void;
   dbus: {
@@ -499,6 +499,7 @@ export function createWebbarBridge(
   }
 
   const stores = {
+    focused: createStore<boolean>(true),
     sway: createStore<SwayState>({
       available: false,
       tree: null,
@@ -621,13 +622,19 @@ export function createWebbarBridge(
   }
 
   const stateHandlers: Record<string, (event: Record<string, unknown>) => void> = {
-    sway_state: (e) =>
+    sway_state: (e) => {
+      const workspaces = (e.workspaces as SwayWorkspace[]) ?? [];
       stores.sway._update({
         available: Boolean(e.available),
         tree: (e.tree as SwayNode | null) ?? null,
-        workspaces: (e.workspaces as SwayWorkspace[]) ?? [],
+        workspaces,
         mode: (e.mode as string) ?? "default",
-      }),
+      });
+      const focusedOutput = workspaces.find((ws) => ws.focused)?.output;
+      stores.focused._update(
+        !output || !focusedOutput || focusedOutput === output,
+      );
+    },
     tray: (e) => stores.tray._update((e.items as TrayItem[]) ?? []),
     tray_menu: (e) => {
       const bus = e.bus as string;
@@ -835,6 +842,7 @@ export function createWebbarBridge(
 
   const api: WebbarApi = {
     output,
+    focused: storeView(stores.focused, {}),
     sway: storeView(stores.sway, {
       command: swayCommand,
     }),
@@ -861,6 +869,7 @@ export function createWebbarBridge(
           id,
           action_key: actionKey,
         }),
+      activate: (id: number) => send({ type: "activate_notification", id }),
       clearAll: () => send({ type: "clear_notifications" }),
       setDoNotDisturb: (enabled: boolean) =>
         send({ type: "set_notifications_do_not_disturb", enabled }),
@@ -919,9 +928,6 @@ export function createWebbarBridge(
         syncOverlay();
       };
     },
-    setInputRegion: (rects: InputRect[]) =>
-      send({ type: "set_input_region", rects }),
-    resetInputRegion: () => send({ type: "set_input_region", rects: [] }),
     setInteractiveRegions: (rects: InputRect[]) => {
       interactiveRects = [...rects];
       if (interactiveRects.length > 0) {

@@ -4,7 +4,6 @@
   import { fade } from "svelte/transition";
   import {
     activePopups,
-    isFocusedOutput,
     prefersReducedMotion,
     TOAST_EXIT_MS,
   } from "@webbar/sway-full-bar-shared/notifications";
@@ -17,15 +16,13 @@
     window.webbar.notifications.subscribe,
     window.webbar.notifications.get,
   );
-  const swayStore = fromExternalStore(
-    window.webbar.sway.subscribe,
-    window.webbar.sway.get,
+  const focusedStore = fromExternalStore(
+    window.webbar.focused.subscribe,
+    window.webbar.focused.get,
   );
 
   let nowMs = $state(Date.now());
-  let canShow = $derived(
-    !hidden && isFocusedOutput(swayStore.current, window.webbar.output),
-  );
+  let canShow = $derived(!hidden && focusedStore.current);
   let popups = $derived(activePopups(notifStore.current.items));
   let hasPopups = $derived(canShow && popups.length > 0);
 

@@ -200,7 +200,7 @@ function renderNotifications(state: NotificationsState): void {
     notifClearBtn.hidden = true;
     return;
   }
-  const latest = items[items.length - 1];
+  const latest = items[0];
   const label = latest.app_name
     ? `[${latest.app_name}] ${latest.summary}`
     : latest.summary;
@@ -231,7 +231,7 @@ btButton.addEventListener("click", () => {
 
 notifEl.addEventListener("click", () => {
   const items = notifications.get().items;
-  const current = items[items.length - 1];
+  const current = items[0];
   if (current) {
     notifications.dismiss(current.id);
   }

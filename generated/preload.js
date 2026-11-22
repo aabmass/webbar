@@ -235,6 +235,7 @@
       });
     }
     const stores = {
+      focused: createStore(true),
       sway: createStore({
         available: false,
         tree: null,
@@ -342,12 +343,19 @@
       return entry.view;
     }
     const stateHandlers = {
-      sway_state: (e) => stores.sway._update({
-        available: Boolean(e.available),
-        tree: e.tree ?? null,
-        workspaces: e.workspaces ?? [],
-        mode: e.mode ?? "default"
-      }),
+      sway_state: (e) => {
+        const workspaces = e.workspaces ?? [];
+        stores.sway._update({
+          available: Boolean(e.available),
+          tree: e.tree ?? null,
+          workspaces,
+          mode: e.mode ?? "default"
+        });
+        const focusedOutput = workspaces.find((ws) => ws.focused)?.output;
+        stores.focused._update(
+          !output || !focusedOutput || focusedOutput === output
+        );
+      },
       tray: (e) => stores.tray._update(e.items ?? []),
       tray_menu: (e) => {
         const bus = e.bus;
@@ -547,6 +555,7 @@
     }
     const api = {
       output,
+      focused: storeView(stores.focused, {}),
       sway: storeView(stores.sway, {
         command: swayCommand
       }),
@@ -569,6 +578,7 @@
           id,
           action_key: actionKey
         }),
+        activate: (id) => send({ type: "activate_notification", id }),
         clearAll: () => send({ type: "clear_notifications" }),
         setDoNotDisturb: (enabled) => send({ type: "set_notifications_do_not_disturb", enabled }),
         markAllRead: () => send({ type: "mark_notifications_read" }),
@@ -617,8 +627,6 @@
           syncOverlay();
         };
       },
-      setInputRegion: (rects) => send({ type: "set_input_region", rects }),
-      resetInputRegion: () => send({ type: "set_input_region", rects: [] }),
       setInteractiveRegions: (rects) => {
         interactiveRects = [...rects];
         if (interactiveRects.length > 0) {
@@ -796,9 +804,10 @@
     const pending = [];
     let ws = null;
     let delay = 500;
+    const INTERACTIVE_SELECTOR = "[data-webbar-interactive]";
     const hasOpenPopover = () => {
       try {
-        return document.querySelector(":popover-open") !== null;
+        return document.querySelector(":popover-open:not([data-webbar-interactive])") !== null;
       } catch {
         return false;
       }
@@ -832,6 +841,7 @@
         popoverRemovalObserver.disconnect();
         popoverRemovalObserver = null;
       }
+      scheduleInteractiveSync();
       notifyOverlayChange();
     };
     let lastInteractiveKey = "";
@@ -840,7 +850,7 @@
     const interactiveResizeObserver = typeof ResizeObserver !== "undefined" ? new ResizeObserver(() => scheduleInteractiveSync()) : null;
     const syncInteractiveRegions = () => {
       interactiveRaf = 0;
-      const nodes = document.querySelectorAll("[data-webbar-interactive]");
+      const nodes = document.querySelectorAll(INTERACTIVE_SELECTOR);
       const currentSet = new Set(nodes);
       if (interactiveResizeObserver) {
         for (const el of observedInteractive) {
@@ -879,7 +889,7 @@
     const startInteractiveObserver = () => {
       if (!document.documentElement) return;
       const observer = new MutationObserver(() => {
-        if (observedInteractive.size === 0 && lastInteractiveKey === "" && !document.querySelector("[data-webbar-interactive]")) {
+        if (observedInteractive.size === 0 && lastInteractiveKey === "" && !document.querySelector(INTERACTIVE_SELECTOR)) {
           return;
         }
         scheduleInteractiveSync();

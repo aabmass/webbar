@@ -1,10 +1,5 @@
-import { useEffect, useRef } from "react";
 import type { NotificationItem } from "@webbar/types";
-import {
-  formatRelativeTime,
-  hasDefaultAction,
-  visibleActions,
-} from "@webbar/sway-full-bar-shared/notifications";
+import { formatRelativeTime } from "@webbar/sway-full-bar-shared/notifications";
 
 function updateSheen(
   el: HTMLElement,
@@ -15,10 +10,15 @@ function updateSheen(
   const rect = el.getBoundingClientRect();
   const rawX = clientX - rect.left;
   const maxX = rect.width * 0.25;
-  const clampedY = Math.round(Math.max(0, Math.min(clientY - rect.top, rect.height)));
+  const clampedY = Math.round(
+    Math.max(0, Math.min(clientY - rect.top, rect.height)),
+  );
 
   if (isEnter) {
-    el.style.setProperty("--toast-x", `${Math.round(Math.max(0, Math.min(rawX, maxX)))}px`);
+    el.style.setProperty(
+      "--toast-x",
+      `${Math.round(Math.max(0, Math.min(rawX, maxX)))}px`,
+    );
     el.style.setProperty("--toast-y", `${clampedY}px`);
     el.dataset.sheenLocked = rawX >= maxX ? "1" : "";
     return;
@@ -45,29 +45,8 @@ export function NotificationCard({
   isToast?: boolean;
   exiting?: boolean;
 }) {
-  const hoveredRef = useRef(false);
   const interactiveToast = isToast && !exiting;
-  const hasDefault = hasDefaultAction(item);
-  const actions = visibleActions(item);
-  const canClickBody = interactiveToast || (!exiting && hasDefault);
-
-  useEffect(() => {
-    if (!interactiveToast) return;
-    return () => {
-      if (hoveredRef.current) {
-        hoveredRef.current = false;
-        window.webbar.notifications.resumeTimeout(item.id);
-      }
-    };
-  }, [interactiveToast, item.id]);
-
-  function onBodyClick() {
-    if (hasDefault) {
-      window.webbar.notifications.invokeAction(item.id, "default");
-    } else if (interactiveToast) {
-      window.webbar.notifications.hidePopup(item.id);
-    }
-  }
+  const canClickBody = interactiveToast || (!exiting && item.has_default_action);
 
   return (
     <article
@@ -76,7 +55,6 @@ export function NotificationCard({
       onPointerEnter={
         interactiveToast
           ? (e) => {
-              hoveredRef.current = true;
               window.webbar.notifications.pauseTimeout(item.id);
               updateSheen(e.currentTarget, e.clientX, e.clientY, true);
             }
@@ -92,7 +70,6 @@ export function NotificationCard({
       onPointerLeave={
         interactiveToast
           ? (e) => {
-              hoveredRef.current = false;
               window.webbar.notifications.resumeTimeout(item.id);
               delete e.currentTarget.dataset.sheenLocked;
             }
@@ -131,7 +108,11 @@ export function NotificationCard({
 
       <div
         className={`notif-card-body-row${canClickBody ? " is-clickable" : ""}`}
-        onClick={canClickBody ? onBodyClick : undefined}
+        onClick={
+          canClickBody
+            ? () => window.webbar.notifications.activate(item.id)
+            : undefined
+        }
       >
         {item.image_url && (
           <img
@@ -162,9 +143,9 @@ export function NotificationCard({
         </div>
       )}
 
-      {actions.length > 0 && (
+      {item.actions.length > 0 && (
         <div className="notif-actions">
-          {actions.map((action) => (
+          {item.actions.map((action) => (
             <button
               key={action.key}
               type="button"

@@ -52,6 +52,7 @@ pub struct NotificationItem {
     pub summary: String,
     pub body: String,
     pub urgency: NotificationUrgency,
+    pub has_default_action: bool,
     pub actions: Vec<NotificationAction>,
     #[ts(type = "number")]
     pub timestamp_ms: u64,
@@ -98,7 +99,8 @@ struct StoreData {
 
 impl StoreData {
     fn snapshot(&self) -> NotificationsState {
-        let items: Vec<NotificationItem> = self.entries.iter().map(|e| e.item.clone()).collect();
+        let items: Vec<NotificationItem> =
+            self.entries.iter().rev().map(|e| e.item.clone()).collect();
         let unread_count = items.iter().filter(|item| !item.read).count() as u32;
         NotificationsState {
             available: self.available,
@@ -190,16 +192,24 @@ pub fn parse_urgency(hints: &HashMap<String, OwnedValue>) -> NotificationUrgency
     }
 }
 
-pub fn parse_actions(raw: &[String]) -> Vec<NotificationAction> {
-    raw.as_chunks::<2>()
-        .0
-        .iter()
-        .filter(|pair| !pair[0].is_empty())
-        .map(|pair| NotificationAction {
-            key: pair[0].clone(),
-            label: pair[1].clone(),
-        })
-        .collect()
+pub fn parse_actions(raw: &[String]) -> (bool, Vec<NotificationAction>) {
+    let mut has_default = false;
+    let mut actions = Vec::new();
+    for pair in raw.as_chunks::<2>().0 {
+        let key = &pair[0];
+        if key.is_empty() {
+            continue;
+        }
+        if key == "default" {
+            has_default = true;
+        } else {
+            actions.push(NotificationAction {
+                key: key.clone(),
+                label: pair[1].clone(),
+            });
+        }
+    }
+    (has_default, actions)
 }
 
 type RawImageData = (i32, i32, i32, bool, i32, i32, Vec<u8>);
@@ -349,6 +359,18 @@ impl NotificationStore {
         self.emit_snapshot(snapshot);
     }
 
+    fn alloc_id(&self, replaces_id: u32) -> u32 {
+        if replaces_id != 0 {
+            self.handle
+                .inner
+                .next_id
+                .fetch_max(replaces_id.saturating_add(1), Ordering::Relaxed);
+            replaces_id
+        } else {
+            self.handle.inner.next_id.fetch_add(1, Ordering::Relaxed)
+        }
+    }
+
     #[cfg(test)]
     pub fn push(&self, replaces_id: u32, app_name: String, summary: String, body: String) -> u32 {
         self.push_notification(
@@ -376,7 +398,7 @@ impl NotificationStore {
         expire_timeout: i32,
     ) -> u32 {
         let urgency = parse_urgency(&hints);
-        let actions = parse_actions(&actions);
+        let (has_default_action, actions) = parse_actions(&actions);
         let category = hint_string(&hints, &["category"]);
         let desktop_entry = hint_string(&hints, &["desktop-entry"]);
         let transient = hint_bool(&hints, "transient");
@@ -438,64 +460,30 @@ impl NotificationStore {
                 self.emit_snapshot(snapshot);
                 self.emit_closed(removed, 1);
                 return removed;
-            } else if replaces_id != 0 {
-                self.handle
-                    .inner
-                    .next_id
-                    .fetch_max(replaces_id.saturating_add(1), Ordering::Relaxed);
-                replaces_id
             } else {
-                self.handle.inner.next_id.fetch_add(1, Ordering::Relaxed)
+                self.alloc_id(replaces_id)
             };
             drop(guard);
             self.emit_closed(id, 1);
             return id;
         }
 
-        let timer = initial_timer(urgency, expire_timeout, popup);
+        let mut timer = initial_timer(urgency, expire_timeout, popup);
+        let id = existing_idx
+            .map(|idx| guard.entries[idx].item.id)
+            .unwrap_or_else(|| self.alloc_id(replaces_id));
 
-        let id = if let Some(idx) = existing_idx {
-            let existing = &mut guard.entries[idx];
-            let id = existing.item.id;
-            existing.item = NotificationItem {
-                id,
-                app_name,
-                app_icon_name,
-                app_icon_url,
-                image_url,
-                summary,
-                body: clean_body,
-                urgency,
-                actions,
-                timestamp_ms: ts,
-                category,
-                desktop_entry,
-                progress,
-                transient,
-                resident,
-                popup,
-                read: false,
-            };
-            existing.sync_tag = sync_tag;
-            existing.raw_app_icon = app_icon;
-            existing.raw_image_path = stored_image_path;
-            existing.timer = timer;
-            let snapshot = guard.snapshot();
-            self.handle.inner.cvar.notify_all();
-            drop(guard);
-            self.emit_snapshot(snapshot);
-            return id;
-        } else if replaces_id != 0 {
-            self.handle
-                .inner
-                .next_id
-                .fetch_max(replaces_id.saturating_add(1), Ordering::Relaxed);
-            replaces_id
-        } else {
-            self.handle.inner.next_id.fetch_add(1, Ordering::Relaxed)
-        };
+        if let Some(idx) = existing_idx {
+            if matches!(guard.entries[idx].timer, TimerState::Paused { .. }) {
+                if let TimerState::Running { deadline } = timer {
+                    timer = TimerState::Paused {
+                        remaining: deadline.saturating_duration_since(Instant::now()),
+                    };
+                }
+            }
+        }
 
-        guard.entries.push(NotificationEntry {
+        let entry = NotificationEntry {
             item: NotificationItem {
                 id,
                 app_name,
@@ -505,6 +493,7 @@ impl NotificationStore {
                 summary,
                 body: clean_body,
                 urgency,
+                has_default_action,
                 actions,
                 timestamp_ms: ts,
                 category,
@@ -519,12 +508,17 @@ impl NotificationStore {
             raw_app_icon: app_icon,
             raw_image_path: stored_image_path,
             timer,
-        });
+        };
 
         let mut evicted_ids = Vec::new();
-        if guard.entries.len() > MAX_HISTORY {
-            let drain = guard.entries.len() - MAX_HISTORY;
-            evicted_ids.extend(guard.entries.drain(0..drain).map(|e| e.item.id));
+        if let Some(idx) = existing_idx {
+            guard.entries[idx] = entry;
+        } else {
+            guard.entries.push(entry);
+            if guard.entries.len() > MAX_HISTORY {
+                let drain = guard.entries.len() - MAX_HISTORY;
+                evicted_ids.extend(guard.entries.drain(0..drain).map(|e| e.item.id));
+            }
         }
 
         let snapshot = guard.snapshot();
@@ -625,6 +619,22 @@ impl NotificationStore {
         }
     }
 
+    pub fn activate(&self, id: u32) {
+        let target = {
+            let guard = self.handle.inner.data.lock().unwrap();
+            guard
+                .entries
+                .iter()
+                .find(|e| e.item.id == id)
+                .map(|e| (e.item.has_default_action, e.item.popup))
+        };
+        match target {
+            Some((true, _)) => self.invoke_action(id, "default"),
+            Some((false, true)) => self.hide_popup(id),
+            _ => {}
+        }
+    }
+
     pub fn set_do_not_disturb(&self, enabled: bool) {
         let mut guard = self.handle.inner.data.lock().unwrap();
         if guard.do_not_disturb == enabled {
@@ -694,14 +704,15 @@ impl NotificationStore {
         let Some(entry) = guard.entries.iter_mut().find(|e| e.item.id == id) else {
             return;
         };
-        if let TimerState::Paused { remaining } = entry.timer {
-            if entry.item.popup {
-                let dur = remaining.max(Duration::from_millis(RESUME_MIN_MS));
-                entry.timer = TimerState::Running {
-                    deadline: Instant::now() + dur,
-                };
-                self.handle.inner.cvar.notify_all();
-            }
+        if resume_paused_entries(std::slice::from_mut(entry)) {
+            self.handle.inner.cvar.notify_all();
+        }
+    }
+
+    pub fn resume_all_paused(&self) {
+        let mut guard = self.handle.inner.data.lock().unwrap();
+        if resume_paused_entries(&mut guard.entries) {
+            self.handle.inner.cvar.notify_all();
         }
     }
 
@@ -760,6 +771,23 @@ impl NotificationStore {
         drop(guard);
         self.emit_snapshot(snapshot);
     }
+}
+
+fn resume_paused_entries(entries: &mut [NotificationEntry]) -> bool {
+    let now = Instant::now();
+    let mut resumed = false;
+    for entry in entries {
+        if let TimerState::Paused { remaining } = entry.timer {
+            if entry.item.popup {
+                let dur = remaining.max(Duration::from_millis(RESUME_MIN_MS));
+                entry.timer = TimerState::Running {
+                    deadline: now + dur,
+                };
+                resumed = true;
+            }
+        }
+    }
+    resumed
 }
 
 fn server_iface(
@@ -970,7 +998,7 @@ mod tests {
         let snapshots = log.lock().unwrap();
         assert_eq!(snapshots.len(), 3);
         let ids: Vec<u32> = snapshots[2].items.iter().map(|n| n.id).collect();
-        assert_eq!(ids, vec![1, 2, 3]);
+        assert_eq!(ids, vec![3, 2, 1]);
         assert_eq!(snapshots[2].unread_count, 3);
     }
 
@@ -1027,11 +1055,11 @@ mod tests {
         let snapshots = log.lock().unwrap();
         let latest = snapshots.last().unwrap();
         assert_eq!(latest.items.len(), 3);
-        assert_eq!(latest.items[0].id, id1);
-        assert_eq!(latest.items[0].summary, "2 new mails");
+        assert_eq!(latest.items[0].id, sync1);
+        assert_eq!(latest.items[0].progress, Some(100));
         assert_eq!(latest.items[1].id, id2);
-        assert_eq!(latest.items[2].id, sync1);
-        assert_eq!(latest.items[2].progress, Some(100));
+        assert_eq!(latest.items[2].id, id1);
+        assert_eq!(latest.items[2].summary, "2 new mails");
     }
 
     #[test]
@@ -1070,8 +1098,8 @@ mod tests {
         let snapshots = log.lock().unwrap();
         let latest = snapshots.last().unwrap();
         assert_eq!(latest.items.len(), MAX_HISTORY);
-        assert_eq!(latest.items.first().unwrap().id, 6);
-        assert_eq!(latest.items.last().unwrap().id, total as u32);
+        assert_eq!(latest.items.first().unwrap().id, total as u32);
+        assert_eq!(latest.items.last().unwrap().id, 6);
     }
 
     #[test]
@@ -1108,8 +1136,8 @@ mod tests {
         let latest = snapshots.last().unwrap();
         assert!(latest.do_not_disturb);
         assert_eq!(latest.items.len(), 2);
-        assert!(!latest.items[0].popup);
-        assert!(latest.items[1].popup);
+        assert!(latest.items[0].popup);
+        assert!(!latest.items[1].popup);
     }
 
     #[test]
@@ -1156,16 +1184,33 @@ mod tests {
         );
         store.pause_timeout(id_paused);
 
-        thread::sleep(Duration::from_millis(220));
-
-        {
-            let snapshots = log.lock().unwrap();
-            let latest = snapshots.last().unwrap();
-            let persist = latest.items.iter().find(|n| n.id == id_persist).unwrap();
-            assert!(!persist.popup);
-            assert!(latest.items.iter().all(|n| n.id != id_transient));
-            let paused = latest.items.iter().find(|n| n.id == id_paused).unwrap();
-            assert!(paused.popup);
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            let done = {
+                let snapshots = log.lock().unwrap();
+                let latest = snapshots.last().unwrap();
+                let persist_expired = latest
+                    .items
+                    .iter()
+                    .find(|n| n.id == id_persist)
+                    .is_some_and(|n| !n.popup);
+                let transient_gone = latest.items.iter().all(|n| n.id != id_transient);
+                if persist_expired && transient_gone {
+                    let paused = latest.items.iter().find(|n| n.id == id_paused).unwrap();
+                    assert!(paused.popup);
+                    true
+                } else {
+                    false
+                }
+            };
+            if done {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "short-timeout notifications did not expire within 2s"
+            );
+            thread::sleep(Duration::from_millis(20));
         }
 
         store.resume_timeout(id_paused);
@@ -1208,7 +1253,13 @@ mod tests {
             String::new(),
             "Hi".into(),
             "<b>Hello</b> &amp; <a href=\"https://example.com\">link</a><br/>next".into(),
-            vec!["default".into(), "Open".into(), "dangling".into()],
+            vec![
+                "default".into(),
+                "Open".into(),
+                "reply".into(),
+                "Reply".into(),
+                "dangling".into(),
+            ],
             hints,
             -1,
         );
@@ -1218,11 +1269,12 @@ mod tests {
         assert_eq!(item.urgency, NotificationUrgency::Critical);
         assert_eq!(item.body, "Hello & link\nnext");
         assert!(item.image_url.starts_with("data:image/png;base64,"));
+        assert!(item.has_default_action);
         assert_eq!(
             item.actions,
             vec![NotificationAction {
-                key: "default".into(),
-                label: "Open".into(),
+                key: "reply".into(),
+                label: "Reply".into(),
             }]
         );
     }
@@ -1282,6 +1334,84 @@ mod tests {
         let latest = snapshots.last().unwrap();
         assert_eq!(latest.items.len(), 1);
         assert_eq!(latest.items[0].id, id_resident);
+    }
+
+    #[test]
+    fn activate_invokes_default_or_hides_popup_without_default() {
+        let (send, log) = capture();
+        let store = NotificationStore::test_new(send);
+
+        let id_default = store.push_notification(
+            "chat".into(),
+            0,
+            String::new(),
+            "With default".into(),
+            String::new(),
+            vec!["default".into(), "Open".into()],
+            HashMap::new(),
+            -1,
+        );
+        let id_no_default = store.push(0, "app".into(), "No default".into(), String::new());
+
+        // Activating with default action invokes & dismisses (non-resident)
+        store.activate(id_default);
+        // Activating popup without default hides popup while keeping history
+        store.activate(id_no_default);
+        // Activating again when no longer popup is a no-op
+        store.activate(id_no_default);
+
+        let snapshots = log.lock().unwrap();
+        let latest = snapshots.last().unwrap();
+        assert_eq!(latest.items.len(), 1);
+        assert_eq!(latest.items[0].id, id_no_default);
+        assert!(!latest.items[0].popup);
+    }
+
+    #[test]
+    fn resume_all_paused_restarts_paused_timers() {
+        let (send, log) = capture();
+        let store = NotificationStore::test_new(send);
+
+        let id = store.push_notification(
+            "app".into(),
+            0,
+            String::new(),
+            "Paused".into(),
+            String::new(),
+            Vec::new(),
+            HashMap::new(),
+            150,
+        );
+        store.pause_timeout(id);
+        thread::sleep(Duration::from_millis(200));
+        assert!(log.lock().unwrap().last().unwrap().items[0].popup);
+
+        // Replacing a paused notification preserves its paused state
+        store.push_notification(
+            "app".into(),
+            id,
+            String::new(),
+            "Paused Updated".into(),
+            String::new(),
+            Vec::new(),
+            HashMap::new(),
+            150,
+        );
+        thread::sleep(Duration::from_millis(200));
+        assert!(log.lock().unwrap().last().unwrap().items[0].popup);
+
+        store.resume_all_paused();
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            if !log.lock().unwrap().last().unwrap().items[0].popup {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "resume_all_paused did not expire notification within 2s"
+            );
+            thread::sleep(Duration::from_millis(20));
+        }
     }
 
     #[test]

@@ -6,8 +6,6 @@ import {
   useSyncExternalStore,
 } from "react";
 import {
-  historyItems,
-  isFocusedOutput,
   notificationButtonTitle,
   notificationCenterSubtitle,
 } from "@webbar/sway-full-bar-shared/notifications";
@@ -35,11 +33,9 @@ export function Notifications({
 
   useEffect(() => {
     return window.webbar.onHostAction((action) => {
-      if (action !== "notifications_toggle_center") return;
-      if (!isFocusedOutput(window.webbar.sway.get(), window.webbar.output)) {
-        return;
+      if (action === "notifications_toggle_center") {
+        onOpenChange(!openRef.current);
       }
-      onOpenChange(!openRef.current);
     });
   }, [onOpenChange]);
 
@@ -57,7 +53,7 @@ export function Notifications({
     }
   }, [open, unread]);
 
-  const items = historyItems(notifState.items);
+  const items = notifState.items;
 
   const btnClass = [
     "bar-btn",

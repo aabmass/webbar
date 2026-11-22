@@ -1,7 +1,5 @@
 <script lang="ts">
   import {
-    historyItems,
-    isFocusedOutput,
     notificationButtonTitle,
     notificationCenterSubtitle,
   } from "@webbar/sway-full-bar-shared/notifications";
@@ -27,7 +25,7 @@
   let btnEl = $state<HTMLButtonElement | null>(null);
 
   let notifState = $derived(notifStore.current);
-  let items = $derived(historyItems(notifState.items));
+  let items = $derived(notifState.items);
   let unread = $derived(notifState.unread_count);
 
   function close() {
@@ -36,11 +34,9 @@
 
   $effect(() => {
     return window.webbar.onHostAction((action) => {
-      if (action !== "notifications_toggle_center") return;
-      if (!isFocusedOutput(window.webbar.sway.get(), window.webbar.output)) {
-        return;
+      if (action === "notifications_toggle_center") {
+        onOpenChange(!open);
       }
-      onOpenChange(!open);
     });
   });
 
