@@ -307,22 +307,48 @@ pub fn encode_png_bytes_data_url(bytes: &[u8]) -> String {
 pub struct DesktopEntryInfo {
     pub name: Option<String>,
     pub icon: Option<String>,
+    pub desktop_id: Option<String>,
+    pub startup_wm_class: Option<String>,
+    pub exec_program: Option<String>,
 }
 
-pub fn lookup_desktop_entry(desktop_id: &str) -> Option<DesktopEntryInfo> {
-    let trimmed = desktop_id.trim();
-    if trimmed.is_empty() {
-        return None;
-    }
-    let normalized = trimmed.strip_suffix(".desktop").unwrap_or(trimmed);
+fn cached_desktop_entries() -> &'static (Vec<String>, Vec<DesktopEntry>) {
     static CACHE: OnceLock<(Vec<String>, Vec<DesktopEntry>)> = OnceLock::new();
-    let (locales, entries) = CACHE.get_or_init(|| {
+    CACHE.get_or_init(|| {
         let locales = get_languages_from_env();
         let entries = desktop_entries(&locales);
         (locales, entries)
-    });
-    let entry = find_app_by_id(entries, Ascii::new(normalized))?;
-    Some(DesktopEntryInfo {
+    })
+}
+
+fn extract_exec_program(exec: &str) -> Option<String> {
+    let trimmed = exec.trim_start();
+    let first = if let Some(rest) = trimmed.strip_prefix('"') {
+        rest.split_once('"')?.0
+    } else if let Some(rest) = trimmed.strip_prefix('\'') {
+        rest.split_once('\'')?.0
+    } else {
+        trimmed.split_whitespace().next()?
+    };
+    if first.is_empty() {
+        return None;
+    }
+    let name = Path::new(first)
+        .file_name()
+        .and_then(|s| s.to_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())?;
+    if matches!(
+        name.to_ascii_lowercase().as_str(),
+        "env" | "sh" | "bash" | "flatpak" | "gtk-launch" | "xdg-open"
+    ) {
+        return None;
+    }
+    Some(name.to_string())
+}
+
+fn desktop_entry_info(entry: &DesktopEntry, locales: &[String]) -> DesktopEntryInfo {
+    DesktopEntryInfo {
         name: entry
             .name(locales)
             .map(|s| s.into_owned())
@@ -332,7 +358,58 @@ pub fn lookup_desktop_entry(desktop_id: &str) -> Option<DesktopEntryInfo> {
             .map(str::trim)
             .filter(|s| !s.is_empty())
             .map(str::to_string),
-    })
+        desktop_id: Some(entry.appid.to_string()).filter(|s| !s.is_empty()),
+        startup_wm_class: entry
+            .desktop_entry("StartupWMClass")
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string),
+        exec_program: entry.exec().and_then(extract_exec_program),
+    }
+}
+
+pub fn lookup_desktop_entry(desktop_id: &str) -> Option<DesktopEntryInfo> {
+    let trimmed = desktop_id.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let normalized = trimmed.strip_suffix(".desktop").unwrap_or(trimmed);
+    let (locales, entries) = cached_desktop_entries();
+    let entry = find_app_by_id(entries, Ascii::new(normalized))?;
+    Some(desktop_entry_info(entry, locales))
+}
+
+pub fn lookup_desktop_entry_by_app_name(app_name: &str) -> Option<DesktopEntryInfo> {
+    let trimmed = app_name.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    if let Some(info) = lookup_desktop_entry(trimmed) {
+        return Some(info);
+    }
+    if trimmed.contains(' ') {
+        let slug = trimmed.to_ascii_lowercase().replace(' ', "-");
+        if let Some(info) = lookup_desktop_entry(&slug) {
+            return Some(info);
+        }
+    }
+    let (locales, entries) = cached_desktop_entries();
+    let needle = trimmed.to_ascii_lowercase();
+    for entry in entries {
+        if entry
+            .name(locales)
+            .is_some_and(|n| n.trim().to_ascii_lowercase() == needle)
+        {
+            return Some(desktop_entry_info(entry, locales));
+        }
+        if entry
+            .desktop_entry("StartupWMClass")
+            .is_some_and(|c| c.trim().to_ascii_lowercase() == needle)
+        {
+            return Some(desktop_entry_info(entry, locales));
+        }
+    }
+    None
 }
 
 fn bytes_contain(haystack: &[u8], needle: &[u8]) -> bool {
@@ -644,5 +721,22 @@ mod tests {
             "/tmp/a/b.svg"
         );
         assert_eq!(decode_file_uri("/plain/path.png"), "/plain/path.png");
+    }
+
+    #[test]
+    fn extracts_exec_program_handles_quotes_and_wrappers() {
+        assert_eq!(
+            extract_exec_program("\"/opt/My App/my-app\" %U").as_deref(),
+            Some("my-app")
+        );
+        assert_eq!(
+            extract_exec_program("'/opt/My App/my-app' --flag").as_deref(),
+            Some("my-app")
+        );
+        assert_eq!(
+            extract_exec_program("/usr/bin/google-chrome-stable %U").as_deref(),
+            Some("google-chrome-stable")
+        );
+        assert_eq!(extract_exec_program("env FOO=1 bar"), None);
     }
 }

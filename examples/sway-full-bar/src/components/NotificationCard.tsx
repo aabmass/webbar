@@ -46,7 +46,7 @@ export function NotificationCard({
   exiting?: boolean;
 }) {
   const interactiveToast = isToast && !exiting;
-  const canClickBody = interactiveToast || (!exiting && item.has_default_action);
+  const canClickBody = !exiting;
 
   return (
     <article

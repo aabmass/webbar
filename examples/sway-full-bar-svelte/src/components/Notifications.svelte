@@ -36,6 +36,8 @@
     return window.webbar.onHostAction((action) => {
       if (action === "notifications_toggle_center") {
         onOpenChange(!open);
+      } else if (action === "notifications_close_center") {
+        onOpenChange(false);
       }
     });
   });

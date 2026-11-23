@@ -56,6 +56,9 @@ def cmd_watch(out_path: str) -> None:
     def on_closed(nid, reason):
         write_ev({"signal": "notification_closed", "id": int(nid), "reason": int(reason)})
 
+    def on_activation_token(nid, token):
+        write_ev({"signal": "activation_token", "id": int(nid), "token": str(token)})
+
     bus.add_signal_receiver(
         on_action,
         signal_name="ActionInvoked",
@@ -65,6 +68,12 @@ def cmd_watch(out_path: str) -> None:
     bus.add_signal_receiver(
         on_closed,
         signal_name="NotificationClosed",
+        dbus_interface="org.freedesktop.Notifications",
+        path="/org/freedesktop/Notifications",
+    )
+    bus.add_signal_receiver(
+        on_activation_token,
+        signal_name="ActivationToken",
         dbus_interface="org.freedesktop.Notifications",
         path="/org/freedesktop/Notifications",
     )

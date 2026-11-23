@@ -1,6 +1,7 @@
-import { test, expect } from "@playwright/test";
+import { test, expect, chromium } from "@playwright/test";
 import { execFileSync, spawn } from "node:child_process";
 import fs from "node:fs";
+import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -186,7 +187,7 @@ test.describe(`${TARGET_NAME} notifications integration`, () => {
         document.getElementById("test-non-modal-popover")?.remove();
       });
 
-      // 2. Click action button -> emits ActionInvoked + NotificationClosed(2)
+      // 2. Click action button -> emits ActivationToken + ActionInvoked + NotificationClosed(2)
       await toast.getByRole("button", { name: "Reply" }).click();
       await expect(toast).toBeHidden();
       await expect(bellBtn.locator(".notif-badge")).toBeHidden();
@@ -195,10 +196,25 @@ test.describe(`${TARGET_NAME} notifications integration`, () => {
         .poll(() => readSignals(signalsPath))
         .toEqual(
           expect.arrayContaining([
+            {
+              signal: "activation_token",
+              id: id1,
+              token: expect.stringMatching(/\S+/),
+            },
             { signal: "action_invoked", id: id1, key: "reply" },
             { signal: "notification_closed", id: id1, reason: 2 },
           ]),
         );
+      const step2Signals = readSignals(signalsPath);
+      expect(
+        step2Signals.findIndex(
+          (s) => s.signal === "activation_token" && s.id === id1,
+        ),
+      ).toBeLessThan(
+        step2Signals.findIndex(
+          (s) => s.signal === "action_invoked" && s.id === id1,
+        ),
+      );
 
       // 3. Open Notification Center -> marks read & toggles DND; clicking body without default hides popup only
       const id2 = sendNotify({
@@ -308,6 +324,135 @@ test.describe(`${TARGET_NAME} notifications integration`, () => {
       await expect(dndSwitch).toHaveAttribute("aria-checked", "false");
       await page.keyboard.press("Escape");
       await expect(center).toBeHidden();
+
+      // 7. Real 2-tab Chromium Web Notification: clicking in webbar focuses workspace 2 AND switches from Tab Two -> Tab One
+      const appServer = http.createServer((req, res) => {
+        res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+        if (req.url === "/tab1") {
+          res.end("<!doctype html><title>Tab One</title><h1>Tab One</h1>");
+        } else {
+          res.end("<!doctype html><title>Tab Two</title><h1>Tab Two</h1>");
+        }
+      });
+      await new Promise((resolve) => appServer.listen(0, "127.0.0.1", resolve));
+      const { port: appPort } = appServer.address();
+      const appOrigin = `http://127.0.0.1:${appPort}`;
+
+      execFileSync("swaymsg", ["workspace", "2"]);
+      const profileDir = path.join(tmpDir, "chromium-profile");
+      const appContext = await chromium.launchPersistentContext(profileDir, {
+        headless: false,
+        args: [
+          "--ozone-platform=wayland",
+          "--no-sandbox",
+          "--enable-features=NativeNotifications",
+        ],
+      });
+      try {
+        await appContext.grantPermissions(["notifications"], {
+          origin: appOrigin,
+        });
+        const tab1 = appContext.pages()[0] || (await appContext.newPage());
+        await tab1.goto(`${appOrigin}/tab1`, { waitUntil: "domcontentloaded" });
+        const tab2 = await appContext.newPage();
+        await tab2.goto(`${appOrigin}/tab2`, { waitUntil: "domcontentloaded" });
+        await tab2.bringToFront();
+
+        const getChromiumWindowInfo = () => {
+          const tree = JSON.parse(
+            execFileSync("swaymsg", ["-t", "get_tree"], { encoding: "utf8" }),
+          );
+          const wins = [];
+          const walk = (node) => {
+            const children = [
+              ...(node.nodes || []),
+              ...(node.floating_nodes || []),
+            ];
+            if (
+              children.length === 0 &&
+              node.app_id &&
+              node.app_id.toLowerCase().includes("chromium")
+            ) {
+              wins.push({
+                name: node.name ?? "",
+                focused: Boolean(node.focused),
+              });
+            }
+            for (const child of children) walk(child);
+          };
+          walk(tree);
+          return wins;
+        };
+
+        await expect
+          .poll(() => {
+            const wins = getChromiumWindowInfo();
+            return (
+              wins.length === 1 &&
+              wins[0].name.includes("Tab Two") &&
+              !wins[0].name.includes("Tab One")
+            );
+          })
+          .toBe(true);
+
+        execFileSync("swaymsg", ["workspace", "1"]);
+        await expect(
+          page.locator(".workspaces-grid .ws-btn.focused"),
+        ).toHaveText(/1/);
+
+        await tab1.evaluate(() => {
+          window.__notifClicked = false;
+          const n = new Notification("Chrome Tab 1 Ping", {
+            body: "Switch back to Tab One",
+          });
+          n.onclick = () => {
+            window.__notifClicked = true;
+            window.focus();
+            n.close();
+          };
+          window.__activeNotif = n;
+        });
+
+        await expect(bellBtn.locator(".notif-badge")).toHaveText("1");
+        await bellBtn.click();
+        await expect(center).toBeVisible();
+        const card = center.locator(".notif-card", {
+          hasText: "Chrome Tab 1 Ping",
+        });
+        await expect(card).toBeVisible();
+        await card.locator(".notif-card-body-row").click();
+
+        await expect(center).toBeHidden();
+        await expect(
+          page.locator(".workspaces-grid .ws-btn.focused"),
+        ).toHaveText(/2/);
+        await expect
+          .poll(() => tab1.evaluate(() => window.__notifClicked))
+          .toBe(true);
+        await expect
+          .poll(() => {
+            const wins = getChromiumWindowInfo();
+            return (
+              wins.length === 1 &&
+              wins[0].focused &&
+              wins[0].name.includes("Tab One")
+            );
+          })
+          .toBe(true);
+      } finally {
+        try {
+          await appContext.close();
+        } catch {}
+        try {
+          await new Promise((resolve) => appServer.close(resolve));
+        } catch {}
+        try {
+          await page.evaluate(() => window.webbar.notifications.clearAll());
+        } catch {}
+        try {
+          execFileSync("swaymsg", ["workspace", "1"]);
+        } catch {}
+      }
 
       expect(errors).toEqual([]);
     } finally {

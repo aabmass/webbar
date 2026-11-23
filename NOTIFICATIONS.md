@@ -29,10 +29,10 @@ Each `NotificationItem` provides:
 
 | Method | Description |
 |---|---|
-| `activate(id)` | Invoke the `"default"` action if `has_default_action` is true, or hide the floating popup if `popup` is true |
+| `activate(id)` | Emit a Wayland `ActivationToken` and invoke the `"default"` action if `has_default_action` is true (which lets browsers like Chrome switch to the originating tab and raise its window), then focus/jump to the activated or matching Sway window across workspaces; if `has_default_action` is false, hide the floating popup if `popup` is true and focus the matching Sway window |
 | `dismiss(id)` | Remove from history & popups and emit `NotificationClosed` (reason `2`: dismissed by user) |
 | `hidePopup(id)` | Hide the floating toast while keeping persistent items in history (transient items are removed) |
-| `invokeAction(id, actionKey)` | Emit `ActionInvoked(id, actionKey)` over D-Bus; dismisses unless `resident: true` |
+| `invokeAction(id, actionKey)` | Emit a Wayland `ActivationToken` and `ActionInvoked(id, actionKey)` over D-Bus, focus any newly activated/urgent Sway window, and dismiss unless `resident: true` |
 | `clearAll()` | Dismiss all notifications |
 | `setDoNotDisturb(enabled)` | Enable or disable Do Not Disturb (`critical` notifications still pop up) |
 | `markAllRead()` | Mark all current items as read (`unread_count` becomes `0`) |
@@ -123,6 +123,8 @@ useEffect(() => {
   return window.webbar.onHostAction((action) => {
     if (action === "notifications_toggle_center") {
       setOpen((prev) => !prev);
+    } else if (action === "notifications_close_center") {
+      setOpen(false);
     }
   });
 }, []);

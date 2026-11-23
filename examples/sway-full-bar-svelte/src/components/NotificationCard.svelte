@@ -44,8 +44,6 @@
     nowMs: number;
     isToast?: boolean;
   } = $props();
-
-  let canClickBody = $derived(isToast || item.has_default_action);
 </script>
 
 <article
@@ -104,11 +102,8 @@
   <!-- svelte-ignore a11y_click_events_have_key_events -->
   <!-- svelte-ignore a11y_no_static_element_interactions -->
   <div
-    class="notif-card-body-row"
-    class:is-clickable={canClickBody}
-    onclick={canClickBody
-      ? () => window.webbar.notifications.activate(item.id)
-      : undefined}
+    class="notif-card-body-row is-clickable"
+    onclick={() => window.webbar.notifications.activate(item.id)}
   >
     {#if item.image_url}
       <img

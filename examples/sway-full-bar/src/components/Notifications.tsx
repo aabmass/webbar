@@ -35,6 +35,8 @@ export function Notifications({
     return window.webbar.onHostAction((action) => {
       if (action === "notifications_toggle_center") {
         onOpenChange(!openRef.current);
+      } else if (action === "notifications_close_center") {
+        onOpenChange(false);
       }
     });
   }, [onOpenChange]);

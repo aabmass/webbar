@@ -1,11 +1,16 @@
 //! Full `org.freedesktop.Notifications` D-Bus daemon using `zbus`.
 
 use std::collections::HashMap;
+use std::fs;
 use std::sync::atomic::{AtomicU32, Ordering};
-use std::sync::{Arc, Condvar, Mutex, OnceLock};
+use std::sync::{mpsc, Arc, Condvar, Mutex, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use gtk4::gdk;
+use gtk4::gio::prelude::AppLaunchContextExt;
+use gtk4::glib;
+use gtk4::prelude::DisplayExt;
 use quick_xml::events::Event;
 use quick_xml::Reader;
 use serde::Serialize;
@@ -17,9 +22,10 @@ use zbus::zvariant::{OwnedValue, Value};
 
 use crate::bridge::{BridgeEvent, SendEvent};
 use crate::icons::{
-    lookup_desktop_entry, resolve_icon_or_path, rgba_image_data_to_png_data_url, IconPalette,
-    SharedIconPalette,
+    lookup_desktop_entry, lookup_desktop_entry_by_app_name, resolve_icon_or_path,
+    rgba_image_data_to_png_data_url, DesktopEntryInfo, IconPalette, SharedIconPalette,
 };
+use crate::sway_ipc::{self, AppMatchHints};
 
 const MAX_HISTORY: usize = 50;
 const DEFAULT_EXPIRE_MS: u64 = 5000;
@@ -87,7 +93,23 @@ struct NotificationEntry {
     sync_tag: String,
     raw_app_icon: String,
     raw_image_path: String,
+    sender_pids: Vec<i32>,
+    startup_wm_class: String,
+    exec_program: String,
+    resolved_desktop_id: String,
     timer: TimerState,
+}
+
+impl NotificationEntry {
+    fn match_hints(&self) -> AppMatchHints {
+        AppMatchHints {
+            pids: self.sender_pids.clone(),
+            desktop_entry: self.resolved_desktop_id.clone(),
+            app_name: self.item.app_name.clone(),
+            startup_wm_class: self.startup_wm_class.clone(),
+            exec_program: self.exec_program.clone(),
+        }
+    }
 }
 
 struct StoreData {
@@ -118,6 +140,7 @@ struct StoreInner {
     send: SendEvent,
     conn: OnceLock<Connection>,
     theme: SharedIconPalette,
+    focus_windows: bool,
 }
 
 struct StoreHandle {
@@ -176,6 +199,67 @@ fn hint_progress(hints: &HashMap<String, OwnedValue>) -> Option<u8> {
         _ => None,
     })?;
     Some(raw.clamp(0, 100) as u8)
+}
+
+fn hint_sender_pid(hints: &HashMap<String, OwnedValue>) -> Option<u32> {
+    hints.get("sender-pid").and_then(|v| match &**v {
+        Value::U32(n) if *n > 0 => Some(*n),
+        Value::I32(n) if *n > 0 => Some(*n as u32),
+        Value::U64(n) if *n > 0 => u32::try_from(*n).ok(),
+        Value::I64(n) if *n > 0 => u32::try_from(*n).ok(),
+        _ => None,
+    })
+}
+
+fn parse_proc_stat_ppid(stat: &str) -> Option<i32> {
+    let close_paren = stat.rfind(')')?;
+    let rest = stat.get(close_paren + 1..)?.trim_start();
+    // Fields after `(comm)` are: state (0), ppid (1), ...
+    let ppid = rest.split_whitespace().nth(1)?.parse::<i32>().ok()?;
+    (ppid > 1).then_some(ppid)
+}
+
+fn collect_pid_chain(initial_pid: u32) -> Vec<i32> {
+    let mut chain = Vec::new();
+    let Some(mut pid) = i32::try_from(initial_pid).ok().filter(|&p| p > 1) else {
+        return chain;
+    };
+    for _ in 0..16 {
+        if pid <= 1 || chain.contains(&pid) {
+            break;
+        }
+        chain.push(pid);
+        let Ok(stat) = fs::read_to_string(format!("/proc/{pid}/stat")) else {
+            break;
+        };
+        let Some(ppid) = parse_proc_stat_ppid(&stat) else {
+            break;
+        };
+        pid = ppid;
+    }
+    chain
+}
+
+fn mint_wayland_activation_token() -> Option<String> {
+    if !gtk4::is_initialized() {
+        return None;
+    }
+    let mint_on_main = || {
+        let display = gdk::Display::default()?;
+        let ctx = display.app_launch_context();
+        ctx.startup_notify_id(None::<&gtk4::gio::AppInfo>, &[])
+            .map(Into::into)
+            .filter(|s: &String| !s.is_empty())
+    };
+    if glib::MainContext::default().is_owner() {
+        mint_on_main()
+    } else {
+        let (tx, rx) = mpsc::sync_channel(1);
+        glib::idle_add_once(move || {
+            let _ = tx.send(mint_on_main());
+        });
+        rx.recv_timeout(Duration::from_millis(200)).ok().flatten()
+    }
 }
 
 pub fn parse_urgency(hints: &HashMap<String, OwnedValue>) -> NotificationUrgency {
@@ -284,22 +368,21 @@ fn resolve_entry_icons(
     raw_app_icon: &str,
     desktop_entry: &str,
     raw_image_path: &str,
-    need_desktop_name: bool,
     palette: &IconPalette,
-) -> (String, String, Option<String>, Option<String>) {
-    let mut desktop_name = None;
-    let mut desktop_icon = None;
-    if !desktop_entry.is_empty() && (raw_app_icon.is_empty() || need_desktop_name) {
-        if let Some(info) = lookup_desktop_entry(desktop_entry) {
-            desktop_name = info.name;
-            desktop_icon = info.icon;
-        }
-    }
+) -> (String, String, Option<String>, Option<DesktopEntryInfo>) {
+    let desktop_info = if !desktop_entry.is_empty() {
+        lookup_desktop_entry(desktop_entry)
+    } else {
+        None
+    };
 
     let app_icon_name = if !raw_app_icon.is_empty() {
         raw_app_icon.to_string()
     } else {
-        desktop_icon.unwrap_or_default()
+        desktop_info
+            .as_ref()
+            .and_then(|info| info.icon.clone())
+            .unwrap_or_default()
     };
 
     let app_icon_url =
@@ -311,11 +394,15 @@ fn resolve_entry_icons(
         None
     };
 
-    (app_icon_name, app_icon_url, image_url, desktop_name)
+    (app_icon_name, app_icon_url, image_url, desktop_info)
 }
 
 impl NotificationStore {
     pub fn new(send: SendEvent, theme: SharedIconPalette) -> Self {
+        Self::with_focus_windows(send, theme, true)
+    }
+
+    fn with_focus_windows(send: SendEvent, theme: SharedIconPalette, focus_windows: bool) -> Self {
         let inner = Arc::new(StoreInner {
             next_id: AtomicU32::new(1),
             data: Mutex::new(StoreData {
@@ -328,6 +415,7 @@ impl NotificationStore {
             send,
             conn: OnceLock::new(),
             theme,
+            focus_windows,
         });
         let store = Self {
             handle: Arc::new(StoreHandle {
@@ -340,11 +428,17 @@ impl NotificationStore {
 
     #[cfg(test)]
     pub fn test_new(send: SendEvent) -> Self {
-        Self::new(send, SharedIconPalette::default())
+        Self::with_focus_windows(send, SharedIconPalette::default(), false)
     }
 
     fn emit_snapshot(&self, snapshot: NotificationsState) {
         (self.handle.inner.send)(BridgeEvent::NotificationsState(snapshot));
+    }
+
+    fn emit_close_center(&self) {
+        (self.handle.inner.send)(BridgeEvent::HostAction {
+            action: "notifications_close_center".to_string(),
+        });
     }
 
     fn emit_closed(&self, id: u32, reason: u32) {
@@ -385,8 +479,34 @@ impl NotificationStore {
         )
     }
 
+    #[cfg(test)]
     #[allow(clippy::too_many_arguments)]
     pub fn push_notification(
+        &self,
+        app_name: String,
+        replaces_id: u32,
+        app_icon: String,
+        summary: String,
+        body: String,
+        actions: Vec<String>,
+        hints: HashMap<String, OwnedValue>,
+        expire_timeout: i32,
+    ) -> u32 {
+        self.push_notification_with_sender(
+            app_name,
+            replaces_id,
+            app_icon,
+            summary,
+            body,
+            actions,
+            hints,
+            expire_timeout,
+            None,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn push_notification_with_sender(
         &self,
         mut app_name: String,
         replaces_id: u32,
@@ -396,6 +516,7 @@ impl NotificationStore {
         actions: Vec<String>,
         hints: HashMap<String, OwnedValue>,
         expire_timeout: i32,
+        sender_pid: Option<u32>,
     ) -> u32 {
         let urgency = parse_urgency(&hints);
         let (has_default_action, actions) = parse_actions(&actions);
@@ -409,19 +530,32 @@ impl NotificationStore {
         let image_data_url = parse_image_data_hint(&hints, &["image-data", "image_data"]);
 
         let palette = self.handle.inner.theme.palette();
-        let (app_icon_name, app_icon_url, resolved_image_path_url, desktop_name) =
-            resolve_entry_icons(
-                &app_icon,
-                &desktop_entry,
-                &raw_image_path,
-                app_name.is_empty(),
-                &palette,
-            );
+        let (app_icon_name, app_icon_url, resolved_image_path_url, desktop_info) =
+            resolve_entry_icons(&app_icon, &desktop_entry, &raw_image_path, &palette);
         if app_name.is_empty() {
-            if let Some(name) = desktop_name {
+            if let Some(name) = desktop_info.as_ref().and_then(|info| info.name.clone()) {
                 app_name = name;
             }
         }
+        let match_desktop_info =
+            desktop_info.or_else(|| lookup_desktop_entry_by_app_name(&app_name));
+        let startup_wm_class = match_desktop_info
+            .as_ref()
+            .and_then(|info| info.startup_wm_class.clone())
+            .unwrap_or_default();
+        let exec_program = match_desktop_info
+            .as_ref()
+            .and_then(|info| info.exec_program.clone())
+            .unwrap_or_default();
+        let resolved_desktop_id = match_desktop_info
+            .and_then(|info| info.desktop_id)
+            .unwrap_or_else(|| desktop_entry.clone());
+
+        let mut sender_pids = sender_pid
+            .or_else(|| hint_sender_pid(&hints))
+            .map(collect_pid_chain)
+            .unwrap_or_default();
+
         let stored_image_path = if image_data_url.is_none() && resolved_image_path_url.is_some() {
             raw_image_path
         } else {
@@ -474,6 +608,12 @@ impl NotificationStore {
             .unwrap_or_else(|| self.alloc_id(replaces_id));
 
         if let Some(idx) = existing_idx {
+            if sender_pids.is_empty()
+                && !guard.entries[idx].sender_pids.is_empty()
+                && guard.entries[idx].item.app_name == app_name
+            {
+                sender_pids = guard.entries[idx].sender_pids.clone();
+            }
             if matches!(guard.entries[idx].timer, TimerState::Paused { .. }) {
                 if let TimerState::Running { deadline } = timer {
                     timer = TimerState::Paused {
@@ -507,6 +647,10 @@ impl NotificationStore {
             sync_tag,
             raw_app_icon: app_icon,
             raw_image_path: stored_image_path,
+            sender_pids,
+            startup_wm_class,
+            exec_program,
+            resolved_desktop_id,
             timer,
         };
 
@@ -596,18 +740,21 @@ impl NotificationStore {
         }
     }
 
-    pub fn invoke_action(&self, id: u32, action_key: &str) {
-        let Some(is_resident) = ({
-            let guard = self.handle.inner.data.lock().unwrap();
-            guard
-                .entries
-                .iter()
-                .find(|e| e.item.id == id)
-                .map(|e| e.item.resident)
-        }) else {
-            return;
-        };
+    fn emit_action_signals_and_dismiss(
+        &self,
+        id: u32,
+        action_key: &str,
+        token: Option<&str>,
+        is_resident: bool,
+    ) {
         if let Some(iface) = server_iface(&self.handle.inner.conn) {
+            if let Some(token) = token {
+                let _ = async_io::block_on(NotificationsServer::activation_token(
+                    iface.signal_emitter(),
+                    id,
+                    token,
+                ));
+            }
             let _ = async_io::block_on(NotificationsServer::action_invoked(
                 iface.signal_emitter(),
                 id,
@@ -619,6 +766,57 @@ impl NotificationStore {
         }
     }
 
+    pub fn invoke_action(&self, id: u32, action_key: &str) {
+        let Some((is_resident, match_hints)) = ({
+            let guard = self.handle.inner.data.lock().unwrap();
+            guard
+                .entries
+                .iter()
+                .find(|e| e.item.id == id)
+                .map(|e| (e.item.resident, e.match_hints()))
+        }) else {
+            return;
+        };
+
+        let is_default = action_key == "default";
+        if !self.handle.inner.focus_windows {
+            if is_default {
+                self.emit_close_center();
+            }
+            self.emit_action_signals_and_dismiss(id, action_key, None, is_resident);
+            return;
+        }
+
+        let token = mint_wayland_activation_token();
+        if is_default {
+            self.emit_close_center();
+        }
+        let store = self.clone();
+        let action_key = action_key.to_string();
+        thread::spawn(move || {
+            let outcome = if is_default {
+                sway_ipc::prepare_default_action_focus(&match_hints)
+            } else {
+                sway_ipc::DefaultFocusOutcome::NeedsPostAction(
+                    sway_ipc::capture_pre_activation_state(),
+                )
+            };
+            store.emit_action_signals_and_dismiss(
+                id,
+                &action_key,
+                token.as_deref(),
+                is_resident,
+            );
+            if let sway_ipc::DefaultFocusOutcome::NeedsPostAction(pre) = outcome {
+                sway_ipc::run_post_action_focus(pre, &match_hints, is_default, || {
+                    if !is_default {
+                        store.emit_close_center();
+                    }
+                });
+            }
+        });
+    }
+
     pub fn activate(&self, id: u32) {
         let target = {
             let guard = self.handle.inner.data.lock().unwrap();
@@ -626,11 +824,23 @@ impl NotificationStore {
                 .entries
                 .iter()
                 .find(|e| e.item.id == id)
-                .map(|e| (e.item.has_default_action, e.item.popup))
+                .map(|e| (e.item.has_default_action, e.item.popup, e.match_hints()))
         };
         match target {
-            Some((true, _)) => self.invoke_action(id, "default"),
-            Some((false, true)) => self.hide_popup(id),
+            Some((true, _, _)) => self.invoke_action(id, "default"),
+            Some((false, popup, match_hints)) => {
+                if popup {
+                    self.hide_popup(id);
+                }
+                if self.handle.inner.focus_windows {
+                    let store = self.clone();
+                    thread::spawn(move || {
+                        sway_ipc::focus_window_immediately(&match_hints, || {
+                            store.emit_close_center();
+                        });
+                    });
+                }
+            }
             _ => {}
         }
     }
@@ -741,7 +951,7 @@ impl NotificationStore {
             .into_iter()
             .map(|(id, raw_app, desktop_entry, raw_img)| {
                 let (icon_name, icon_url, img_url, _) =
-                    resolve_entry_icons(&raw_app, &desktop_entry, &raw_img, false, &palette);
+                    resolve_entry_icons(&raw_app, &desktop_entry, &raw_img, &palette);
                 (id, icon_name, icon_url, img_url)
             })
             .collect();
@@ -893,7 +1103,7 @@ impl NotificationsServer {
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn notify(
+    async fn notify(
         &self,
         app_name: String,
         replaces_id: u32,
@@ -903,8 +1113,26 @@ impl NotificationsServer {
         actions: Vec<String>,
         hints: HashMap<String, OwnedValue>,
         expire_timeout: i32,
+        #[zbus(header)] header: zbus::message::Header<'_>,
+        #[zbus(connection)] conn: &zbus::Connection,
     ) -> u32 {
-        self.store.push_notification(
+        let sender_pid = if let Some(pid) = hint_sender_pid(&hints) {
+            Some(pid)
+        } else if let Some(sender) = header.sender() {
+            conn.call_method(
+                Some("org.freedesktop.DBus"),
+                "/org/freedesktop/DBus",
+                Some("org.freedesktop.DBus"),
+                "GetConnectionUnixProcessID",
+                &(sender.as_str(),),
+            )
+            .await
+            .ok()
+            .and_then(|msg| msg.body().deserialize::<u32>().ok())
+        } else {
+            None
+        };
+        self.store.push_notification_with_sender(
             app_name,
             replaces_id,
             app_icon,
@@ -913,6 +1141,7 @@ impl NotificationsServer {
             actions,
             hints,
             expire_timeout,
+            sender_pid,
         )
     }
 
@@ -941,6 +1170,13 @@ impl NotificationsServer {
         emitter: &SignalEmitter<'_>,
         id: u32,
         action_key: &str,
+    ) -> zbus::Result<()>;
+
+    #[zbus(signal)]
+    async fn activation_token(
+        emitter: &SignalEmitter<'_>,
+        id: u32,
+        activation_token: &str,
     ) -> zbus::Result<()>;
 }
 
@@ -1530,5 +1766,28 @@ mod tests {
         assert!(decoded.contains(".ColorScheme-Text { color: #18181f; }"));
 
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn parses_proc_stat_ppid_with_spaces_and_parens() {
+        assert_eq!(
+            parse_proc_stat_ppid("1234 (Web Content (2)) S 999 100 100 0 -1 4194304"),
+            Some(999)
+        );
+        assert_eq!(parse_proc_stat_ppid("1 (systemd) S 0 1 1"), None);
+        assert_eq!(parse_proc_stat_ppid("malformed"), None);
+    }
+
+    #[test]
+    fn extracts_sender_pid_hint_variants() {
+        let mut hints = HashMap::new();
+        hints.insert("sender-pid".into(), OwnedValue::from(4242u32));
+        assert_eq!(hint_sender_pid(&hints), Some(4242));
+
+        hints.insert("sender-pid".into(), OwnedValue::from(5151i32));
+        assert_eq!(hint_sender_pid(&hints), Some(5151));
+
+        hints.insert("sender-pid".into(), OwnedValue::from(0i32));
+        assert_eq!(hint_sender_pid(&hints), None);
     }
 }
