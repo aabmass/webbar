@@ -32,3 +32,6 @@ freedesktop-desktop-entry = { version = "0.8", default-features = false }
 swayipc-types = "2"
 serde = { version = "1", features = ["derive"] }
 serde-reflection = "0.7"
+
+[dev-dependencies]
+schemars = "0.8"

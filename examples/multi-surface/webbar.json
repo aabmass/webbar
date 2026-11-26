@@ -1,0 +1,33 @@
+{
+  "$schema": "../../webbar.schema.json",
+  "surfaces": [
+    {
+      "id": "bar",
+      "edge": "top",
+      "height": 38,
+      "overlay_extent": 38,
+      "layer": "top",
+      "monitors": "all"
+    },
+    {
+      "id": "dock",
+      "edge": "bottom",
+      "height": 52,
+      "overlay_extent": 52,
+      "layer": "top",
+      "monitors": "all"
+    },
+    {
+      "id": "launcher",
+      "anchors": [],
+      "width": 520,
+      "height": 300,
+      "layer": "overlay",
+      "exclusive_zone": "ignore",
+      "keyboard": "exclusive",
+      "input_mode": "full",
+      "monitors": "focused",
+      "visible": false
+    }
+  ]
+}

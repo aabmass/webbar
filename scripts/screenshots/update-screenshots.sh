@@ -245,8 +245,6 @@ launch_bar() {
   GSK_RENDERER=cairo \
   webbar \
     --url "http://127.0.0.1:$PORT/index.html?$query" \
-    --height 86 \
-    --overlay-height 800 \
     --replace >"$WORK_DIR/webbar.log" 2>&1 &
   WEBBAR_PID="$!"
   harness_register_pid "$WEBBAR_PID"
@@ -291,6 +289,32 @@ echo "update-screenshots: capturing notifications-toasts.png..."
 launch_bar "theme=dark&toasts=1" 2.0
 grim -g "1000,0 600x480" "$OUT_DIR/notifications-toasts.png"
 
+if [ -n "${WEBBAR_MULTI_SURFACE_DIR:-}" ] && [ -d "$WEBBAR_MULTI_SURFACE_DIR" ]; then
+  echo "update-screenshots: capturing multi-surface.png..."
+  if [ -n "$WEBBAR_PID" ] && kill -0 "$WEBBAR_PID" 2>/dev/null; then
+    kill "$WEBBAR_PID" 2>/dev/null || true
+    wait "$WEBBAR_PID" 2>/dev/null || true
+  fi
+  harness_register_log "$WORK_DIR/webbar-multi.log"
+  WEBKIT_DISABLE_DMABUF_RENDERER=1 \
+  WEBKIT_DISABLE_COMPOSITING_MODE=1 \
+  GSK_RENDERER=cairo \
+  webbar \
+    --dir "$WEBBAR_MULTI_SURFACE_DIR" \
+    --no-notifications \
+    --replace >"$WORK_DIR/webbar-multi.log" 2>&1 &
+  WEBBAR_PID="$!"
+  harness_register_pid "$WEBBAR_PID"
+  sleep 2.0
+  if ! kill -0 "$WEBBAR_PID" 2>/dev/null; then
+    echo "update-screenshots: webbar exited early in multi-surface mode" >&2
+    exit 1
+  fi
+  gapplication action dev.local.webbar surface-show "'launcher'"
+  sleep 0.5
+  grim "$OUT_DIR/multi-surface.png"
+fi
+
 echo "update-screenshots: switching to light theme and capturing hero-light.png..."
 set_wallpaper "$WORK_DIR/light.png"
 swaymsg "client.focused #2b6de0 #fafafc #18181f #2b6de0 #2b6de0" >/dev/null
@@ -309,7 +333,8 @@ oxipng -o 3 --strip safe --quiet \
   "$OUT_DIR/popover-bluetooth.png" \
   "$OUT_DIR/popover-display.png" \
   "$OUT_DIR/popover-notifications.png" \
-  "$OUT_DIR/notifications-toasts.png"
+  "$OUT_DIR/notifications-toasts.png" \
+  $([ -f "$OUT_DIR/multi-surface.png" ] && echo "$OUT_DIR/multi-surface.png")
 
 echo "update-screenshots: done! Wrote screenshots to $OUT_DIR"
 ls -lh "$OUT_DIR"

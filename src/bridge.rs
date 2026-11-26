@@ -22,6 +22,15 @@ pub struct InputRect {
     pub height: f64,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[ts(export, export_to = "../preload/src/generated/")]
+pub struct SurfaceRuntimeState {
+    pub id: String,
+    pub visible: bool,
+    pub layer: String,
+    pub anchors: Vec<String>,
+}
+
 /// Error payload (`RpcReply.data`) for a failed `sway_command`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
 #[ts(export, export_to = "../preload/src/generated/")]
@@ -190,6 +199,13 @@ pub enum BridgeRequest {
     SetOverlay {
         active: bool,
     },
+    SurfaceSetVisible {
+        id: String,
+        visible: bool,
+    },
+    SurfaceToggle {
+        id: String,
+    },
     // Escape-hatch primitives
     DbusCall {
         id: u32,
@@ -293,6 +309,9 @@ pub enum BridgeEvent {
         displays: Vec<crate::backlight::BacklightDisplay>,
     },
     Theme(crate::theme::ThemeState),
+    SurfacesState {
+        surfaces: Vec<SurfaceRuntimeState>,
+    },
     // Escape-hatch events
     DbusMatchStarted {
         id: u32,
@@ -334,6 +353,7 @@ pub type SendEvent = Arc<dyn Fn(BridgeEvent) + Send + Sync>;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum SnapshotKey {
     Theme,
+    Surfaces,
     Sway,
     Tray,
     Notifications,
@@ -347,6 +367,7 @@ impl BridgeEvent {
     pub fn snapshot_key(&self) -> Option<SnapshotKey> {
         match self {
             BridgeEvent::Theme(_) => Some(SnapshotKey::Theme),
+            BridgeEvent::SurfacesState { .. } => Some(SnapshotKey::Surfaces),
             BridgeEvent::SwayState(_) => Some(SnapshotKey::Sway),
             BridgeEvent::Tray { .. } => Some(SnapshotKey::Tray),
             BridgeEvent::NotificationsState(_) => Some(SnapshotKey::Notifications),
@@ -383,6 +404,7 @@ impl SnapshotCache {
         };
         let order = [
             SnapshotKey::Theme,
+            SnapshotKey::Surfaces,
             SnapshotKey::Sway,
             SnapshotKey::Tray,
             SnapshotKey::Notifications,

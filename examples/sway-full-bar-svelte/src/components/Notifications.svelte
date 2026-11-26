@@ -136,3 +136,107 @@
     </div>
   </div>
 </Popover>
+
+<style>
+/* Notifications: bell pill, center popover, and floating toast stack */
+.notif-btn {
+  position: relative;
+}
+
+.notif-badge {
+  position: absolute;
+  top: 8px;
+  right: 7px;
+  min-width: 15px;
+  height: 15px;
+  padding: 0 4px;
+  border-radius: 999px;
+  background: var(--accent-color);
+  color: var(--accent-fg);
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 15px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  box-shadow: 0 0 0 2px var(--bar-bg);
+}
+
+.notif-btn.is-dnd {
+  color: var(--fg-muted);
+}
+
+.notif-btn.is-dnd .notif-badge {
+  background: var(--fg-faint);
+  color: var(--bar-bg);
+}
+
+.notif-popover {
+  display: flex;
+  flex-direction: column;
+  width: 340px;
+  gap: 8px;
+}
+
+.notif-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 0 2px 8px;
+  border-bottom: 1px solid var(--panel-border);
+}
+
+.notif-header-controls {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.notif-dnd-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--fg-muted);
+}
+
+.notif-dnd-control.is-on {
+  color: var(--fg-color);
+}
+
+.notif-dnd-control :global(svg) {
+  width: 14px;
+  height: 14px;
+  flex: none;
+}
+
+.notif-clear-btn {
+  height: 26px;
+  padding: 0 8px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-color);
+  color: var(--fg-muted);
+  font-size: 11.5px;
+  font-weight: 600;
+}
+
+.notif-clear-btn:hover:not(:disabled) {
+  background: var(--surface-hover);
+  color: var(--fg-color);
+}
+
+.notif-clear-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.notif-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: min(480px, calc(100vh - 180px));
+  overflow-y: auto;
+  overflow-x: hidden;
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in srgb, var(--fg-color) 16%, transparent) transparent;
+}
+</style>

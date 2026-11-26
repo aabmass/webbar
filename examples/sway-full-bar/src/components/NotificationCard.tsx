@@ -51,7 +51,6 @@ export function NotificationCard({
   return (
     <article
       className={`notif-card${isToast ? " notif-toast" : ""}${item.urgency === "critical" ? " is-critical" : ""}`}
-      data-webbar-interactive={interactiveToast ? "" : undefined}
       onPointerEnter={
         interactiveToast
           ? (e) => {

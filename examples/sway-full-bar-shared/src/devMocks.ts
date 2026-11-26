@@ -244,6 +244,23 @@ function installNotificationMocks(): void {
 }
 
 export function installDevMocks(): void {
+  // Standalone browser preview fallback when webbar hasn't set data-desktop-theme
+  if (
+    typeof document !== "undefined" &&
+    typeof window !== "undefined" &&
+    !document.documentElement.dataset.desktopTheme &&
+    typeof window.matchMedia === "function"
+  ) {
+    const mq = window.matchMedia("(prefers-color-scheme: light)");
+    const sync = () => {
+      if (!document.documentElement.dataset.desktopTheme) {
+        document.documentElement.dataset.desktopTheme = mq.matches
+          ? "light"
+          : "dark";
+      }
+    };
+    sync();
+  }
   const params = new URLSearchParams(window.location.search);
   if (params.has("mockTray")) installTrayMocks();
   if (params.has("mockNotifications")) installNotificationMocks();

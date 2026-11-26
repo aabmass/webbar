@@ -1,0 +1,10 @@
+{
+  "$schema": "../../webbar.schema.json",
+  "surfaces": [
+    {
+      "id": "bar",
+      "edge": "top",
+      "height": 34
+    }
+  ]
+}

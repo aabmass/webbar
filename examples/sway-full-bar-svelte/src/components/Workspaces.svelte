@@ -68,3 +68,134 @@
     </span>
   {/if}
 </div>
+
+<style>
+/* Workspaces 2-row grid */
+.workspaces-wrap {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.workspaces-grid {
+  display: grid;
+  grid-auto-rows: 28px;
+  grid-auto-columns: 36px;
+  gap: 4px;
+  padding: 3px 4px;
+  contain: paint;
+}
+
+.ws-btn {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-sm);
+  background: var(--surface-color);
+  color: var(--fg-color);
+  padding: 0 6px 2px;
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.ws-dots {
+  position: absolute;
+  bottom: 3px;
+  left: 0;
+  right: 0;
+  display: flex;
+  justify-content: center;
+  gap: 2px;
+  pointer-events: none;
+}
+
+.ws-dots i {
+  width: 3px;
+  height: 3px;
+  border-radius: 50%;
+  background: currentColor;
+  opacity: 0.78;
+  animation: ws-dot-in var(--dur-fast) var(--ease-out) both;
+}
+
+@keyframes ws-dot-in {
+  from {
+    opacity: 0;
+    scale: 0.4;
+  }
+  to {
+    opacity: 0.78;
+    scale: 1;
+  }
+}
+
+.ws-btn:hover {
+  background: var(--surface-hover);
+}
+
+/* Visible on another output */
+.ws-btn.visible {
+  box-shadow: inset 0 0 0 1.5px var(--accent-color);
+  color: var(--accent-color);
+}
+
+.ws-btn.focused {
+  background: var(--accent-color);
+  color: var(--accent-fg);
+  box-shadow: 0 0 10px var(--accent-glow);
+}
+
+/* Pinned slot with no workspace: quiet placeholder, label on hover */
+.ws-btn.virtual {
+  background: color-mix(in srgb, var(--fg-color) 2.5%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--fg-color) 5%, transparent);
+  color: var(--fg-faint);
+}
+
+.ws-btn.virtual:hover {
+  background: var(--surface-color);
+  color: var(--fg-muted);
+}
+
+.ws-btn.urgent {
+  background: var(--urgent-bg);
+  color: var(--urgent-fg);
+}
+
+@keyframes urgent-pulse {
+  50% {
+    box-shadow:
+      0 0 0 3px var(--red-soft),
+      0 0 12px var(--urgent-glow);
+  }
+}
+
+.ws-btn.urgent:not(.focused) {
+  animation: urgent-pulse 1.1s ease-in-out infinite;
+}
+
+.sway-mode {
+  padding: 5px 10px;
+  border-radius: var(--radius-sm);
+  background: var(--accent-yellow);
+  color: var(--accent-yellow-fg);
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  box-shadow:
+    0 0 0 2px var(--yellow-soft),
+    0 0 14px var(--yellow-glow);
+  animation: mode-glow 1.6s ease-in-out infinite;
+}
+
+@keyframes mode-glow {
+  50% {
+    box-shadow:
+      0 0 0 4px var(--yellow-soft),
+      0 0 18px var(--yellow-soft);
+  }
+}
+</style>

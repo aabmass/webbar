@@ -303,3 +303,168 @@
     {/if}
   </div>
 </Popover>
+
+<style>
+/* Stasis idle widget & popover */
+.stasis-btn {
+  gap: 6px;
+  padding: 0 12px;
+  font-size: 12px;
+}
+
+.stasis-btn :global(svg) {
+  width: 16px;
+  height: 16px;
+}
+
+.stasis-btn.is-inhibited {
+  color: var(--accent-yellow);
+}
+
+.stasis-btn.is-dimmed {
+  opacity: 0.45;
+}
+
+.stasis-label {
+  white-space: nowrap;
+}
+
+.stasis-popover {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 240px;
+}
+
+.stasis-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 0 2px 2px;
+}
+
+.stasis-title {
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.stasis-badge {
+  font-size: 11px;
+  font-weight: 700;
+  padding: 3px 9px;
+  border-radius: 999px;
+  background: var(--green-soft);
+  color: var(--accent-green);
+}
+
+.stasis-badge.is-inhibited {
+  background: var(--yellow-soft);
+  color: var(--accent-yellow);
+}
+
+.stasis-badge.is-offline {
+  background: var(--surface-color);
+  color: var(--fg-muted);
+}
+
+.stasis-error {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--accent-red);
+  background: var(--red-soft);
+  border-radius: var(--radius-sm);
+  padding: 6px 8px;
+}
+
+.stasis-inhibitor-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.stasis-inhibitor-item {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 7px 10px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-color);
+}
+
+.stasis-inhibitor-name {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--fg-color);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.stasis-inhibitor-detail {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--fg-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.stasis-action-btn {
+  width: 100%;
+  height: 36px;
+  margin: 0;
+  padding: 0 10px;
+  font-size: 12px;
+  border-radius: var(--radius-sm);
+}
+
+.stasis-action-btn.is-active {
+  background: var(--accent-yellow);
+  color: var(--accent-yellow-fg);
+}
+
+.stasis-action-btn:disabled,
+.stasis-profile-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.stasis-section-label {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--fg-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  padding: 4px 4px 0;
+}
+
+.stasis-profile-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.stasis-profile-btn {
+  height: 34px;
+  margin: 0;
+  padding: 0 12px;
+  font-size: 13px;
+  justify-content: space-between;
+  border-radius: var(--radius-sm);
+  background: transparent;
+}
+
+.stasis-profile-btn:hover:not(:disabled) {
+  background: var(--surface-hover);
+}
+
+.stasis-profile-btn.is-current {
+  background: var(--accent-soft);
+  color: var(--accent-color);
+}
+
+.stasis-check {
+  font-size: 12px;
+}
+</style>

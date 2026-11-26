@@ -2,17 +2,22 @@
 
 Build your Sway status bar with plain HTML, CSS, and TypeScript/React—without switching away from Sway or reinventing Linux D-Bus plumbing.
 
-`webbar` is a Rust Wayland host (`gtk4` + `gtk4-layer-shell` + `webkit6`) that docks a transparent WebView at the top of each monitor and automatically injects `window.webbar` into every page with reactive stores (`sway`, `tray`, `notifications`, `audio`, `bluetooth`, `network`, `backlight`, `theme`) plus Promise-based `dbus` and `exec` escape hatches. System appearance (dark/light mode, accent color, font, and GTK4/Libadwaita colors) is also injected as `--desktop-*` and `--gtk-*` CSS variables—see [THEMING.md](THEMING.md) and [NOTIFICATIONS.md](NOTIFICATIONS.md).
+`webbar` is a Rust Wayland host (`gtk4` + `gtk4-layer-shell` + `webkit6`) that docks transparent WebViews on your monitors and automatically injects `window.webbar` into every page with reactive stores (`sway`, `tray`, `notifications`, `audio`, `bluetooth`, `network`, `backlight`, `theme`, `surfaces`) plus Promise-based `dbus` and `exec` escape hatches. System appearance (dark/light mode, accent color, font, and GTK4/Libadwaita colors) is also injected as `--desktop-*` and `--gtk-*` CSS variables—see [SURFACES.md](SURFACES.md), [THEMING.md](THEMING.md), and [NOTIFICATIONS.md](NOTIFICATIONS.md).
 
 ## Usage
 
-Pass either a directory containing `index.html` or a dev server URL, and optionally `--height <px>` (default `34`):
+Pass either a directory containing `webbar.json` + `index.html` or a local dev server URL serving `/webbar.json` (in Vite, place it at `public/webbar.json`):
 
 ```bash
 webbar --dir /path/to/dist
 webbar --url http://localhost:5173
-webbar --dir ./examples/sway-full-bar/dist --height 86
+webbar --dir ./examples/sway-full-bar/dist
+webbar --dir ./examples/multi-surface
 ```
+
+### Surfaces (`webbar.json`)
+
+Every `webbar` UI declares its Wayland layer-shell surfaces in `webbar.json`—from a single top/bottom/left/right bar to a full multi-surface shell (top bar, bottom dock reserving its own exclusive zone, and a toggleable `overlay` launcher above fullscreen apps). All surfaces share a single `webbar` host process and WebSocket bridge, identify themselves via `window.webbar.surface`, and can be shown/hidden/toggled via `window.webbar.surfaces` or `gapplication`. See [SURFACES.md](SURFACES.md) for the user guide, [`webbar.schema.json`](webbar.schema.json) for the generated JSON Schema, and [`examples/multi-surface`](examples/multi-surface) for a complete example.
 
 ## Example Bar Screenshots
 
@@ -35,6 +40,12 @@ webbar --dir ./examples/sway-full-bar/dist --height 86
 | ![Bluetooth popover](docs/screenshots/popover-bluetooth.png) | ![Display and appearance popover](docs/screenshots/popover-display.png) |
 | **Notification Center** | **Floating Toasts** |
 | ![Notification center popover](docs/screenshots/popover-notifications.png) | ![Floating notification toasts](docs/screenshots/notifications-toasts.png) |
+
+### Multi-Surface Shell (`examples/multi-surface`)
+
+Top bar (`edge: "top"`), bottom dock (`edge: "bottom"`), and centered `overlay` launcher toggled via `gapplication action dev.local.webbar surface-toggle "'launcher'"`—all managed by a single `webbar` host:
+
+![Multi-surface shell with top bar, bottom dock, and overlay launcher](docs/screenshots/multi-surface.png)
 
 <!-- Regenerate example screenshots in an isolated headless Sway session with: nix run .#update-screenshots -->
 
@@ -84,9 +95,9 @@ npm install
 npm run dev
 
 # Terminal 2: launch webbar against the Vite dev server
-nix run . -- --url http://localhost:5173 --height 86 --replace
+nix run . -- --url http://localhost:5173 --replace
 # Or with Cargo directly:
-# cargo run -- --url http://localhost:5173 --height 86 --replace
+# cargo run -- --url http://localhost:5173 --replace
 ```
 
 Edits to `examples/sway-full-bar/src/` will hot-reload in the bar, and `webbar` automatically replays the latest system snapshots on reload.
@@ -125,6 +136,9 @@ gapplication action dev.local.webbar <action>
 | `notifications-toggle-do-not-disturb` | Toggle Do Not Disturb mode |
 | `notifications-dismiss-latest` | Dismiss the newest active popup (or newest history item) |
 | `notifications-clear-all` | Dismiss all notifications |
+| `surface-show` `'<id>'` | Show a configured surface (e.g. `gapplication action dev.local.webbar surface-show "'launcher'"`) |
+| `surface-hide` `'<id>'` | Hide a configured surface |
+| `surface-toggle` `'<id>'` | Toggle a configured surface's visibility |
 
 For example, in Sway:
 

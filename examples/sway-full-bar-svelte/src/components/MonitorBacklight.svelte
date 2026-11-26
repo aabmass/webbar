@@ -190,3 +190,75 @@
     </div>
   </div>
 </Popover>
+
+<style>
+/* Display & Appearance popover */
+.display-popover {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.display-section {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.display-section-label {
+  font-size: 10.5px;
+  font-weight: 700;
+  color: var(--fg-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  padding: 0 4px;
+}
+
+.display-divider {
+  height: 1px;
+  background: var(--panel-border);
+}
+
+.theme-segmented {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px;
+  padding: 3px;
+  border-radius: var(--radius-md);
+  background: var(--surface-color);
+}
+
+.theme-option {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 32px;
+  padding: 0 12px;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--fg-muted);
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+.theme-option:hover:not(.is-active) {
+  background: var(--surface-hover);
+  color: var(--fg-color);
+}
+
+.theme-option.is-active {
+  background: var(--accent-color);
+  color: var(--accent-fg);
+  box-shadow: 0 1px 4px var(--shadow-sm);
+}
+
+.theme-error {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--accent-red);
+  background: var(--red-soft);
+  border-radius: var(--radius-sm);
+  padding: 6px 8px;
+}
+</style>

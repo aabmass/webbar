@@ -1,13 +1,21 @@
-import { createWebbarBridge } from "./preload";
+import {
+  INTERACTIVE_SELECTOR,
+  collectInteractiveRegions,
+  createWebbarBridge,
+  hasOpenModalPopover,
+  hasRunningInteractiveAnimation,
+} from "./preload";
 export * from "./preload";
 
 if (!window.webbar) {
   const params = new URLSearchParams(window.location.search);
   const output = params.get("output") || "";
+  const surface = params.get("surface") || "bar";
   const wsPort = params.get("wsPort") || params.get("ws") || "9123";
   const wsToken = params.get("wsToken") || params.get("token") || "";
   const query = [
     wsToken && `token=${encodeURIComponent(wsToken)}`,
+    surface && `surface=${encodeURIComponent(surface)}`,
     output && `output=${encodeURIComponent(output)}`,
   ]
     .filter(Boolean)
@@ -18,18 +26,7 @@ if (!window.webbar) {
   let ws: WebSocket | null = null;
   let delay = 500;
 
-  const INTERACTIVE_SELECTOR = "[data-webbar-interactive]";
-
-  const hasOpenPopover = (): boolean => {
-    try {
-      return (
-        document.querySelector(":popover-open:not([data-webbar-interactive])") !==
-        null
-      );
-    } catch {
-      return false;
-    }
-  };
+  const hasOpenPopover = (): boolean => hasOpenModalPopover(document);
 
   const { api, receive, notifyOverlayChange, onConnect, onDisconnect } =
     createWebbarBridge(
@@ -42,6 +39,7 @@ if (!window.webbar) {
       },
       output,
       hasOpenPopover,
+      surface,
     );
 
   // Recover if an open [popover] is removed from the DOM without hidePopover()
@@ -68,9 +66,9 @@ if (!window.webbar) {
     notifyOverlayChange();
   };
 
-  // Interactive non-bar elements (e.g. floating notification toasts) opt in
-  // via `[data-webbar-interactive]` so their rects stay clickable with
-  // KeyboardMode::None without stealing Sway focus.
+  // Non-modal floating elements (`:popover-open[popover="manual"]` or legacy
+  // `[data-webbar-interactive]`) stay clickable under KeyboardMode::None
+  // without stealing Sway focus.
   let lastInteractiveKey = "";
   let interactiveRaf = 0;
   const observedInteractive = new Set<Element>();
@@ -79,10 +77,20 @@ if (!window.webbar) {
       ? new ResizeObserver(() => scheduleInteractiveSync())
       : null;
 
+  const hasAnyInteractiveNode = (): boolean => {
+    try {
+      return document.querySelector(INTERACTIVE_SELECTOR) !== null;
+    } catch {
+      return document.querySelector("[data-webbar-interactive]") !== null;
+    }
+  };
+
   const syncInteractiveRegions = () => {
     interactiveRaf = 0;
-    const nodes = document.querySelectorAll(INTERACTIVE_SELECTOR);
-    const currentSet = new Set(nodes);
+    const { rects, tracked } = collectInteractiveRegions(document, (el) =>
+      window.getComputedStyle(el as Element),
+    );
+    const currentSet = new Set(tracked as Element[]);
     if (interactiveResizeObserver) {
       for (const el of observedInteractive) {
         if (!currentSet.has(el)) {
@@ -98,24 +106,14 @@ if (!window.webbar) {
       }
     }
 
-    const rects: { x: number; y: number; width: number; height: number }[] = [];
-    for (const el of nodes) {
-      const r = el.getBoundingClientRect();
-      const width = Math.round(r.width);
-      const height = Math.round(r.height);
-      if (width > 0 && height > 0) {
-        rects.push({
-          x: Math.round(r.left),
-          y: Math.round(r.top),
-          width,
-          height,
-        });
-      }
-    }
     const key = rects.map((r) => `${r.x},${r.y},${r.width},${r.height}`).join(";");
     if (key !== lastInteractiveKey) {
       lastInteractiveKey = key;
       api.setInteractiveRegions(rects);
+    }
+
+    if (hasRunningInteractiveAnimation(document, tracked)) {
+      scheduleInteractiveSync();
     }
   };
 
@@ -130,7 +128,7 @@ if (!window.webbar) {
       if (
         observedInteractive.size === 0 &&
         lastInteractiveKey === "" &&
-        !document.querySelector(INTERACTIVE_SELECTOR)
+        !hasAnyInteractiveNode()
       ) {
         return;
       }
@@ -140,16 +138,26 @@ if (!window.webbar) {
       childList: true,
       subtree: true,
       attributes: true,
-      attributeFilter: ["data-webbar-interactive", "style", "class", "hidden"],
+      attributeFilter: [
+        "popover",
+        "data-webbar-interactive",
+        "style",
+        "class",
+        "hidden",
+      ],
     });
-    const onMotionEnd = () => {
-      if (observedInteractive.size > 0) {
+    const onMotion = () => {
+      if (observedInteractive.size > 0 || hasAnyInteractiveNode()) {
         scheduleInteractiveSync();
       }
     };
     window.addEventListener("resize", scheduleInteractiveSync);
-    window.addEventListener("transitionend", onMotionEnd, true);
-    window.addEventListener("animationend", onMotionEnd, true);
+    window.addEventListener("transitionrun", onMotion, true);
+    window.addEventListener("transitionend", onMotion, true);
+    window.addEventListener("transitioncancel", onMotion, true);
+    window.addEventListener("animationstart", onMotion, true);
+    window.addEventListener("animationend", onMotion, true);
+    window.addEventListener("animationcancel", onMotion, true);
     syncInteractiveRegions();
   };
 

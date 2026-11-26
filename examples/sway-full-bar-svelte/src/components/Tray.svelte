@@ -1,4 +1,5 @@
 <script lang="ts">
+  import "../styles/tray.css";
   import { flip } from "svelte/animate";
   import { scale } from "svelte/transition";
   import { cubicOut } from "svelte/easing";

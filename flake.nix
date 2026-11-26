@@ -172,6 +172,7 @@
               foot
               grim
               dbus
+              glib.bin
               bat
               python3
               librsvg
@@ -184,6 +185,7 @@
             ]);
           } ''
             export WEBBAR_UI_DIR="${swayFullBarUi}"
+            export WEBBAR_MULTI_SURFACE_DIR="${./examples/multi-surface}"
             export FONT_DIRS="${pkgs.inter}/share/fonts:${pkgs.jetbrains-mono}/share/fonts:${pkgs.dejavu_fonts}/share/fonts"
             export OUT_DIR="$out"
             # nix-daemon is already the networkless build sandbox; WebKit's
@@ -342,7 +344,7 @@
                   sleep 0.15
                 done
 
-                ${webbarPkg}/bin/webbar --url "http://localhost:$VITE_PORT" --height 86 --replace "$@"
+                ${webbarPkg}/bin/webbar --url "http://localhost:$VITE_PORT" --replace "$@"
               '';
             };
         in
@@ -359,11 +361,11 @@
             default = webbarPkg;
             sway-full-bar-ui = swayFullBarUi;
             sway-full-bar = pkgs.writeShellScriptBin "webbar-sway-full-bar" ''
-              exec ${webbarPkg}/bin/webbar --dir ${swayFullBarUi} --height 86 "$@"
+              exec ${webbarPkg}/bin/webbar --dir ${swayFullBarUi} "$@"
             '';
             sway-full-bar-svelte-ui = swayFullBarSvelteUi;
             sway-full-bar-svelte = pkgs.writeShellScriptBin "webbar-sway-full-bar-svelte" ''
-              exec ${webbarPkg}/bin/webbar --dir ${swayFullBarSvelteUi} --height 86 "$@"
+              exec ${webbarPkg}/bin/webbar --dir ${swayFullBarSvelteUi} "$@"
             '';
             sway-full-bar-dev = mkBarDev {
               name = "webbar-sway-full-bar-dev";
@@ -401,10 +403,12 @@
               preCheck = ''
                 export TS_RS_EXPORT_DIR="$PWD/target/ts-root/dummy"
                 export WEBBAR_TS_DIR="$PWD/target/ts-root/preload/src/generated"
+                export WEBBAR_SCHEMA_PATH="$PWD/target/ts-root/webbar.schema.json"
                 mkdir -p "$TS_RS_EXPORT_DIR" "$WEBBAR_TS_DIR"
               '';
               postCheck = ''
                 diff -ru ${./preload/src/generated} "$PWD/target/ts-root/preload/src/generated"
+                diff -u ${./webbar.schema.json} "$PWD/target/ts-root/webbar.schema.json"
               '';
             });
             preload-test = preloadPkg;
@@ -412,6 +416,20 @@
             sway-full-bar-ui = swayFullBarUi;
             sway-full-bar-svelte-ui = swayFullBarSvelteUi;
             react-tray-ui = reactTrayUi;
+            css-vars-check = pkgs.runCommand "webbar-css-vars-check" {
+              nativeBuildInputs = [ pkgs.nodejs ];
+            } ''
+              cd "${pkgs.lib.fileset.toSource {
+                root = ./.;
+                fileset = pkgs.lib.fileset.unions [
+                  ./scripts/check-css-vars.mjs
+                  ./examples/sway-full-bar-shared/styles
+                  ./examples/sway-full-bar-svelte/src
+                ];
+              }}"
+              node ./scripts/check-css-vars.mjs
+              touch "$out"
+            '';
             integration-parity-react = mkIntegrationParityCheck {
               target = "react";
               uiDir = swayFullBarUi;
@@ -420,6 +438,25 @@
               target = "svelte";
               uiDir = swayFullBarSvelteUi;
             };
+            integration-multi-surface = pkgs.runCommand "webbar-integration-multi-surface" {
+              nativeBuildInputs = [
+                webbarPkg
+                pkgs.sway
+                pkgs.foot
+                pkgs.grim
+                pkgs.dbus
+                pkgs.glib.bin
+                pkgs.jq
+                pkgs.nodejs
+                pkgs.python3
+              ];
+            } ''
+              export WEBBAR_MULTI_SURFACE_DIR="${./examples/multi-surface}"
+              export WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS=1
+              cd "${integrationParitySrc}"
+              bash ./scripts/integration/run-multi-surface-test.sh
+              touch "$out"
+            '';
           };
         };
     in

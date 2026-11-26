@@ -17,6 +17,7 @@ import type { NotificationAction } from "./generated/NotificationAction";
 import type { NotificationItem } from "./generated/NotificationItem";
 import type { NotificationsState } from "./generated/NotificationsState";
 import type { NotificationUrgency } from "./generated/NotificationUrgency";
+import type { SurfaceRuntimeState } from "./generated/SurfaceRuntimeState";
 import type { SwayCommandError as SwayCommandErrorData } from "./generated/SwayCommandError";
 import type { SwayNode, SwayState, SwayWorkspace } from "./generated/sway";
 import type { ThemeState } from "./generated/ThemeState";
@@ -55,6 +56,7 @@ export type {
   NotificationItem,
   NotificationsState,
   NotificationUrgency,
+  SurfaceRuntimeState,
   ThemeState,
   TrayItem,
   TrayMenuItem,
@@ -117,7 +119,13 @@ export type ExecStreamHandle = {
 
 export type WebbarApi = {
   readonly output: string;
+  readonly surface: string;
   focused: Store<boolean>;
+  surfaces: Store<SurfaceRuntimeState[]> & {
+    show: (id: string) => void;
+    hide: (id: string) => void;
+    toggle: (id: string) => void;
+  };
   sway: Store<SwayState> & {
     command: (cmd: string) => Promise<void>;
   };
@@ -341,6 +349,152 @@ function storeView<T, E extends Record<string, unknown>>(
   };
 }
 
+export const MODAL_POPOVER_SELECTOR =
+  ':popover-open:not([popover="manual" i]):not([data-webbar-interactive])';
+
+export const INTERACTIVE_SELECTOR =
+  ':popover-open[popover="manual" i], [data-webbar-interactive]';
+
+export type InteractiveStyleLike = {
+  pointerEvents: string;
+  visibility: string;
+  display?: string;
+};
+
+export type InteractiveElementLike = {
+  getBoundingClientRect: () => {
+    left: number;
+    top: number;
+    width: number;
+    height: number;
+  };
+  getAttribute?: (name: string) => string | null;
+  children?: ArrayLike<InteractiveElementLike>;
+  contains?: (other: unknown) => boolean;
+};
+
+export type InteractiveDocumentLike = {
+  querySelector: (selector: string) => unknown;
+  querySelectorAll: (selector: string) => ArrayLike<InteractiveElementLike>;
+  getAnimations?: () => ArrayLike<{
+    playState?: string;
+    effect?: unknown;
+  }>;
+};
+
+export function hasOpenModalPopover(doc: InteractiveDocumentLike): boolean {
+  try {
+    return doc.querySelector(MODAL_POPOVER_SELECTOR) !== null;
+  } catch {
+    return false;
+  }
+}
+
+export function collectInteractiveRegions(
+  doc: InteractiveDocumentLike,
+  getStyle: (el: InteractiveElementLike) => InteractiveStyleLike,
+): { rects: InputRect[]; tracked: InteractiveElementLike[] } {
+  let nodes: ArrayLike<InteractiveElementLike>;
+  try {
+    nodes = doc.querySelectorAll(INTERACTIVE_SELECTOR);
+  } catch {
+    nodes = doc.querySelectorAll("[data-webbar-interactive]");
+  }
+
+  const seen = new Set<InteractiveElementLike>();
+  const tracked: InteractiveElementLike[] = [];
+  const rects: InputRect[] = [];
+
+  const pushRect = (el: InteractiveElementLike) => {
+    const r = el.getBoundingClientRect();
+    const width = Math.round(r.width);
+    const height = Math.round(r.height);
+    if (width > 0 && height > 0) {
+      rects.push({
+        x: Math.round(r.left),
+        y: Math.round(r.top),
+        width,
+        height,
+      });
+    }
+  };
+
+  const isManualPopover = (el: InteractiveElementLike): boolean =>
+    el.getAttribute?.("popover")?.toLowerCase() === "manual";
+
+  const collectClickableDescendants = (parent: InteractiveElementLike) => {
+    const children = parent.children;
+    if (!children) return;
+    for (let i = 0; i < children.length; i++) {
+      const child = children[i];
+      if (!child || seen.has(child)) continue;
+      const cs = getStyle(child);
+      if (cs.visibility === "hidden" || cs.display === "none") continue;
+      if (cs.pointerEvents !== "none") {
+        seen.add(child);
+        tracked.push(child);
+        pushRect(child);
+      } else {
+        collectClickableDescendants(child);
+      }
+    }
+  };
+
+  for (let i = 0; i < nodes.length; i++) {
+    const el = nodes[i];
+    if (!el || seen.has(el)) continue;
+    const cs = getStyle(el);
+    if (cs.visibility === "hidden" || cs.display === "none") continue;
+    if (cs.pointerEvents !== "none") {
+      seen.add(el);
+      tracked.push(el);
+      pushRect(el);
+    } else if (isManualPopover(el)) {
+      seen.add(el);
+      tracked.push(el);
+      collectClickableDescendants(el);
+    }
+  }
+
+  return { rects, tracked };
+}
+
+export function hasRunningInteractiveAnimation(
+  doc: InteractiveDocumentLike,
+  tracked: readonly InteractiveElementLike[],
+): boolean {
+  if (tracked.length === 0 || typeof doc.getAnimations !== "function") {
+    return false;
+  }
+  let animations: ArrayLike<{
+    playState?: string;
+    effect?: unknown;
+  }>;
+  try {
+    animations = doc.getAnimations();
+  } catch {
+    return false;
+  }
+  for (let i = 0; i < animations.length; i++) {
+    const anim = animations[i];
+    if (!anim || anim.playState !== "running") continue;
+    const target = (
+      anim.effect as { target?: InteractiveElementLike | null } | null | undefined
+    )?.target;
+    if (!target) continue;
+    for (const el of tracked) {
+      if (
+        el === target ||
+        target.contains?.(el) ||
+        el.contains?.(target)
+      ) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
 export function applyThemeToDocument(
   state: ThemeState,
   root: HTMLElement | undefined = typeof document !== "undefined"
@@ -388,6 +542,7 @@ export function createWebbarBridge(
   postMessage: (json: string) => void,
   output = "",
   isNativeOverlayActive: () => boolean = () => false,
+  surface = "bar",
 ): {
   api: WebbarApi;
   receive: (event: Record<string, unknown>) => void;
@@ -500,6 +655,7 @@ export function createWebbarBridge(
 
   const stores = {
     focused: createStore<boolean>(true),
+    surfaces: createStore<SurfaceRuntimeState[]>([]),
     sway: createStore<SwayState>({
       available: false,
       tree: null,
@@ -682,6 +838,8 @@ export function createWebbarBridge(
       stores.theme._update(next);
       applyThemeToDocument(next);
     },
+    surfaces_state: (e) =>
+      stores.surfaces._update((e.surfaces as SurfaceRuntimeState[]) ?? []),
   };
 
   function receive(event: Record<string, unknown>): void {
@@ -842,7 +1000,15 @@ export function createWebbarBridge(
 
   const api: WebbarApi = {
     output,
+    surface,
     focused: storeView(stores.focused, {}),
+    surfaces: storeView(stores.surfaces, {
+      show: (id: string) =>
+        send({ type: "surface_set_visible", id, visible: true }),
+      hide: (id: string) =>
+        send({ type: "surface_set_visible", id, visible: false }),
+      toggle: (id: string) => send({ type: "surface_toggle", id }),
+    }),
     sway: storeView(stores.sway, {
       command: swayCommand,
     }),

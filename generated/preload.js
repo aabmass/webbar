@@ -136,6 +136,96 @@
       ...extra
     };
   }
+  var MODAL_POPOVER_SELECTOR = ':popover-open:not([popover="manual" i]):not([data-webbar-interactive])';
+  var INTERACTIVE_SELECTOR = ':popover-open[popover="manual" i], [data-webbar-interactive]';
+  function hasOpenModalPopover(doc) {
+    try {
+      return doc.querySelector(MODAL_POPOVER_SELECTOR) !== null;
+    } catch {
+      return false;
+    }
+  }
+  function collectInteractiveRegions(doc, getStyle) {
+    let nodes;
+    try {
+      nodes = doc.querySelectorAll(INTERACTIVE_SELECTOR);
+    } catch {
+      nodes = doc.querySelectorAll("[data-webbar-interactive]");
+    }
+    const seen = /* @__PURE__ */ new Set();
+    const tracked = [];
+    const rects = [];
+    const pushRect = (el) => {
+      const r = el.getBoundingClientRect();
+      const width = Math.round(r.width);
+      const height = Math.round(r.height);
+      if (width > 0 && height > 0) {
+        rects.push({
+          x: Math.round(r.left),
+          y: Math.round(r.top),
+          width,
+          height
+        });
+      }
+    };
+    const isManualPopover = (el) => el.getAttribute?.("popover")?.toLowerCase() === "manual";
+    const collectClickableDescendants = (parent) => {
+      const children = parent.children;
+      if (!children) return;
+      for (let i = 0; i < children.length; i++) {
+        const child = children[i];
+        if (!child || seen.has(child)) continue;
+        const cs = getStyle(child);
+        if (cs.visibility === "hidden" || cs.display === "none") continue;
+        if (cs.pointerEvents !== "none") {
+          seen.add(child);
+          tracked.push(child);
+          pushRect(child);
+        } else {
+          collectClickableDescendants(child);
+        }
+      }
+    };
+    for (let i = 0; i < nodes.length; i++) {
+      const el = nodes[i];
+      if (!el || seen.has(el)) continue;
+      const cs = getStyle(el);
+      if (cs.visibility === "hidden" || cs.display === "none") continue;
+      if (cs.pointerEvents !== "none") {
+        seen.add(el);
+        tracked.push(el);
+        pushRect(el);
+      } else if (isManualPopover(el)) {
+        seen.add(el);
+        tracked.push(el);
+        collectClickableDescendants(el);
+      }
+    }
+    return { rects, tracked };
+  }
+  function hasRunningInteractiveAnimation(doc, tracked) {
+    if (tracked.length === 0 || typeof doc.getAnimations !== "function") {
+      return false;
+    }
+    let animations;
+    try {
+      animations = doc.getAnimations();
+    } catch {
+      return false;
+    }
+    for (let i = 0; i < animations.length; i++) {
+      const anim = animations[i];
+      if (!anim || anim.playState !== "running") continue;
+      const target = anim.effect?.target;
+      if (!target) continue;
+      for (const el of tracked) {
+        if (el === target || target.contains?.(el) || el.contains?.(target)) {
+          return true;
+        }
+      }
+    }
+    return false;
+  }
   function applyThemeToDocument(state, root = typeof document !== "undefined" ? document.documentElement : void 0) {
     if (!root || !root.style) {
       return;
@@ -171,7 +261,7 @@
       }
     }
   }
-  function createWebbarBridge(postMessage, output = "", isNativeOverlayActive = () => false) {
+  function createWebbarBridge(postMessage, output = "", isNativeOverlayActive = () => false, surface = "bar") {
     let nextId = 1;
     let explicitOverlayCount = 0;
     let sentOverlayActive = false;
@@ -236,6 +326,7 @@
     }
     const stores = {
       focused: createStore(true),
+      surfaces: createStore([]),
       sway: createStore({
         available: false,
         tree: null,
@@ -397,7 +488,8 @@
         const next = e;
         stores.theme._update(next);
         applyThemeToDocument(next);
-      }
+      },
+      surfaces_state: (e) => stores.surfaces._update(e.surfaces ?? [])
     };
     function receive(event) {
       const type = event.type;
@@ -555,7 +647,13 @@
     }
     const api = {
       output,
+      surface,
       focused: storeView(stores.focused, {}),
+      surfaces: storeView(stores.surfaces, {
+        show: (id) => send({ type: "surface_set_visible", id, visible: true }),
+        hide: (id) => send({ type: "surface_set_visible", id, visible: false }),
+        toggle: (id) => send({ type: "surface_toggle", id })
+      }),
       sway: storeView(stores.sway, {
         command: swayCommand
       }),
@@ -794,24 +892,19 @@
     scheduleInteractiveSync2 = scheduleInteractiveSync;
     const params = new URLSearchParams(window.location.search);
     const output = params.get("output") || "";
+    const surface = params.get("surface") || "bar";
     const wsPort = params.get("wsPort") || params.get("ws") || "9123";
     const wsToken = params.get("wsToken") || params.get("token") || "";
     const query = [
       wsToken && `token=${encodeURIComponent(wsToken)}`,
+      surface && `surface=${encodeURIComponent(surface)}`,
       output && `output=${encodeURIComponent(output)}`
     ].filter(Boolean).join("&");
     const url = `ws://127.0.0.1:${wsPort}${query ? `?${query}` : ""}`;
     const pending = [];
     let ws = null;
     let delay = 500;
-    const INTERACTIVE_SELECTOR = "[data-webbar-interactive]";
-    const hasOpenPopover = () => {
-      try {
-        return document.querySelector(":popover-open:not([data-webbar-interactive])") !== null;
-      } catch {
-        return false;
-      }
-    };
+    const hasOpenPopover = () => hasOpenModalPopover(document);
     const { api, receive, notifyOverlayChange, onConnect, onDisconnect } = createWebbarBridge(
       (json) => {
         if (ws?.readyState === WebSocket.OPEN) {
@@ -821,7 +914,8 @@
         }
       },
       output,
-      hasOpenPopover
+      hasOpenPopover,
+      surface
     );
     let popoverRemovalObserver = null;
     const syncNativePopover = () => {
@@ -848,10 +942,20 @@
     let interactiveRaf = 0;
     const observedInteractive = /* @__PURE__ */ new Set();
     const interactiveResizeObserver = typeof ResizeObserver !== "undefined" ? new ResizeObserver(() => scheduleInteractiveSync()) : null;
+    const hasAnyInteractiveNode = () => {
+      try {
+        return document.querySelector(INTERACTIVE_SELECTOR) !== null;
+      } catch {
+        return document.querySelector("[data-webbar-interactive]") !== null;
+      }
+    };
     const syncInteractiveRegions = () => {
       interactiveRaf = 0;
-      const nodes = document.querySelectorAll(INTERACTIVE_SELECTOR);
-      const currentSet = new Set(nodes);
+      const { rects, tracked } = collectInteractiveRegions(
+        document,
+        (el) => window.getComputedStyle(el)
+      );
+      const currentSet = new Set(tracked);
       if (interactiveResizeObserver) {
         for (const el of observedInteractive) {
           if (!currentSet.has(el)) {
@@ -866,30 +970,19 @@
           }
         }
       }
-      const rects = [];
-      for (const el of nodes) {
-        const r = el.getBoundingClientRect();
-        const width = Math.round(r.width);
-        const height = Math.round(r.height);
-        if (width > 0 && height > 0) {
-          rects.push({
-            x: Math.round(r.left),
-            y: Math.round(r.top),
-            width,
-            height
-          });
-        }
-      }
       const key = rects.map((r) => `${r.x},${r.y},${r.width},${r.height}`).join(";");
       if (key !== lastInteractiveKey) {
         lastInteractiveKey = key;
         api.setInteractiveRegions(rects);
       }
+      if (hasRunningInteractiveAnimation(document, tracked)) {
+        scheduleInteractiveSync();
+      }
     };
     const startInteractiveObserver = () => {
       if (!document.documentElement) return;
       const observer = new MutationObserver(() => {
-        if (observedInteractive.size === 0 && lastInteractiveKey === "" && !document.querySelector(INTERACTIVE_SELECTOR)) {
+        if (observedInteractive.size === 0 && lastInteractiveKey === "" && !hasAnyInteractiveNode()) {
           return;
         }
         scheduleInteractiveSync();
@@ -898,16 +991,26 @@
         childList: true,
         subtree: true,
         attributes: true,
-        attributeFilter: ["data-webbar-interactive", "style", "class", "hidden"]
+        attributeFilter: [
+          "popover",
+          "data-webbar-interactive",
+          "style",
+          "class",
+          "hidden"
+        ]
       });
-      const onMotionEnd = () => {
-        if (observedInteractive.size > 0) {
+      const onMotion = () => {
+        if (observedInteractive.size > 0 || hasAnyInteractiveNode()) {
           scheduleInteractiveSync();
         }
       };
       window.addEventListener("resize", scheduleInteractiveSync);
-      window.addEventListener("transitionend", onMotionEnd, true);
-      window.addEventListener("animationend", onMotionEnd, true);
+      window.addEventListener("transitionrun", onMotion, true);
+      window.addEventListener("transitionend", onMotion, true);
+      window.addEventListener("transitioncancel", onMotion, true);
+      window.addEventListener("animationstart", onMotion, true);
+      window.addEventListener("animationend", onMotion, true);
+      window.addEventListener("animationcancel", onMotion, true);
       syncInteractiveRegions();
     };
     window.webbar = api;

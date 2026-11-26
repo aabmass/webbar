@@ -12,7 +12,7 @@ Let users build a Sway status bar in plain HTML, CSS, and TypeScript/React—wit
 │  User Bar UI (examples/minimal/, examples/sway-full-bar/, etc.)      │
 │  HTML / CSS / TS / React using window.webbar.*                       │
 │  (sway, tray, notifications, audio, bluetooth, network, backlight,   │
-│   theme)                                                             │
+│   theme, surfaces)                                                   │
 └─────────────────────────────────▲────────────────────────────────────┘
                                   │ injected at DocumentStart (or Vite entry)
 ┌─────────────────────────────────┴────────────────────────────────────┐
@@ -23,7 +23,7 @@ Let users build a Sway status bar in plain HTML, CSS, and TypeScript/React—wit
                                   │ JSON over local WebSocket (ws_bridge.rs)
 ┌─────────────────────────────────┴────────────────────────────────────┐
 │  Rust Host (src/*.rs) — 1 shared instance across all monitors        │
-│  gtk4-layer-shell (1 bar/monitor) + shared WebKitWebProcess WebViews │
+│  gtk4-layer-shell (multi-surface) + WebKitGTK 6.0 WebViews           │
 │  - ws_bridge.rs (localhost WS server + SnapshotCache replay on open) │
 │  - bridge.rs (protocol types + SnapshotCache + ts-rs bindings)       │
 │  - sway_ipc.rs (swayipc: tree, workspaces, mode, commands)           │
@@ -41,7 +41,7 @@ Let users build a Sway status bar in plain HTML, CSS, and TypeScript/React—wit
 1. **Unified local WebSocket bridge (`src/ws_bridge.rs`) + TypeScript preload**
    - `preload/src/preload.ts` and `preload/src/index.ts` compile to `generated/preload.js` (injected at `UserScriptInjectionTime::Start` in WebKitGTK) and expose the `@webbar/types` workspace package (shared by all TS/React frontends).
    - Both WebKitGTK bar windows and external browsers (via `--ws-bridge <port>`) talk to the same loopback WebSocket server authenticated by a per-session token (`wsPort`/`wsToken` query params), so every page immediately has `window.webbar` with live Rust backend data.
-   - Additional monitor `WebView` instances attach to an existing live `WebView` via `related_view` so multi-monitor setups share one `WebKitWebProcess`.
+   - All monitor and surface `WebView` instances run inside the single `webbar` host process sharing `WebContext::default()` and the same loopback `ws_bridge`.
 
 2. **System state aggregation in Rust, web-native stores in JS**
    - Instead of pushing raw D-Bus signals or subprocesses into every monitor's `WebView`, Rust runs one shared watcher per subsystem (`audio`, `bluetooth`, `network`, `backlight`, `sway`, `tray`, `notifications`), deduplicates/debounces updates, and caches the latest snapshot in `SnapshotCache` for instant replay on WebSocket connect or Vite HMR reload.
@@ -67,15 +67,15 @@ Let users build a Sway status bar in plain HTML, CSS, and TypeScript/React—wit
    - `ThemeState` is broadcast as `BridgeEvent::Theme` through `SnapshotCache` and `ws_bridge.rs`, so both WebKitGTK bar windows and `--ws-bridge` external browsers receive live updates on `window.webbar.theme` and `:root` (`--desktop-*` semantic tokens, `--gtk-*` GTK named colors, `color-scheme`, and `data-desktop-theme`).
    - In WebKitGTK mode, `src/main.rs` also injects the initial `:root` CSS block as a `UserStyleSheet` (`UserStyleLevel::Author`) so the first paint has zero flash before the WebSocket connects, after which `preload.ts` updates `document.documentElement.style` in place. See [THEMING.md](THEMING.md) for the user-facing variable reference.
 
-7. **Web-standard Popovers and Composable Wayland Input Regions (`src/main.rs`, `preload/src/index.ts`)**
-   - Each monitor's `gtk4-layer-shell` window is sized to full monitor height (or `--overlay-height`) with `exclusive_zone` set to `--height` and a transparent WebView. At `UserStyleLevel::User`, `src/main.rs` injects `--webbar-height: <height>px` on `:root` and `html, body { background: transparent; }` so bars get a transparent canvas and the configured height by default while remaining overridable by author CSS.
-   - `WindowInputState` composes two orthogonal layers:
-     - **Base bar strip + `interactive_rects`** (`[data-webbar-interactive]` / `setInteractiveRegions()`): the top bar strip unioned with floating interactive regions (such as notification toasts, including non-modal `[popover][data-webbar-interactive]`) under `KeyboardMode::None`, keeping them clickable and hoverable without stealing Sway focus.
-     - **Active modal overlay** (`[popover]:not([data-webbar-interactive])` / `acquireOverlay()`): expands to `(0, 0, monitor_width, overlay_height)` under `KeyboardMode::Exclusive` for clicks, `Escape`, and click-outside light-dismiss.
-   - `preload/src/index.ts` automatically tracks native modal `[popover]` elements (via capturing `toggle` events and `:popover-open:not([data-webbar-interactive])`, with a lazy `MutationObserver` while open) and `[data-webbar-interactive]` elements (via `MutationObserver`, `ResizeObserver`, `transitionend`/`animationend`, and `requestAnimationFrame` coalescing), replaying `interactive_rects` on WebSocket reconnect.
+7. **Multi-Surface `gtk4-layer-shell`, Web-Standard Popovers, & Live Wayland Input Masking (`src/surface.rs`, `src/main.rs`, `preload/src/index.ts`)**
+   - `webbar` uses one unified `Vec<ResolvedSurface>` path driven by `webbar.json` (`<dir>/webbar.json` or `<url>/webbar.json` in dev), spawning every declared surface (any edge, anchors, layer `background`/`bottom`/`top`/`overlay`, margins, `exclusive_zone`, keyboard policy, monitor target `all`/`primary`/`focused`/connector list, and initial `visible`).
+   - Every surface window shares `WebContext::default()` and `ws_bridge.rs` with `(surface, output)` identity, and is exposed to frontends via `window.webbar.surface` and `window.webbar.surfaces` (`show`/`hide`/`toggle`) as well as `gio::SimpleAction`s (`surface-show`, `surface-hide`, `surface-toggle`).
+   - `WindowInputState` generalizes composable Wayland `cairo::Region` input masking across `Bar(Top|Bottom|Left|Right)`, `Interactive` (click-through by default), and `Full` modes:
+     - **Non-modal floating elements** (`:popover-open[popover="manual"]` and legacy `[data-webbar-interactive]`) stay clickable/hoverable under `KeyboardMode::None`. Click-through `popover="manual"` containers (`pointer-events: none`) automatically collect rects for their outermost interactive descendants, CSS `pointer-events: none` / `visibility: hidden` immediately releases input capture, and running CSS or Web Animations API animations (`document.getAnimations()`) trigger frame-locked `requestAnimationFrame` syncs.
+     - **Active modal overlays** (`:popover-open:not([popover="manual"]):not([data-webbar-interactive])` / `acquireOverlay()`) expand to the full surface under `KeyboardMode::Exclusive` for clicks, `Escape`, and click-outside light-dismiss. See [SURFACES.md](SURFACES.md) and [webbar.schema.json](webbar.schema.json) for the user-facing authoring guide and manifest schema.
 
 8. **Notification Daemon (`org.freedesktop.Notifications` v1.2) & Host Actions (`src/notifications.rs`, `src/main.rs`)**
    - By default in bar mode, `webbar` claims `org.freedesktop.Notifications` (supporting `GetCapabilities`, `Notify`, `CloseNotification`, `GetServerInformation`, `NotificationClosed` reasons 1–4, `ActionInvoked`, `replaces_id`, `synchronous` / `x-canonical-private-synchronous`, `transient`, `resident`, `value` progress, urgency/Do Not Disturb, 50-item history cap, `quick-xml` markup stripping, newest-first snapshots, `"default"` split to `has_default_action`, and a `Condvar` popup-expiry thread with hover pause/resume that auto-resumes on overlay open, focused-output change, and disconnect).
    - `window.webbar.notifications` exposes a reactive `Store<NotificationsState>` (`{ available, do_not_disturb, unread_count, items }`) plus `activate`, `dismiss`, `hidePopup`, `invokeAction`, `clearAll`, `setDoNotDisturb`, `markAllRead`, `pauseTimeout`, and `resumeTimeout`; `window.webbar.focused` exposes a per-monitor `Store<boolean>` derived from the focused Sway output.
    - Passing `--no-notifications` leaves `org.freedesktop.Notifications` unclaimed (`available: false`); headless `--ws-bridge` skips claiming both D-Bus daemons by default (using `tray::spawn_observer`) unless `--ws-claim-notifications` is passed.
-   - `dev.local.webbar` exposes `gio::SimpleAction`s for remote control (`devtools`, `notifications-toggle-center`, `notifications-toggle-do-not-disturb`, `notifications-dismiss-latest`, `notifications-clear-all`); `notifications-toggle-center` routes `BridgeEvent::HostAction` to the focused Sway output's WebView (falling back to broadcast) via `window.webbar.onHostAction(cb)`. See [NOTIFICATIONS.md](NOTIFICATIONS.md) for the user-facing authoring guide.
+   - `dev.local.webbar` exposes `gio::SimpleAction`s for remote control (`devtools`, `notifications-toggle-center`, `notifications-toggle-do-not-disturb`, `notifications-dismiss-latest`, `notifications-clear-all`, `surface-show`, `surface-hide`, `surface-toggle`); `notifications-toggle-center` routes `BridgeEvent::HostAction` to the focused Sway output's WebView (falling back to broadcast) via `window.webbar.onHostAction(cb)`. See [NOTIFICATIONS.md](NOTIFICATIONS.md) for the user-facing authoring guide.

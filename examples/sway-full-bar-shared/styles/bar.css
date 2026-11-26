@@ -1082,7 +1082,7 @@ button:focus-visible {
 }
 
 .bt-sync-btn:hover:not(:disabled) {
-  color: var(--fg);
+  color: var(--fg-color);
 }
 
 .bt-sync-btn:disabled {
@@ -1116,7 +1116,7 @@ button:focus-visible {
   line-height: 1.3;
   padding: 5px 8px 7px;
   border-radius: var(--radius-sm);
-  background: color-mix(in srgb, var(--fg) 6%, transparent);
+  background: color-mix(in srgb, var(--fg-color) 6%, transparent);
   color: var(--fg-muted);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -2013,14 +2013,30 @@ button:focus-visible {
 /* Floating toast stack */
 .notif-toast-stack {
   position: fixed;
+  inset: auto;
   top: calc(var(--webbar-height, 86px) + 10px);
   right: 12px;
   width: 340px;
+  margin: 0;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: inherit;
+  overflow: visible;
   display: flex;
   flex-direction: column;
   gap: 8px;
   pointer-events: none;
   z-index: 50;
+}
+
+.notif-toast-stack[popover]:not(:popover-open) {
+  display: none;
+}
+
+.notif-toast-slot,
+.notif-toast-item {
+  pointer-events: none;
 }
 
 .notif-toast-slot.is-exiting {

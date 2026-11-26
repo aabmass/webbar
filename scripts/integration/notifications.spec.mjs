@@ -130,7 +130,10 @@ test.describe(`${TARGET_NAME} notifications integration`, () => {
         hasText: "New message",
       });
       await expect(toast).toBeVisible();
-      await expect(toast).toHaveAttribute("data-webbar-interactive", "");
+      await expect(page.locator(".notif-toast-stack")).toHaveAttribute(
+        "popover",
+        "manual",
+      );
       await expect(toast.locator(".notif-body")).toHaveText("Hello & world");
       await expect(toast.getByRole("progressbar")).toHaveAttribute(
         "aria-valuenow",
@@ -157,14 +160,13 @@ test.describe(`${TARGET_NAME} notifications integration`, () => {
         )
         .toEqual({ lastOverlay: false, lastRectsCount: 1 });
 
-      // Opening a non-modal [popover="manual"][data-webbar-interactive] must NOT trigger set_overlay(true)
+      // Opening a standard HTML [popover="manual"] (zero custom attributes) must NOT trigger set_overlay(true)
       await page.evaluate(() => {
         const el = document.createElement("div");
         el.id = "test-non-modal-popover";
         el.setAttribute("popover", "manual");
-        el.setAttribute("data-webbar-interactive", "");
         el.style.cssText =
-          "position:fixed;top:120px;left:20px;width:120px;height:40px;";
+          "position:fixed;inset:auto;margin:0;top:120px;left:20px;width:120px;height:40px;";
         document.body.appendChild(el);
         el.showPopover();
       });
@@ -183,8 +185,65 @@ test.describe(`${TARGET_NAME} notifications integration`, () => {
           }),
         )
         .toEqual({ lastOverlay: false, lastRectsCount: 2 });
+
+      // CSS pointer-events: none must immediately drop the rect from interactive regions
+      await page.evaluate(() => {
+        const el = document.getElementById("test-non-modal-popover");
+        el.style.pointerEvents = "none";
+      });
+      await expect
+        .poll(() =>
+          page.evaluate(() => {
+            const regions = window.__webbarSent.filter(
+              (m) => m.type === "set_interactive_regions",
+            );
+            return regions[regions.length - 1]?.rects?.length ?? 0;
+          }),
+        )
+        .toBe(1);
+
+      // Restore pointer-events first and wait for rect to reappear at y=120
+      await page.evaluate(() => {
+        const el = document.getElementById("test-non-modal-popover");
+        el.style.pointerEvents = "auto";
+      });
+      await expect
+        .poll(() =>
+          page.evaluate(() => {
+            const regions = window.__webbarSent.filter(
+              (m) => m.type === "set_interactive_regions",
+            );
+            const last = regions[regions.length - 1]?.rects ?? [];
+            return last.some((r) => r.x === 20 && r.y === 120);
+          }),
+        )
+        .toBe(true);
+
+      // Now trigger a CSS keyframe animation independently (animationstart -> rAF loop)
+      await page.evaluate(() => {
+        const style = document.createElement("style");
+        style.id = "test-anim-style";
+        style.textContent =
+          "@keyframes wbSlideDown { from { transform: translateY(0px); } to { transform: translateY(40px); } } .wb-slide-down { animation: wbSlideDown 150ms linear forwards; }";
+        document.head.appendChild(style);
+        document
+          .getElementById("test-non-modal-popover")
+          .classList.add("wb-slide-down");
+      });
+      await expect
+        .poll(() =>
+          page.evaluate(() => {
+            const regions = window.__webbarSent.filter(
+              (m) => m.type === "set_interactive_regions",
+            );
+            const last = regions[regions.length - 1]?.rects ?? [];
+            return last.some((r) => r.x === 20 && r.y >= 155);
+          }),
+        )
+        .toBe(true);
       await page.evaluate(() => {
         document.getElementById("test-non-modal-popover")?.remove();
+        document.getElementById("test-anim-style")?.remove();
       });
 
       // 2. Click action button -> emits ActivationToken + ActionInvoked + NotificationClosed(2)

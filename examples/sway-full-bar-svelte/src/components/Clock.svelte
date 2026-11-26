@@ -104,3 +104,125 @@
     </div>
   </div>
 </Popover>
+
+<style>
+/* Clock: big time over a quiet date line */
+.clock {
+  flex-direction: column;
+  gap: 2px;
+  min-width: 200px;
+  padding: 0 20px;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.1;
+}
+
+.clock.bar-btn {
+  background: transparent;
+}
+
+.clock.bar-btn:hover {
+  background: var(--surface-color);
+}
+
+.clock.bar-btn.is-open {
+  background: var(--surface-hover);
+}
+
+.clock-time {
+  font-size: 20px;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+}
+
+.clock-seconds {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--fg-muted);
+}
+
+.clock-ampm,
+.clock-tz {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--fg-muted);
+  margin-left: 4px;
+}
+
+.clock-date {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--fg-muted);
+}
+
+/* Calendar */
+.calendar {
+  width: 260px;
+}
+
+.calendar-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
+.cal-title {
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.cal-nav {
+  width: 28px;
+  height: 28px;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--fg-muted);
+  font-size: 18px;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.cal-nav:hover {
+  background: var(--surface-hover);
+  color: var(--fg-color);
+}
+
+.calendar-grid {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 2px;
+  text-align: center;
+}
+
+.cal-weekday {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--fg-faint);
+  padding: 4px 0;
+}
+
+.cal-day {
+  font-size: 12px;
+  font-weight: 500;
+  padding: 6px 0;
+  border-radius: var(--radius-sm);
+  font-variant-numeric: tabular-nums;
+}
+
+.cal-day.is-weekend {
+  color: var(--fg-muted);
+}
+
+.cal-day.is-outside {
+  color: var(--fg-faint);
+  opacity: 0.55;
+}
+
+.cal-day.is-today {
+  background: var(--accent-color);
+  color: var(--accent-fg);
+  font-weight: 700;
+}
+</style>

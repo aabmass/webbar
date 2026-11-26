@@ -1,0 +1,289 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "ShellConfig",
+  "description": "Root manifest (`webbar.json`) describing all layer-shell surfaces hosted by `webbar`.",
+  "type": "object",
+  "required": [
+    "surfaces"
+  ],
+  "properties": {
+    "surfaces": {
+      "description": "Ordered list of layer-shell surfaces to host (must be non-empty; unique `id`s).",
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/SurfaceSpec"
+      },
+      "minItems": 1
+    }
+  },
+  "definitions": {
+    "ExclusiveZone": {
+      "anyOf": [
+        {
+          "description": "Pixel thickness to reserve (0 for floating, -1 to ignore other exclusive zones).",
+          "type": "integer",
+          "format": "int32",
+          "minimum": -1.0
+        },
+        {
+          "description": "Named mode: `\"auto\"` or `\"ignore\"`.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/ExclusiveZoneKeyword"
+            }
+          ]
+        }
+      ]
+    },
+    "ExclusiveZoneKeyword": {
+      "type": "string",
+      "enum": [
+        "auto",
+        "ignore"
+      ]
+    },
+    "InputMode": {
+      "description": "Wayland pointer input-masking strategy for a surface.",
+      "oneOf": [
+        {
+          "description": "Captures the anchored edge strip plus open `popover=\"manual\"` / `[data-webbar-interactive]` rects.",
+          "type": "string",
+          "enum": [
+            "bar"
+          ]
+        },
+        {
+          "description": "Click-through everywhere except open `popover=\"manual\"` / `[data-webbar-interactive]` rects.",
+          "type": "string",
+          "enum": [
+            "interactive"
+          ]
+        },
+        {
+          "description": "Captures pointer input across the entire surface bounds.",
+          "type": "string",
+          "enum": [
+            "full"
+          ]
+        }
+      ]
+    },
+    "KeyboardPolicy": {
+      "description": "Wayland layer-shell keyboard interactivity policy.",
+      "type": "string",
+      "enum": [
+        "none",
+        "on_demand",
+        "exclusive"
+      ]
+    },
+    "LayerKind": {
+      "description": "Wayland `zwlr_layer_shell_v1` stacking layer.",
+      "type": "string",
+      "enum": [
+        "background",
+        "bottom",
+        "top",
+        "overlay"
+      ]
+    },
+    "Margins": {
+      "description": "Outer layer-shell margins in pixels.",
+      "type": "object",
+      "properties": {
+        "bottom": {
+          "default": 0,
+          "type": "integer",
+          "format": "int32"
+        },
+        "left": {
+          "default": 0,
+          "type": "integer",
+          "format": "int32"
+        },
+        "right": {
+          "default": 0,
+          "type": "integer",
+          "format": "int32"
+        },
+        "top": {
+          "default": 0,
+          "type": "integer",
+          "format": "int32"
+        }
+      }
+    },
+    "MonitorTarget": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/MonitorTargetKeyword"
+        },
+        {
+          "description": "Explicit list of Wayland output connector names (e.g. `[\"DP-1\", \"HDMI-A-1\"]`).",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      ]
+    },
+    "MonitorTargetKeyword": {
+      "type": "string",
+      "enum": [
+        "all",
+        "primary",
+        "focused"
+      ]
+    },
+    "SurfaceEdge": {
+      "description": "Screen edge used for bar presets and explicit layer-shell anchors.",
+      "type": "string",
+      "enum": [
+        "top",
+        "bottom",
+        "left",
+        "right"
+      ]
+    },
+    "SurfaceSpec": {
+      "description": "Configuration for a single Wayland layer-shell surface in `webbar.json`.",
+      "type": "object",
+      "required": [
+        "id"
+      ],
+      "properties": {
+        "anchors": {
+          "description": "Explicit layer-shell anchors; overrides `edge` defaults. Empty list centers the surface.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/definitions/SurfaceEdge"
+          }
+        },
+        "edge": {
+          "description": "Convenience edge preset (`top`, `bottom`, `left`, `right`); implies edge anchors and `input_mode: \"bar\"`.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/SurfaceEdge"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "entry": {
+          "description": "Optional HTML entry path relative to `--dir` or `--url` (defaults to `index.html`).",
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "exclusive_zone": {
+          "description": "Exclusive zone reservation (defaults to bar thickness for `bar` surfaces, `0` otherwise).",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ExclusiveZone"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "height": {
+          "description": "Explicit surface height in pixels (positive integer).",
+          "default": null,
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int32",
+          "minimum": 1.0
+        },
+        "id": {
+          "description": "Unique surface identifier (ASCII alphanumeric, `-`, or `_`), exposed as `window.webbar.surface`.",
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]+$"
+        },
+        "input_mode": {
+          "description": "Pointer input-masking mode (defaults to `\"bar\"` when `edge` is set, otherwise `\"full\"`).",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/InputMode"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "keyboard": {
+          "description": "Keyboard interactivity policy when no modal overlay is active (default: `\"none\"`).",
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeyboardPolicy"
+            }
+          ]
+        },
+        "layer": {
+          "description": "Wayland layer-shell stacking layer (default: `\"top\"`).",
+          "allOf": [
+            {
+              "$ref": "#/definitions/LayerKind"
+            }
+          ]
+        },
+        "margins": {
+          "description": "Outer layer-shell margins in pixels.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/Margins"
+            }
+          ]
+        },
+        "monitors": {
+          "description": "Target monitors for this surface (default: `\"all\"`).",
+          "allOf": [
+            {
+              "$ref": "#/definitions/MonitorTarget"
+            }
+          ]
+        },
+        "namespace": {
+          "description": "Wayland layer-shell namespace (defaults to `\"webbar-<id>\"`).",
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "overlay_extent": {
+          "description": "Maximum popover/overlay extent in pixels for `input_mode: \"bar\"` (defaults to full monitor dimension).",
+          "default": null,
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int32",
+          "minimum": 1.0
+        },
+        "visible": {
+          "description": "Whether the surface is shown on startup (default: `true`).",
+          "default": true,
+          "type": "boolean"
+        },
+        "width": {
+          "description": "Explicit surface width in pixels (positive integer).",
+          "default": null,
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int32",
+          "minimum": 1.0
+        }
+      }
+    }
+  }
+}

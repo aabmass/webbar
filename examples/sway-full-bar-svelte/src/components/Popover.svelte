@@ -25,6 +25,7 @@
   });
 
   function popoverLayer(panel: HTMLDivElement) {
+    const releaseOverlay = window.webbar.acquireOverlay();
     if (typeof panel.showPopover === "function") {
       try {
         panel.showPopover();
@@ -78,6 +79,7 @@
       // in the top layer (so preload's :popover-open overlay tracking stays
       // active) during the close animation.
       destroy() {
+        releaseOverlay();
         window.removeEventListener("resize", updatePosition);
         window.removeEventListener("keydown", onKeyDown);
         window.removeEventListener("pointerdown", onPointerDown, true);

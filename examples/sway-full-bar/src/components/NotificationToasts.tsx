@@ -32,6 +32,7 @@ export function NotificationToasts({ hidden }: { hidden: boolean }) {
       : [],
   );
   const timersRef = useRef(new Map<number, number>());
+  const stackRef = useRef<HTMLDivElement | null>(null);
   const slotRefs = useRef(new Map<number, HTMLDivElement>());
   const prevTopsRef = useRef(new Map<number, number>());
 
@@ -128,11 +129,25 @@ export function NotificationToasts({ hidden }: { hidden: boolean }) {
     return () => window.clearInterval(timer);
   }, [show]);
 
+  useLayoutEffect(() => {
+    const stack = stackRef.current;
+    if (!show || !stack) return;
+    try {
+      if (!stack.matches(":popover-open")) {
+        stack.showPopover();
+      }
+    } catch {
+      // Fallback for environments without Popover API
+    }
+  }, [show]);
+
   if (!show) return null;
 
   return (
     <div
+      ref={stackRef}
       className="notif-toast-stack"
+      popover="manual"
       role="region"
       aria-label="Notification popups"
     >

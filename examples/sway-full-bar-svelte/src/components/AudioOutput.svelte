@@ -368,3 +368,284 @@
     </div>
   </div>
 </Popover>
+
+<style>
+/* Audio popover */
+.audio-popover {
+  display: flex;
+  flex-direction: column;
+  width: 320px;
+  gap: 8px;
+}
+
+.audio-header {
+  padding: 0 2px 8px;
+  border-bottom: 1px solid var(--panel-border);
+}
+
+.audio-heading {
+  min-width: 0;
+  flex: 1;
+}
+
+.audio-subtitle {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.audio-mixer-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 28px;
+  padding: 0 10px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-color);
+  color: var(--fg-muted);
+  font-size: 12px;
+  font-weight: 600;
+  flex: none;
+}
+
+.audio-mixer-btn:hover {
+  background: var(--surface-hover);
+  color: var(--fg-color);
+}
+
+.audio-body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  max-height: min(560px, calc(100vh - 160px));
+  overflow-y: auto;
+  overflow-x: hidden;
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in srgb, var(--fg-color) 16%, transparent) transparent;
+}
+
+.audio-body::-webkit-scrollbar {
+  width: 5px;
+}
+
+.audio-body::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.audio-body::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--fg-color) 16%, transparent);
+  border-radius: 999px;
+}
+
+.audio-body::-webkit-scrollbar-button {
+  display: none;
+}
+
+.audio-section {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.audio-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.audio-section-label {
+  font-size: 10.5px;
+  font-weight: 700;
+  color: var(--fg-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  padding: 0 4px;
+}
+
+.audio-collapse-btn {
+  padding: 2px 6px;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--accent-color);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.audio-collapse-btn:hover {
+  background: var(--accent-soft);
+}
+
+.audio-slider-card {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-color);
+}
+
+.audio-active-name {
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--fg-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.audio-slider-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.audio-mute-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--fg-muted);
+  flex: none;
+}
+
+.audio-mute-btn:hover:not(:disabled) {
+  background: var(--surface-hover);
+  color: var(--fg-color);
+}
+
+.audio-mute-btn.is-muted {
+  color: var(--accent-red);
+  background: var(--red-soft);
+}
+
+.audio-slider {
+  flex: 1;
+  width: auto;
+  min-width: 0;
+}
+
+.audio-slider.is-muted {
+  opacity: 0.55;
+  background: linear-gradient(
+    to right,
+    var(--accent-red) 0 var(--fill),
+    var(--surface-active) var(--fill) 100%
+  );
+}
+
+.audio-device-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.audio-device-btn {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 32px;
+  padding: 6px 8px;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--fg-color);
+  font-size: 12.5px;
+  font-weight: 500;
+  line-height: 1.3;
+  text-align: left;
+}
+
+.audio-device-btn:active {
+  scale: 0.99;
+}
+
+.audio-device-btn:hover {
+  background: var(--surface-hover);
+}
+
+.audio-device-btn.is-default {
+  background: var(--accent-soft);
+  color: var(--fg-color);
+  font-weight: 600;
+}
+
+.audio-device-btn.is-default:hover {
+  background: color-mix(in srgb, var(--accent-color) 22%, transparent);
+}
+
+.audio-device-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex: none;
+  background: var(--fg-faint);
+}
+
+.audio-device-btn.is-default .audio-device-dot {
+  background: var(--accent-color);
+  box-shadow: 0 0 6px var(--accent-glow);
+}
+
+.audio-device-name {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: break-word;
+  white-space: normal;
+}
+
+.audio-device-meta {
+  flex: none;
+  font-size: 11px;
+  color: var(--fg-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.audio-device-meta.is-muted {
+  color: var(--accent-red);
+}
+
+.audio-stream-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.audio-stream-card {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-color);
+}
+
+.audio-stream-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+}
+
+.audio-stream-app {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--fg-color);
+  flex: none;
+}
+
+.audio-stream-media {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--fg-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+</style>

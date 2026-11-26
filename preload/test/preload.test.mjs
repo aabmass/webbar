@@ -1,10 +1,15 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  INTERACTIVE_SELECTOR,
+  MODAL_POPOVER_SELECTOR,
   SwayCommandError,
   applyThemeToDocument,
+  collectInteractiveRegions,
   createStore,
   createWebbarBridge,
+  hasOpenModalPopover,
+  hasRunningInteractiveAnimation,
 } from "../dist/preload.mjs";
 
 // Minimal Sway tree node; only the fields the helpers and reconcile look at.
@@ -1294,4 +1299,180 @@ test("notification actions, onHostAction, and setInteractiveRegions reconnect re
   sent.length = 0;
   onConnect();
   assert.deepEqual(sent, [{ type: "set_overlay", active: false }]);
+});
+
+test("hasOpenModalPopover distinguishes popover=auto from popover=manual", () => {
+  assert.match(MODAL_POPOVER_SELECTOR, /:popover-open/);
+  assert.match(MODAL_POPOVER_SELECTOR, /:not\(\[popover="manual"/i);
+  assert.match(MODAL_POPOVER_SELECTOR, /:not\(\[data-webbar-interactive\]\)/);
+
+  const modalDoc = {
+    querySelector(sel) {
+      assert.equal(sel, MODAL_POPOVER_SELECTOR);
+      return {};
+    },
+    querySelectorAll() {
+      return [];
+    },
+  };
+  assert.equal(hasOpenModalPopover(modalDoc), true);
+
+  const manualOnlyDoc = {
+    querySelector(sel) {
+      assert.equal(sel, MODAL_POPOVER_SELECTOR);
+      return null;
+    },
+    querySelectorAll() {
+      return [];
+    },
+  };
+  assert.equal(hasOpenModalPopover(manualOnlyDoc), false);
+});
+
+test("collectInteractiveRegions respects pointer-events, visibility, click-through manual popover stacks, and legacy data-webbar-interactive", () => {
+  const mkEl = ({
+    rect,
+    popover = null,
+    pointerEvents = "auto",
+    visibility = "visible",
+    display = "block",
+    children = [],
+  }) => {
+    const el = {
+      _style: { pointerEvents, visibility, display },
+      children,
+      getBoundingClientRect: () => rect,
+      getAttribute: (name) => (name === "popover" ? popover : null),
+      contains(other) {
+        if (other === el) return true;
+        return children.some((c) => c === other || c.contains(other));
+      },
+    };
+    return el;
+  };
+
+  const activeToast = mkEl({
+    rect: { left: 1560.4, top: 96.2, width: 340, height: 84 },
+    pointerEvents: "auto",
+  });
+  const exitingToast = mkEl({
+    rect: { left: 1560, top: 188, width: 340, height: 84 },
+    pointerEvents: "none",
+  });
+  const hiddenToast = mkEl({
+    rect: { left: 1560, top: 280, width: 340, height: 84 },
+    visibility: "hidden",
+  });
+  const slot1 = mkEl({
+    rect: { left: 1560, top: 96, width: 340, height: 84 },
+    pointerEvents: "none",
+    children: [activeToast],
+  });
+  const slot2 = mkEl({
+    rect: { left: 1560, top: 188, width: 340, height: 84 },
+    pointerEvents: "none",
+    children: [exitingToast],
+  });
+  const slot3 = mkEl({
+    rect: { left: 1560, top: 280, width: 340, height: 84 },
+    pointerEvents: "none",
+    children: [hiddenToast],
+  });
+  const manualStack = mkEl({
+    rect: { left: 1560, top: 96, width: 340, height: 400 },
+    popover: "manual",
+    pointerEvents: "none",
+    children: [slot1, slot2, slot3],
+  });
+  const manualOsd = mkEl({
+    rect: { left: 860, top: 900, width: 200, height: 48 },
+    popover: "manual",
+    pointerEvents: "auto",
+  });
+  const legacyWidget = mkEl({
+    rect: { left: 20, top: 120, width: 100, height: 40 },
+    pointerEvents: "auto",
+  });
+  const legacyExiting = mkEl({
+    rect: { left: 20, top: 170, width: 100, height: 40 },
+    pointerEvents: "none",
+  });
+
+  const doc = {
+    querySelector: () => null,
+    querySelectorAll(sel) {
+      assert.equal(sel, INTERACTIVE_SELECTOR);
+      return [manualStack, manualOsd, legacyWidget, legacyExiting];
+    },
+    getAnimations() {
+      return [
+        { playState: "running", effect: { target: slot1 } },
+      ];
+    },
+  };
+
+  const { rects, tracked } = collectInteractiveRegions(doc, (el) => el._style);
+  assert.deepEqual(rects, [
+    { x: 1560, y: 96, width: 340, height: 84 },
+    { x: 860, y: 900, width: 200, height: 48 },
+    { x: 20, y: 120, width: 100, height: 40 },
+  ]);
+
+  // Running animation on ancestor slot1 of tracked activeToast keeps rAF active
+  assert.equal(hasRunningInteractiveAnimation(doc, tracked), true);
+
+  // Finished animation stops the rAF loop
+  const idleDoc = {
+    ...doc,
+    getAnimations: () => [{ playState: "finished", effect: { target: slot1 } }],
+  };
+  assert.equal(hasRunningInteractiveAnimation(idleDoc, tracked), false);
+});
+
+test("window.webbar.surface and window.webbar.surfaces store/actions work", () => {
+  const sent = [];
+  const { api, receive } = createWebbarBridge(
+    (json) => sent.push(JSON.parse(json)),
+    "DP-1",
+    () => false,
+    "dock",
+  );
+
+  assert.equal(api.surface, "dock");
+  assert.deepEqual(api.surfaces.get(), []);
+
+  let notifyCount = 0;
+  let lastChanged = null;
+  const unsub = api.surfaces.subscribe(() => {
+    notifyCount += 1;
+  });
+  const unsubChange = api.surfaces.onChange((val) => {
+    lastChanged = val;
+  });
+
+  receive({
+    type: "surfaces_state",
+    surfaces: [
+      { id: "bar", visible: true, layer: "top", anchors: ["top", "left", "right"] },
+      { id: "launcher", visible: false, layer: "overlay", anchors: [] },
+    ],
+  });
+  assert.equal(notifyCount, 1);
+  assert.equal(lastChanged.length, 2);
+  assert.equal(api.surfaces.get().length, 2);
+  assert.equal(api.surfaces.get()[1].visible, false);
+  unsub();
+  unsubChange();
+
+  const { api: defaultApi } = createWebbarBridge(() => {}, "DP-1", () => false);
+  assert.equal(defaultApi.surface, "bar");
+
+  api.surfaces.show("launcher");
+  api.surfaces.hide("bar");
+  api.surfaces.toggle("launcher");
+  assert.deepEqual(sent, [
+    { type: "surface_set_visible", id: "launcher", visible: true },
+    { type: "surface_set_visible", id: "bar", visible: false },
+    { type: "surface_toggle", id: "launcher" },
+  ]);
 });

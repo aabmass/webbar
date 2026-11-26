@@ -50,6 +50,7 @@ export function Popover({
     if (!open) return;
     const panel = panelRef.current;
     if (!panel || typeof panel.showPopover !== "function") return;
+    const releaseOverlay = window.webbar.acquireOverlay();
     try {
       panel.showPopover();
     } catch {
@@ -65,6 +66,7 @@ export function Popover({
     window.addEventListener("resize", updatePosition);
 
     return () => {
+      releaseOverlay();
       window.removeEventListener("resize", updatePosition);
       try {
         if (panel.matches(":popover-open")) {

@@ -8,6 +8,7 @@ mod icons;
 mod network;
 mod notifications;
 mod process_bridge;
+mod surface;
 mod sway_ipc;
 mod sway_state;
 mod theme;
@@ -21,13 +22,12 @@ use std::path::{Component, Path, PathBuf};
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 
-use gtk4::cairo;
 use gtk4::gdk::{self, Monitor, RGBA};
 use gtk4::gio::{self, MemoryInputStream};
 use gtk4::glib;
 use gtk4::prelude::*;
 use gtk4::{Application, ApplicationWindow};
-use gtk4_layer_shell::{Edge, KeyboardMode, Layer, LayerShell};
+use gtk4_layer_shell::LayerShell;
 use webkit6::prelude::*;
 use webkit6::{
     LoadEvent, UserContentInjectedFrames, UserContentManager, UserScript,
@@ -41,18 +41,54 @@ use crate::bridge::{BridgeEvent, BridgeRequest, SendEvent, SnapshotCache};
 use crate::dbus_bridge::DbusBridge;
 use crate::notifications::NotificationStore;
 use crate::process_bridge::ProcessBridge;
+use crate::surface::{
+    load_shell_config_from_dir, load_shell_config_from_url, MonitorTarget, ResolvedSurface,
+    WindowInputState,
+};
+use crate::ws_bridge::ClientIdentity;
 
-const DEFAULT_BAR_HEIGHT: i32 = 34;
 const PRELOAD_JS: &str = include_str!("../generated/preload.js");
+const FOCUSED_WINDOW_SLOT: &str = "__focused__";
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct WindowKey {
+    surface_id: String,
+    output: String,
+}
 
 struct WindowHandle {
-    window: glib::WeakRef<ApplicationWindow>,
+    window: ApplicationWindow,
     input_state: Rc<RefCell<WindowInputState>>,
+    monitors_target: MonitorTarget,
+}
+
+struct SurfaceRegistry {
+    specs: Vec<ResolvedSurface>,
+    send_event: Option<SendEvent>,
+    focused_output: Option<Arc<Mutex<Option<String>>>>,
+}
+
+impl SurfaceRegistry {
+    fn new() -> Self {
+        Self {
+            specs: Vec::new(),
+            send_event: None,
+            focused_output: None,
+        }
+    }
+
+    fn emit_state(&self) {
+        if let Some(send) = &self.send_event {
+            let surfaces = self.specs.iter().map(ResolvedSurface::runtime_state).collect();
+            send(BridgeEvent::SurfacesState { surfaces });
+        }
+    }
 }
 
 thread_local! {
     static WEB_VIEWS: RefCell<Vec<glib::WeakRef<WebView>>> = const { RefCell::new(Vec::new()) };
-    static WINDOWS: RefCell<HashMap<String, WindowHandle>> = RefCell::new(HashMap::new());
+    static WINDOWS: RefCell<HashMap<WindowKey, WindowHandle>> = RefCell::new(HashMap::new());
+    static SURFACES: RefCell<SurfaceRegistry> = RefCell::new(SurfaceRegistry::new());
 }
 
 #[derive(Clone)]
@@ -64,8 +100,6 @@ enum Source {
 #[derive(Clone)]
 struct Config {
     source: Option<Source>,
-    height: i32,
-    overlay_height: Option<i32>,
     replace: bool,
     devtools: bool,
     notifications: bool,
@@ -82,8 +116,6 @@ impl Config {
     fn from_iter<I: IntoIterator<Item = String>>(args: I) -> Result<Self, String> {
         let mut dir: Option<PathBuf> = None;
         let mut url: Option<String> = None;
-        let mut height: i32 = DEFAULT_BAR_HEIGHT;
-        let mut overlay_height: Option<i32> = None;
         let mut replace = false;
         let mut devtools = false;
         let mut notifications = true;
@@ -100,23 +132,6 @@ impl Config {
                 "--url" => {
                     let val = args.next().ok_or("missing value for --url")?;
                     url = Some(val);
-                }
-                "--height" => {
-                    let val = args.next().ok_or("missing value for --height")?;
-                    height = val
-                        .parse::<i32>()
-                        .ok()
-                        .filter(|&h| h > 0)
-                        .ok_or("invalid --height (must be a positive integer)")?;
-                }
-                "--overlay-height" => {
-                    let val = args.next().ok_or("missing value for --overlay-height")?;
-                    let parsed = val
-                        .parse::<i32>()
-                        .ok()
-                        .filter(|&h| h > 0)
-                        .ok_or("invalid --overlay-height (must be a positive integer)")?;
-                    overlay_height = Some(parsed);
                 }
                 "--ws-bridge" => {
                     let val = args.next().ok_or("missing value for --ws-bridge")?;
@@ -153,8 +168,6 @@ impl Config {
         };
         Ok(Self {
             source,
-            height,
-            overlay_height,
             replace,
             devtools,
             notifications,
@@ -162,6 +175,14 @@ impl Config {
             ws_token,
             ws_claim_notifications,
         })
+    }
+
+    fn resolve_surfaces(&self) -> Result<Vec<ResolvedSurface>, String> {
+        match &self.source {
+            Some(Source::Dir(dir)) => load_shell_config_from_dir(dir),
+            Some(Source::Url(url)) => load_shell_config_from_url(url),
+            None => Ok(Vec::new()),
+        }
     }
 
     fn application_flags(&self) -> gio::ApplicationFlags {
@@ -274,7 +295,7 @@ impl HostServices {
 
     fn dispatch(
         &self,
-        output: Option<&str>,
+        identity: &ClientIdentity,
         req: BridgeRequest,
         dbus: &DbusBridge,
         processes: &ProcessBridge,
@@ -424,33 +445,129 @@ impl HostServices {
                 tray::menu_event(bus, menu_path, item_id);
             }
             BridgeRequest::SetInteractiveRegions { rects } => {
-                update_window_input_state(output, |s| s.set_interactive_rects(rects));
+                update_window_input_state(identity, |s| s.set_interactive_rects(rects));
             }
             BridgeRequest::SetOverlay { active } => {
                 if active {
                     self.notifications.resume_all_paused();
                 }
-                update_window_input_state(output, move |s| s.set_overlay(active));
+                update_window_input_state(identity, move |s| s.set_overlay(active));
+            }
+            BridgeRequest::SurfaceSetVisible { id, visible } => {
+                glib::idle_add_once(move || set_surface_visible(&id, visible));
+            }
+            BridgeRequest::SurfaceToggle { id } => {
+                glib::idle_add_once(move || toggle_surface_visible(&id));
             }
         }
     }
 }
 
-fn update_window_input_state<F>(output: Option<&str>, f: F)
+fn update_window_input_state<F>(identity: &ClientIdentity, f: F)
 where
     F: FnOnce(&mut WindowInputState) + Send + 'static,
 {
-    if let Some(output) = output.map(str::to_owned) {
-        glib::idle_add_once(move || {
-            WINDOWS.with(|cell| {
-                if let Some(handle) = cell.borrow().get(&output) {
-                    f(&mut handle.input_state.borrow_mut());
-                    if let Some(win) = handle.window.upgrade() {
-                        apply_window_input_state(&win, &handle.input_state.borrow());
+    let surface_id = identity.surface.clone();
+    let output = identity.output.clone();
+    if surface_id.is_none() && output.is_none() {
+        return;
+    }
+    glib::idle_add_once(move || {
+        WINDOWS.with(|cell| {
+            let map = cell.borrow();
+            let handle = match (&surface_id, &output) {
+                (Some(sid), Some(out)) => map
+                    .get(&WindowKey {
+                        surface_id: sid.clone(),
+                        output: out.clone(),
+                    })
+                    .or_else(|| {
+                        map.get(&WindowKey {
+                            surface_id: sid.clone(),
+                            output: FOCUSED_WINDOW_SLOT.to_string(),
+                        })
+                    }),
+                (Some(sid), None) => map.iter().find(|(k, _)| k.surface_id == *sid).map(|(_, h)| h),
+                (None, Some(out)) => map.iter().find(|(k, _)| k.output == *out).map(|(_, h)| h),
+                (None, None) => None,
+            };
+            if let Some(handle) = handle {
+                f(&mut handle.input_state.borrow_mut());
+                apply_window_input_state(&handle.window, &handle.input_state.borrow());
+            }
+        });
+    });
+}
+
+fn find_monitor_by_connector(connector: Option<&str>) -> Option<Monitor> {
+    let display = gdk::Display::default()?;
+    let monitors = display.monitors();
+    if let Some(target) = connector {
+        for i in 0..monitors.n_items() {
+            if let Some(mon) = monitors.item(i).and_then(|o| o.downcast::<Monitor>().ok()) {
+                if mon.connector().as_deref() == Some(target) {
+                    return Some(mon);
+                }
+            }
+        }
+    }
+    monitors.item(0).and_then(|o| o.downcast::<Monitor>().ok())
+}
+
+fn set_surface_visible(surface_id: &str, visible: bool) {
+    let focused_output = SURFACES.with(|cell| {
+        let mut reg = cell.borrow_mut();
+        let spec = reg.specs.iter_mut().find(|s| s.id == surface_id)?;
+        spec.visible = visible;
+        reg.emit_state();
+        Some(
+            reg.focused_output
+                .as_ref()
+                .and_then(|f| f.lock().unwrap().clone()),
+        )
+    });
+    let Some(focused_output) = focused_output else {
+        return;
+    };
+
+    WINDOWS.with(|cell| {
+        for (key, handle) in cell.borrow().iter() {
+            if key.surface_id != surface_id {
+                continue;
+            }
+            let win = &handle.window;
+            if visible {
+                if handle.monitors_target == MonitorTarget::Focused {
+                    if let Some(mon) = find_monitor_by_connector(focused_output.as_deref()) {
+                        let g = mon.geometry();
+                        let (w, h) = handle
+                            .input_state
+                            .borrow_mut()
+                            .update_monitor_geometry(g.width(), g.height());
+                        win.set_monitor(Some(&mon));
+                        win.set_default_size(w, h);
                     }
                 }
-            });
-        });
+                win.set_visible(true);
+                win.present();
+                apply_window_input_state(win, &handle.input_state.borrow());
+            } else {
+                win.set_visible(false);
+            }
+        }
+    });
+}
+
+fn toggle_surface_visible(surface_id: &str) {
+    let next = SURFACES.with(|cell| {
+        cell.borrow()
+            .specs
+            .iter()
+            .find(|s| s.id == surface_id)
+            .map(|spec| !spec.visible)
+    });
+    if let Some(visible) = next {
+        set_surface_visible(surface_id, visible);
     }
 }
 
@@ -463,6 +580,7 @@ fn start_ws_bridge(
     theme::ThemeState,
     Arc<HostServices>,
     ws_bridge::WsBroadcaster,
+    SendEvent,
 ) {
     let snapshots = SnapshotCache::new();
     let broadcaster = ws_bridge::WsBroadcaster::new();
@@ -479,7 +597,7 @@ fn start_ws_bridge(
     };
 
     let (services, initial_theme) = HostServices::start(
-        send_event,
+        send_event.clone(),
         claim_dbus_servers,
         (claim_dbus_servers && config.notifications) || config.ws_claim_notifications,
     );
@@ -496,8 +614,8 @@ fn start_ws_bridge(
         token.clone(),
         broadcaster.clone(),
         snapshots,
-        move |output, req, client_dbus, client_procs, client_send| {
-            dispatch_services.dispatch(output, req, client_dbus, client_procs, client_send);
+        move |identity, req, client_dbus, client_procs, client_send| {
+            dispatch_services.dispatch(identity, req, client_dbus, client_procs, client_send);
         },
         move || {
             disconnect_services.notifications.resume_all_paused();
@@ -509,14 +627,14 @@ fn start_ws_bridge(
             std::process::exit(1);
         }
     };
-    (bound_port, token, initial_theme, services, broadcaster)
+    (bound_port, token, initial_theme, services, broadcaster, send_event)
 }
 
 fn main() {
     let config = match Config::from_args() {
         Ok(c) => c,
         Err(err) => {
-            eprintln!("webbar: {err}\nUsage: webbar (--dir <path> | --url <url>) [--height <px>] [--overlay-height <px>] [--replace] [--devtools] [--no-notifications]");
+            eprintln!("webbar: {err}\nUsage: webbar (--dir <path> | --url <url>) [--replace] [--devtools] [--no-notifications]");
             std::process::exit(1);
         }
     };
@@ -539,11 +657,28 @@ fn main() {
 }
 
 fn activate(app: &Application, config: &Config) {
+    let surfaces = match config.resolve_surfaces() {
+        Ok(s) => s,
+        Err(err) => {
+            eprintln!("webbar: {err}");
+            std::process::exit(1);
+        }
+    };
+
     if let Some(Source::Dir(dir)) = &config.source {
         register_webbar_scheme(dir.clone());
     }
 
-    let (ws_port, ws_token, initial_theme, services, broadcaster) = start_ws_bridge(config, true);
+    let (ws_port, ws_token, initial_theme, services, broadcaster, send_event) =
+        start_ws_bridge(config, true);
+
+    SURFACES.with(|cell| {
+        let mut reg = cell.borrow_mut();
+        reg.specs = surfaces.clone();
+        reg.send_event = Some(send_event.clone());
+        reg.focused_output = Some(Arc::clone(&services.focused_output));
+        reg.emit_state();
+    });
 
     let Some(display) = gdk::Display::default() else {
         eprintln!("webbar: no GDK display available");
@@ -561,51 +696,144 @@ fn activate(app: &Application, config: &Config) {
     );
 
     let monitors = display.monitors();
-    let windows: Rc<RefCell<HashMap<glib::Object, ApplicationWindow>>> =
-        Rc::new(RefCell::new(HashMap::new()));
-
+    // WebKitGTK 2.54 computes WebCore::fontDPI() from gtk-xft-dpi first and
+    // falls back to the primary monitor's physical DPI. On headless/virtual
+    // Wayland outputs with 0mm physical size and unset gtk-xft-dpi (-1), that
+    // fallback evaluates to 0 DPI on secondary WebViews, collapsing pageScale
+    // to 0 and window.innerWidth/Height to 0x0.
+    let settings = gtk4::Settings::for_display(&display);
+    if settings.gtk_xft_dpi() <= 0 {
+        let has_zero_mm_monitor = (0..monitors.n_items()).any(|i| {
+            monitors
+                .item(i)
+                .and_then(|o| o.downcast::<Monitor>().ok())
+                .is_some_and(|m| m.width_mm() <= 0 || m.height_mm() <= 0)
+        });
+        if has_zero_mm_monitor {
+            settings.set_gtk_xft_dpi(96 * 1024);
+        }
+    }
     let initial_theme_css = theme::format_root_css(&initial_theme);
     let sync_monitors = {
         let app = app.clone();
         let config = config.clone();
-        let windows = windows.clone();
+        let surfaces = surfaces.clone();
         let monitors = monitors.clone();
+        let services = Arc::clone(&services);
         move || {
-            let mut active_objects = Vec::new();
+            let mut connected: Vec<(String, Monitor)> = Vec::new();
             for i in 0..monitors.n_items() {
-                let Some(obj) = monitors.item(i) else {
-                    continue;
-                };
-                active_objects.push(obj.clone());
-                if windows.borrow().contains_key(&obj) {
-                    continue;
+                if let Some(monitor) = monitors.item(i).and_then(|o| o.downcast::<Monitor>().ok()) {
+                    let connector = monitor
+                        .connector()
+                        .map(|s| s.to_string())
+                        .unwrap_or_else(|| format!("monitor-{i}"));
+                    connected.push((connector, monitor));
                 }
-                if let Ok(monitor) = obj.clone().downcast::<Monitor>() {
-                    let win = create_bar_window(
+            }
+
+            let mut desired: Vec<(WindowKey, String, Monitor, &ResolvedSurface)> = Vec::new();
+            for spec in &surfaces {
+                match &spec.monitors {
+                    MonitorTarget::Focused => {
+                        let focused = services.focused_output();
+                        if let Some((connector, monitor)) = focused
+                            .as_deref()
+                            .and_then(|f| connected.iter().find(|(c, _)| c == f))
+                            .or_else(|| connected.first())
+                        {
+                            desired.push((
+                                WindowKey {
+                                    surface_id: spec.id.clone(),
+                                    output: FOCUSED_WINDOW_SLOT.to_string(),
+                                },
+                                connector.clone(),
+                                monitor.clone(),
+                                spec,
+                            ));
+                        }
+                    }
+                    MonitorTarget::All | MonitorTarget::Primary | MonitorTarget::Connectors(_) => {
+                        for (idx, (connector, monitor)) in connected.iter().enumerate() {
+                            let included = match &spec.monitors {
+                                MonitorTarget::All => true,
+                                MonitorTarget::Primary => idx == 0,
+                                MonitorTarget::Connectors(list) => {
+                                    list.iter().any(|c| c == connector)
+                                }
+                                MonitorTarget::Focused => unreachable!(),
+                            };
+                            if included {
+                                desired.push((
+                                    WindowKey {
+                                        surface_id: spec.id.clone(),
+                                        output: connector.clone(),
+                                    },
+                                    connector.clone(),
+                                    monitor.clone(),
+                                    spec,
+                                ));
+                            }
+                        }
+                    }
+                }
+            }
+
+            let desired_keys: Vec<WindowKey> = desired.iter().map(|(k, _, _, _)| k.clone()).collect();
+            for (key, connector, monitor, spec) in desired {
+                let exists = WINDOWS.with(|cell| {
+                    let map = cell.borrow();
+                    if let Some(handle) = map.get(&key) {
+                        if handle.monitors_target == MonitorTarget::Focused {
+                            let g = monitor.geometry();
+                            let (w, h) = handle
+                                .input_state
+                                .borrow_mut()
+                                .update_monitor_geometry(g.width(), g.height());
+                            handle.window.set_monitor(Some(&monitor));
+                            handle.window.set_default_size(w, h);
+                        }
+                        true
+                    } else {
+                        false
+                    }
+                });
+                if !exists {
+                    let visible = SURFACES.with(|cell| {
+                        cell.borrow()
+                            .specs
+                            .iter()
+                            .find(|s| s.id == spec.id)
+                            .map(|s| s.visible)
+                            .unwrap_or(spec.visible)
+                    });
+                    create_surface_window(
                         &app,
                         &monitor,
+                        &connector,
+                        &key,
+                        spec,
+                        visible,
                         &config,
                         ws_port,
                         &ws_token,
                         &initial_theme_css,
                     );
-                    windows.borrow_mut().insert(obj, win);
                 }
             }
 
-            let stale: Vec<glib::Object> = windows
-                .borrow()
-                .keys()
-                .filter(|obj| !active_objects.contains(obj))
-                .cloned()
-                .collect();
-            for obj in stale {
-                if let Some(win) = windows.borrow_mut().remove(&obj) {
-                    win.close();
-                }
-            }
             WINDOWS.with(|cell| {
-                cell.borrow_mut().retain(|_, h| h.window.upgrade().is_some());
+                let mut map = cell.borrow_mut();
+                let stale: Vec<WindowKey> = map
+                    .keys()
+                    .filter(|k| !desired_keys.contains(k))
+                    .cloned()
+                    .collect();
+                for key in stale {
+                    if let Some(handle) = map.remove(&key) {
+                        handle.window.close();
+                    }
+                }
             });
         }
     };
@@ -629,7 +857,11 @@ fn activate(app: &Application, config: &Config) {
                 action: "notifications_toggle_center".to_string(),
             };
             if let Ok(json) = serde_json::to_string(&ev) {
-                broadcaster.send_to_output_or_all(services.focused_output().as_deref(), &json);
+                broadcaster.send_to_target(
+                    Some("bar"),
+                    services.focused_output().as_deref(),
+                    &json,
+                );
             }
         });
     }
@@ -662,6 +894,33 @@ fn activate(app: &Application, config: &Config) {
         });
     }
     app.add_action(&clear_all_action);
+
+    let surface_show_action =
+        gio::SimpleAction::new("surface-show", Some(glib::VariantTy::STRING));
+    surface_show_action.connect_activate(|_, param| {
+        if let Some(id) = param.and_then(|v| v.str()) {
+            set_surface_visible(id, true);
+        }
+    });
+    app.add_action(&surface_show_action);
+
+    let surface_hide_action =
+        gio::SimpleAction::new("surface-hide", Some(glib::VariantTy::STRING));
+    surface_hide_action.connect_activate(|_, param| {
+        if let Some(id) = param.and_then(|v| v.str()) {
+            set_surface_visible(id, false);
+        }
+    });
+    app.add_action(&surface_hide_action);
+
+    let surface_toggle_action =
+        gio::SimpleAction::new("surface-toggle", Some(glib::VariantTy::STRING));
+    surface_toggle_action.connect_activate(|_, param| {
+        if let Some(id) = param.and_then(|v| v.str()) {
+            toggle_surface_visible(id);
+        }
+    });
+    app.add_action(&surface_toggle_action);
 }
 
 fn open_devtools(web_view: &WebView) {
@@ -787,103 +1046,6 @@ fn mime_for(rel: &str) -> &'static str {
     }
 }
 
-fn sanitize_rects(rects: Vec<crate::bridge::InputRect>) -> Vec<(i32, i32, i32, i32)> {
-    rects
-        .into_iter()
-        .map(|r| {
-            (
-                r.x.round() as i32,
-                r.y.round() as i32,
-                r.width.round() as i32,
-                r.height.round() as i32,
-            )
-        })
-        .filter(|&(_, _, w, h)| w > 0 && h > 0)
-        .collect()
-}
-
-#[derive(Debug, Clone)]
-struct WindowInputState {
-    bar_height: i32,
-    fixed_overlay_height: Option<i32>,
-    monitor_width: i32,
-    overlay_height: i32,
-    overlay_active: bool,
-    interactive_rects: Vec<(i32, i32, i32, i32)>,
-}
-
-impl WindowInputState {
-    fn new(
-        bar_height: i32,
-        fixed_overlay_height: Option<i32>,
-        monitor_width: i32,
-        monitor_height: i32,
-    ) -> Self {
-        let monitor_width = monitor_width.max(1);
-        let overlay_height = fixed_overlay_height
-            .unwrap_or(monitor_height)
-            .max(bar_height);
-        Self {
-            bar_height,
-            fixed_overlay_height,
-            monitor_width,
-            overlay_height,
-            overlay_active: false,
-            interactive_rects: Vec::new(),
-        }
-    }
-
-    fn update_monitor_geometry(&mut self, monitor_width: i32, monitor_height: i32) -> i32 {
-        self.monitor_width = monitor_width.max(1);
-        self.overlay_height = self
-            .fixed_overlay_height
-            .unwrap_or(monitor_height)
-            .max(self.bar_height);
-        self.overlay_height
-    }
-
-    fn set_overlay(&mut self, active: bool) {
-        self.overlay_active = active;
-    }
-
-    fn set_interactive_rects(&mut self, rects: Vec<crate::bridge::InputRect>) {
-        self.interactive_rects = sanitize_rects(rects);
-    }
-
-    fn reset(&mut self) {
-        self.overlay_active = false;
-        self.interactive_rects.clear();
-    }
-
-    fn keyboard_mode(&self) -> KeyboardMode {
-        if self.overlay_active {
-            KeyboardMode::Exclusive
-        } else {
-            KeyboardMode::None
-        }
-    }
-
-    fn rect_tuples(&self) -> Vec<(i32, i32, i32, i32)> {
-        if self.overlay_active {
-            vec![(0, 0, self.monitor_width, self.overlay_height)]
-        } else {
-            let mut rects = Vec::with_capacity(1 + self.interactive_rects.len());
-            rects.push((0, 0, self.monitor_width, self.bar_height));
-            rects.extend_from_slice(&self.interactive_rects);
-            rects
-        }
-    }
-
-    fn cairo_region(&self) -> cairo::Region {
-        let rects: Vec<cairo::RectangleInt> = self
-            .rect_tuples()
-            .into_iter()
-            .map(|(x, y, w, h)| cairo::RectangleInt::new(x, y, w, h))
-            .collect();
-        cairo::Region::create_rectangles(&rects)
-    }
-}
-
 fn apply_window_input_state(win: &ApplicationWindow, state: &WindowInputState) {
     let target_kb = state.keyboard_mode();
     if win.keyboard_mode() != target_kb {
@@ -894,43 +1056,83 @@ fn apply_window_input_state(win: &ApplicationWindow, state: &WindowInputState) {
     }
 }
 
-fn format_bar_defaults_css(bar_height: i32) -> String {
-    format!(
-        ":root {{ --webbar-height: {bar_height}px; }}\nhtml, body {{ background: transparent; }}\n"
-    )
+fn build_surface_uri(source: &Source, spec: &ResolvedSurface, query: &str) -> String {
+    match source {
+        Source::Url(url) => {
+            let base = if let Some(entry) = &spec.entry {
+                let trimmed = url.trim_end_matches('/');
+                let rel = entry.trim_start_matches('/');
+                format!("{trimmed}/{rel}")
+            } else {
+                url.clone()
+            };
+            let sep = if base.contains('?') { '&' } else { '?' };
+            format!("{base}{sep}{query}")
+        }
+        Source::Dir(_) => {
+            let entry = spec
+                .entry
+                .as_deref()
+                .map(|s| s.trim_start_matches('/'))
+                .filter(|s| !s.is_empty())
+                .unwrap_or("index.html");
+            format!("webbar://app/{entry}?{query}")
+        }
+    }
 }
 
-fn create_bar_window(
+#[allow(clippy::too_many_arguments)]
+fn create_surface_window(
     app: &Application,
     monitor: &Monitor,
+    connector: &str,
+    window_key: &WindowKey,
+    spec: &ResolvedSurface,
+    visible: bool,
     config: &Config,
     ws_port: u16,
     ws_token: &str,
     initial_theme_css: &str,
-) -> ApplicationWindow {
+) {
     let geom = monitor.geometry();
-    let input_state = Rc::new(RefCell::new(WindowInputState::new(
-        config.height,
-        config.overlay_height,
+    let input_state = Rc::new(RefCell::new(WindowInputState::from_surface(
+        spec,
         geom.width(),
         geom.height(),
     )));
-    let initial_overlay_height = input_state.borrow().overlay_height;
+    let (default_w, default_h) = input_state.borrow().default_window_size();
 
     let window = ApplicationWindow::builder()
         .application(app)
-        .title("webbar")
-        .default_height(initial_overlay_height)
+        .title(&spec.namespace)
+        .default_width(default_w)
+        .default_height(default_h)
         .build();
+    if spec.width.is_some() || spec.height.is_some() {
+        window.set_size_request(spec.width.unwrap_or(-1), spec.height.unwrap_or(-1));
+    }
 
     window.init_layer_shell();
+    window.set_namespace(Some(&spec.namespace));
     window.set_monitor(Some(monitor));
-    window.set_layer(Layer::Top);
-    window.set_anchor(Edge::Top, true);
-    window.set_anchor(Edge::Left, true);
-    window.set_anchor(Edge::Right, true);
-    window.set_exclusive_zone(config.height);
-    window.set_keyboard_mode(KeyboardMode::None);
+    window.set_layer(spec.layer.to_layer());
+    for anchor in &spec.anchors {
+        window.set_anchor(anchor.to_layer_edge(), true);
+    }
+    if spec.margins.top != 0 {
+        window.set_margin(gtk4_layer_shell::Edge::Top, spec.margins.top);
+    }
+    if spec.margins.right != 0 {
+        window.set_margin(gtk4_layer_shell::Edge::Right, spec.margins.right);
+    }
+    if spec.margins.bottom != 0 {
+        window.set_margin(gtk4_layer_shell::Edge::Bottom, spec.margins.bottom);
+    }
+    if spec.margins.left != 0 {
+        window.set_margin(gtk4_layer_shell::Edge::Left, spec.margins.left);
+    }
+    spec.exclusive_zone.apply_to_window(&window);
+    window.set_keyboard_mode(spec.keyboard.to_keyboard_mode());
 
     {
         let input_state = input_state.clone();
@@ -957,35 +1159,31 @@ fn create_bar_window(
         let window_weak = window.downgrade();
         monitor.connect_geometry_notify(move |mon| {
             let g = mon.geometry();
-            let next_h = input_state
+            let (next_w, next_h) = input_state
                 .borrow_mut()
                 .update_monitor_geometry(g.width(), g.height());
             if let Some(win) = window_weak.upgrade() {
-                win.set_default_size(-1, next_h);
+                win.set_default_size(next_w, next_h);
                 apply_window_input_state(&win, &input_state.borrow());
             }
         });
     }
 
-    let connector = monitor
-        .connector()
-        .map(|s| s.to_string())
-        .unwrap_or_default();
-
     WINDOWS.with(|cell| {
         cell.borrow_mut().insert(
-            connector.clone(),
+            window_key.clone(),
             WindowHandle {
-                window: window.downgrade(),
+                window: window.clone(),
                 input_state: input_state.clone(),
+                monitors_target: spec.monitors.clone(),
             },
         );
     });
 
     let ucm = UserContentManager::new();
-    let bar_defaults_css = format_bar_defaults_css(config.height);
+    let defaults_css = spec.format_defaults_css();
     ucm.add_style_sheet(&UserStyleSheet::new(
-        &bar_defaults_css,
+        &defaults_css,
         UserContentInjectedFrames::TopFrame,
         UserStyleLevel::User,
         &[],
@@ -1006,16 +1204,7 @@ fn create_bar_window(
         &[],
     ));
 
-    let related_view = WEB_VIEWS.with(|cell| {
-        let mut views = cell.borrow_mut();
-        views.retain(|weak| weak.upgrade().is_some());
-        views.first().and_then(|weak| weak.upgrade())
-    });
-    let mut web_view_builder = WebView::builder().user_content_manager(&ucm);
-    if let Some(related) = &related_view {
-        web_view_builder = web_view_builder.related_view(related);
-    }
-    let web_view = web_view_builder.build();
+    let web_view = WebView::builder().user_content_manager(&ucm).build();
     if let Some(settings) = WebViewExt::settings(&web_view) {
         settings.set_enable_developer_extras(true);
     }
@@ -1064,24 +1253,35 @@ fn create_bar_window(
             }
         });
     }
+    {
+        let sid = spec.id.clone();
+        web_view.connect_load_failed(move |_view, _event, uri, err| {
+            let clean_uri = uri.split('?').next().unwrap_or(uri);
+            eprintln!("webbar: surface '{sid}' load failed ({clean_uri}): {err}");
+            false
+        });
+    }
 
-    let query = format!("output={connector}&wsPort={ws_port}&wsToken={ws_token}");
-    let uri = match &config.source {
-        Some(Source::Url(url)) => {
-            let sep = if url.contains('?') { '&' } else { '?' };
-            format!("{url}{sep}{query}")
-        }
-        Some(Source::Dir(_)) => format!("webbar://app/index.html?{query}"),
-        None => unreachable!("headless ws-bridge mode does not create bar windows"),
-    };
-    web_view.load_uri(&uri);
+    let query = format!(
+        "surface={}&output={connector}&wsPort={ws_port}&wsToken={ws_token}",
+        spec.id
+    );
+    let source = config
+        .source
+        .as_ref()
+        .expect("headless ws-bridge mode does not create surface windows");
+    let uri = build_surface_uri(source, spec, &query);
 
     window.set_child(Some(&web_view));
-    window.present();
-    if config.devtools {
+    web_view.load_uri(&uri);
+    if visible {
+        window.present();
+    } else {
+        window.set_visible(false);
+    }
+    if config.devtools && visible {
         open_devtools(&web_view);
     }
-    window
 }
 
 #[cfg(test)]
@@ -1098,8 +1298,6 @@ mod tests {
         assert!(!cfg.replace);
         assert!(!cfg.devtools);
         assert!(cfg.notifications);
-        assert_eq!(cfg.height, DEFAULT_BAR_HEIGHT);
-        assert_eq!(cfg.overlay_height, None);
         assert_eq!(
             cfg.application_flags(),
             gio::ApplicationFlags::ALLOW_REPLACEMENT
@@ -1119,9 +1317,8 @@ mod tests {
 
     #[test]
     fn replace_flag_sets_replace_application_flag() {
-        let cfg = parse(&["--url", "http://localhost:8080", "--height", "86", "--replace"]).unwrap();
+        let cfg = parse(&["--url", "http://localhost:8080", "--replace"]).unwrap();
         assert!(cfg.replace);
-        assert_eq!(cfg.height, 86);
         assert_eq!(
             cfg.application_flags(),
             gio::ApplicationFlags::ALLOW_REPLACEMENT | gio::ApplicationFlags::REPLACE
@@ -1134,77 +1331,6 @@ mod tests {
             .err()
             .expect("expected error");
         assert_eq!(err, "unknown argument: -b");
-    }
-
-    #[test]
-    fn window_input_state_transitions_and_resets_cleanly() {
-        let mut state = WindowInputState::new(86, None, 1920, 1080);
-        assert_eq!(state.overlay_height, 1080);
-        assert_eq!(state.keyboard_mode(), KeyboardMode::None);
-        assert_eq!(state.rect_tuples(), vec![(0, 0, 1920, 86)]);
-
-        // Activating overlay expands input to full monitor height with Exclusive keyboard focus
-        state.set_overlay(true);
-        assert_eq!(state.keyboard_mode(), KeyboardMode::Exclusive);
-        assert_eq!(state.rect_tuples(), vec![(0, 0, 1920, 1080)]);
-
-        // Monitor geometry changes update active overlay bounds unless fixed --overlay-height is set
-        let next_h = state.update_monitor_geometry(2560, 1440);
-        assert_eq!(next_h, 1440);
-        assert_eq!(state.rect_tuples(), vec![(0, 0, 2560, 1440)]);
-
-        // Page reload (reset) restores bar-only input and releases keyboard focus
-        state.reset();
-        assert_eq!(state.keyboard_mode(), KeyboardMode::None);
-        assert_eq!(state.rect_tuples(), vec![(0, 0, 2560, 86)]);
-
-        // Interactive rects round floats, filter invalid dimensions, compose with
-        // the bar strip, and survive opening/closing an overlay without stealing focus.
-        state.set_interactive_rects(vec![
-            crate::bridge::InputRect {
-                x: 2200.4,
-                y: 95.6,
-                width: 340.2,
-                height: 87.8,
-            },
-            crate::bridge::InputRect {
-                x: 10.0,
-                y: 10.0,
-                width: 0.0,
-                height: 50.0,
-            },
-        ]);
-        assert_eq!(state.keyboard_mode(), KeyboardMode::None);
-        assert_eq!(
-            state.rect_tuples(),
-            vec![(0, 0, 2560, 86), (2200, 96, 340, 88)]
-        );
-
-        state.set_overlay(true);
-        assert_eq!(state.keyboard_mode(), KeyboardMode::Exclusive);
-        assert_eq!(state.rect_tuples(), vec![(0, 0, 2560, 1440)]);
-
-        state.set_overlay(false);
-        assert_eq!(state.keyboard_mode(), KeyboardMode::None);
-        assert_eq!(
-            state.rect_tuples(),
-            vec![(0, 0, 2560, 86), (2200, 96, 340, 88)]
-        );
-
-        state.reset();
-        assert_eq!(state.rect_tuples(), vec![(0, 0, 2560, 86)]);
-    }
-
-    #[test]
-    fn window_input_state_respects_explicit_overlay_height() {
-        let mut state = WindowInputState::new(86, Some(500), 1920, 1080);
-        assert_eq!(state.overlay_height, 500);
-        state.set_overlay(true);
-        assert_eq!(state.rect_tuples(), vec![(0, 0, 1920, 500)]);
-
-        let next_h = state.update_monitor_geometry(3840, 2160);
-        assert_eq!(next_h, 500);
-        assert_eq!(state.rect_tuples(), vec![(0, 0, 3840, 500)]);
     }
 
     #[test]
@@ -1270,12 +1396,5 @@ mod tests {
 
         let _ = fs::remove_file(&outside);
         let _ = fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn format_bar_defaults_css_sets_height_var_and_transparent_root() {
-        let css = format_bar_defaults_css(42);
-        assert!(css.contains("--webbar-height: 42px;"));
-        assert!(css.contains("html, body { background: transparent; }"));
     }
 }

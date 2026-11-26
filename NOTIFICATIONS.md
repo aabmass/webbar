@@ -41,17 +41,17 @@ Each `NotificationItem` provides:
 
 ---
 
-## Notification Center (`[popover]`) vs. Floating Toasts (`[data-webbar-interactive]`)
+## Notification Center (`popover="auto"`) vs. Floating Toasts (`popover="manual"`)
 
-`webbar` renders your bar into a transparent full-screen `gtk4-layer-shell` overlay with `exclusive_zone` set to `--height`. Wayland input regions work in two clean modes:
+`webbar` renders a bar surface into a transparent `gtk4-layer-shell` overlay with `exclusive_zone` set from `webbar.json` (your bar's `height` or `width`). Wayland input regions work in two clean modes:
 
 | Surface | HTML / Attribute | Wayland Input Region | Keyboard Focus | Items to Render |
 |---|---|---|---|---|
-| **Notification Center** | Standard `[popover]` | Expands to the full overlay while open | `KeyboardMode::Exclusive` (`Escape` and click-outside light-dismiss) | `state.items` |
-| **Floating Toasts** | `data-webbar-interactive` on each toast | Unions toast bounding rects with the bar strip | `KeyboardMode::None` (clickable & hoverable without stealing Sway focus) | `state.items.filter((i) => i.popup)` |
+| **Notification Center** | Standard `[popover]` (`popover="auto"`) or `acquireOverlay()` | Expands to the full overlay while open | `KeyboardMode::Exclusive` (`Escape` and click-outside light-dismiss) | `state.items` |
+| **Floating Toasts** | `popover="manual"` (or legacy `data-webbar-interactive`) | Unions clickable toast bounding rects with the bar strip | `KeyboardMode::None` (clickable & hoverable without stealing Sway focus) | `state.items.filter((i) => i.popup)` |
 
 > [!IMPORTANT]
-> Any open `[popover]` without `data-webbar-interactive` on **that `[popover]` element itself** triggers full-screen modal input capture (`KeyboardMode::Exclusive`), stealing keyboard focus and blocking clicks to underlying windows. Put `data-webbar-interactive` on each clickable toast card (and if you use `popover="manual"` for top-layer toast stacking, place both `popover="manual"` and `data-webbar-interactive` on each toast card, not a wrapper)—`webbar`'s preload automatically tracks their rects with `MutationObserver` and `ResizeObserver`.
+> Put your floating toast stack in `<div popover="manual" style="pointer-events: none">` and give each toast card `pointer-events: auto`—`webbar`'s preload automatically tracks the outermost clickable children with `MutationObserver`, `ResizeObserver`, and live animation sync (`document.getAnimations()`), while letting clicks pass through transparent gaps and releasing capture immediately when `pointer-events: none` or `visibility: hidden` is set during exit animations. See [SURFACES.md](SURFACES.md) for full input-masking details.
 
 ### Floating Toast Stack Example (React)
 

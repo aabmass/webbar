@@ -23,11 +23,18 @@ use crate::process_bridge::ProcessBridge;
 
 const CLIENT_CHANNEL_CAPACITY: usize = 256;
 
-type RequestHandler =
-    dyn Fn(Option<&str>, BridgeRequest, &DbusBridge, &ProcessBridge, &SendEvent) + Send + Sync;
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct ClientIdentity {
+    pub surface: Option<String>,
+    pub output: Option<String>,
+}
+
+type RequestHandler = dyn Fn(&ClientIdentity, BridgeRequest, &DbusBridge, &ProcessBridge, &SendEvent)
+    + Send
+    + Sync;
 
 struct WsClient {
-    output: Option<String>,
+    identity: ClientIdentity,
     tx: mpsc::Sender<String>,
 }
 
@@ -51,15 +58,31 @@ impl WsBroadcaster {
             });
     }
 
-    pub fn send_to_output_or_all(&self, target_output: Option<&str>, json: &str) {
+    pub fn send_to_target(
+        &self,
+        target_surface: Option<&str>,
+        target_output: Option<&str>,
+        json: &str,
+    ) {
         let mut guard = self.clients.lock().unwrap();
-        let has_target = target_output.is_some_and(|target| {
-            guard
-                .iter()
-                .any(|c| c.output.as_deref() == Some(target) && !c.tx.is_closed())
-        });
+        let matches = |c: &WsClient, surf: Option<&str>, out: Option<&str>| {
+            !c.tx.is_closed()
+                && surf.is_none_or(|s| c.identity.surface.as_deref() == Some(s))
+                && out.is_none_or(|o| c.identity.output.as_deref() == Some(o))
+        };
+        let (eff_surface, eff_output) = if (target_surface.is_some() || target_output.is_some())
+            && guard.iter().any(|c| matches(c, target_surface, target_output))
+        {
+            (target_surface, target_output)
+        } else if target_output.is_some()
+            && guard.iter().any(|c| matches(c, None, target_output))
+        {
+            (None, target_output)
+        } else {
+            (None, None)
+        };
         guard.retain_mut(|client| {
-            if has_target && client.output.as_deref() != target_output {
+            if !matches(client, eff_surface, eff_output) {
                 return !client.tx.is_closed();
             }
             match client.tx.try_send(json.to_string()) {
@@ -69,8 +92,13 @@ impl WsBroadcaster {
         });
     }
 
-    fn push(&self, output: Option<String>, tx: mpsc::Sender<String>) {
-        self.clients.lock().unwrap().push(WsClient { output, tx });
+    #[cfg(test)]
+    pub fn send_to_output_or_all(&self, target_output: Option<&str>, json: &str) {
+        self.send_to_target(None, target_output, json);
+    }
+
+    fn push(&self, identity: ClientIdentity, tx: mpsc::Sender<String>) {
+        self.clients.lock().unwrap().push(WsClient { identity, tx });
     }
 }
 
@@ -98,7 +126,7 @@ pub fn spawn<F, D>(
     on_disconnect: D,
 ) -> std::io::Result<u16>
 where
-    F: Fn(Option<&str>, BridgeRequest, &DbusBridge, &ProcessBridge, &SendEvent)
+    F: Fn(&ClientIdentity, BridgeRequest, &DbusBridge, &ProcessBridge, &SendEvent)
         + Send
         + Sync
         + 'static,
@@ -147,7 +175,7 @@ fn handle_client(
     let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
     let _ = stream.set_write_timeout(Some(Duration::from_secs(5)));
 
-    let mut client_output: Option<String> = None;
+    let mut identity = ClientIdentity::default();
     let Ok(mut ws) = accept_hdr(stream, |req: &Request, resp: Response| {
         if let Some(origin) = req.headers().get("origin").and_then(|v| v.to_str().ok()) {
             if !is_allowed_origin(origin) {
@@ -158,7 +186,8 @@ fn handle_client(
         if !has_valid_token(query, expected_token) {
             return Err(http_error(StatusCode::UNAUTHORIZED, "invalid ws token"));
         }
-        client_output = query_param(query, "output").filter(|s| !s.is_empty());
+        identity.surface = query_param(query, "surface").filter(|s| !s.is_empty());
+        identity.output = query_param(query, "output").filter(|s| !s.is_empty());
         Ok(resp)
     }) else {
         return;
@@ -185,7 +214,7 @@ fn handle_client(
     for state in snapshots.snapshot_all() {
         client_send(state);
     }
-    broadcaster.push(client_output.clone(), tx);
+    broadcaster.push(identity.clone(), tx);
 
     let client_dbus = DbusBridge::new(client_send.clone());
     let client_procs = ProcessBridge::new(client_send.clone());
@@ -200,7 +229,7 @@ fn handle_client(
         if !drain_ws_reads(
             &mut ws,
             &watcher,
-            client_output.as_deref(),
+            &identity,
             on_request,
             &client_dbus,
             &client_procs,
@@ -231,7 +260,7 @@ fn handle_client(
                     if !drain_ws_reads(
                         &mut ws,
                         &watcher,
-                        client_output.as_deref(),
+                        &identity,
                         on_request,
                         &client_dbus,
                         &client_procs,
@@ -279,7 +308,7 @@ async fn send_ws_text(
 async fn drain_ws_reads(
     ws: &mut WebSocket<TcpStream>,
     watcher: &Async<TcpStream>,
-    client_output: Option<&str>,
+    identity: &ClientIdentity,
     on_request: &RequestHandler,
     client_dbus: &DbusBridge,
     client_procs: &ProcessBridge,
@@ -288,7 +317,7 @@ async fn drain_ws_reads(
     loop {
         match ws.read() {
             Ok(Message::Text(text)) => match serde_json::from_str::<BridgeRequest>(&text) {
-                Ok(req) => on_request(client_output, req, client_dbus, client_procs, client_send),
+                Ok(req) => on_request(identity, req, client_dbus, client_procs, client_send),
                 Err(err) => eprintln!("webbar: ws-bridge invalid request: {err}"),
             },
             Ok(Message::Close(_)) => {
@@ -404,8 +433,9 @@ mod tests {
             "secret-token".to_string(),
             broadcaster.clone(),
             snapshots,
-            |output, req, _dbus, _procs, client_send| {
-                assert_eq!(output, Some("DP-1"));
+            |identity, req, _dbus, _procs, client_send| {
+                assert_eq!(identity.surface.as_deref(), Some("bar"));
+                assert_eq!(identity.output.as_deref(), Some("DP-1"));
                 match req {
                     BridgeRequest::BacklightSet {
                         id,
@@ -448,7 +478,7 @@ mod tests {
             .set_read_timeout(Some(Duration::from_secs(2)))
             .unwrap();
         let (mut ws, _resp) = tungstenite::client(
-            format!("ws://127.0.0.1:{port}/?token=secret-token&output=DP-1"),
+            format!("ws://127.0.0.1:{port}/?token=secret-token&surface=bar&output=DP-1"),
             stream,
         )
         .expect("valid ws handshake");
@@ -486,8 +516,20 @@ mod tests {
         let broadcaster = WsBroadcaster::new();
         let (tx_dp1, mut rx_dp1) = mpsc::channel(8);
         let (tx_hdmi, mut rx_hdmi) = mpsc::channel(8);
-        broadcaster.push(Some("DP-1".to_string()), tx_dp1);
-        broadcaster.push(Some("HDMI-A-1".to_string()), tx_hdmi);
+        broadcaster.push(
+            ClientIdentity {
+                surface: Some("bar".to_string()),
+                output: Some("DP-1".to_string()),
+            },
+            tx_dp1,
+        );
+        broadcaster.push(
+            ClientIdentity {
+                surface: Some("bar".to_string()),
+                output: Some("HDMI-A-1".to_string()),
+            },
+            tx_hdmi,
+        );
 
         // Matching output receives targeted message only
         broadcaster.send_to_output_or_all(Some("DP-1"), r#"{"target":"dp1"}"#);
