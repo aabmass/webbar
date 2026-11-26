@@ -458,6 +458,16 @@ impl ResolvedSurface {
         })
     }
 
+    pub fn is_fullscreen(&self) -> bool {
+        matches!(self.input_layout, InputLayout::Full)
+            && self.width.is_none()
+            && self.height.is_none()
+            && self.anchors.contains(&SurfaceEdge::Top)
+            && self.anchors.contains(&SurfaceEdge::Bottom)
+            && self.anchors.contains(&SurfaceEdge::Left)
+            && self.anchors.contains(&SurfaceEdge::Right)
+    }
+
     pub fn runtime_state(&self) -> SurfaceRuntimeState {
         SurfaceRuntimeState {
             id: self.id.clone(),
@@ -647,6 +657,7 @@ pub fn sanitize_rects(rects: Vec<InputRect>) -> Vec<(i32, i32, i32, i32)> {
 #[derive(Debug, Clone)]
 pub struct WindowInputState {
     layout: InputLayout,
+    fullscreen: bool,
     base_keyboard: KeyboardMode,
     explicit_width: Option<i32>,
     explicit_height: Option<i32>,
@@ -664,6 +675,7 @@ impl WindowInputState {
     ) -> Self {
         let mut state = Self {
             layout: surface.input_layout,
+            fullscreen: surface.is_fullscreen(),
             base_keyboard: surface.keyboard.to_keyboard_mode(),
             explicit_width: surface.width,
             explicit_height: surface.height,
@@ -674,6 +686,10 @@ impl WindowInputState {
         };
         state.update_monitor_geometry(monitor_width, monitor_height);
         state
+    }
+
+    pub fn is_fullscreen(&self) -> bool {
+        self.fullscreen
     }
 
     /// Computes `(default_width, default_height)` to pass to GTK4 `set_default_size`.

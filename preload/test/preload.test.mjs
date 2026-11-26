@@ -1476,3 +1476,82 @@ test("window.webbar.surface and window.webbar.surfaces store/actions work", () =
     { type: "surface_toggle", id: "launcher" },
   ]);
 });
+
+test("greetd store and RPCs follow Quickshell-aligned lifecycle", async () => {
+  const sent = [];
+  const { api, receive } = createWebbarBridge((json) => {
+    sent.push(JSON.parse(json));
+  });
+
+  assert.deepEqual(api.greetd.get(), {
+    available: false,
+    phase: "inactive",
+    user: null,
+    prompt: null,
+    error: null,
+  });
+
+  const seen = [];
+  const unsub = api.greetd.subscribe(() => seen.push(api.greetd.get().phase));
+
+  receive({
+    type: "greetd_state",
+    available: true,
+    phase: "inactive",
+    user: null,
+    prompt: null,
+    error: null,
+  });
+  assert.equal(api.greetd.get().available, true);
+
+  const createP = api.greetd.createSession("alice");
+  const createReq = sent.pop();
+  assert.equal(createReq.type, "greetd_create_session");
+  assert.equal(createReq.user, "alice");
+  const authState = {
+    available: true,
+    phase: "authenticating",
+    user: "alice",
+    prompt: { kind: "secret", message: "Password:" },
+    error: null,
+  };
+  receive({ type: "greetd_state", ...authState });
+  receive({ type: "rpc_reply", id: createReq.id, ok: true, data: authState });
+  assert.deepEqual(await createP, authState);
+
+  const respondP = api.greetd.respond("s3cr3t");
+  const respondReq = sent.pop();
+  assert.equal(respondReq.type, "greetd_respond");
+  assert.equal(respondReq.response, "s3cr3t");
+  const readyState = {
+    available: true,
+    phase: "ready_to_launch",
+    user: "alice",
+    prompt: null,
+    error: null,
+  };
+  receive({ type: "greetd_state", ...readyState });
+  receive({ type: "rpc_reply", id: respondReq.id, ok: true, data: readyState });
+  assert.deepEqual(await respondP, readyState);
+
+  const launchP = api.greetd.launch(["sway"], {
+    env: ["FOO=bar"],
+    exit: false,
+  });
+  const launchReq = sent.pop();
+  assert.equal(launchReq.type, "greetd_launch");
+  assert.deepEqual(launchReq.command, ["sway"]);
+  assert.deepEqual(launchReq.env, ["FOO=bar"]);
+  assert.equal(launchReq.exit, false);
+  receive({ type: "rpc_reply", id: launchReq.id, ok: true });
+  await launchP;
+
+  const cancelP = api.greetd.cancelSession();
+  const cancelReq = sent.pop();
+  assert.equal(cancelReq.type, "greetd_cancel_session");
+  receive({ type: "rpc_reply", id: cancelReq.id, ok: true });
+  await cancelP;
+
+  assert.deepEqual(seen, ["inactive", "authenticating", "ready_to_launch"]);
+  unsub();
+});

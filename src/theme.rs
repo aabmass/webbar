@@ -56,6 +56,11 @@ impl Default for ThemeState {
 /// Start watching `adw::StyleManager` and `gtk4::Settings`, returning the
 /// initial `ThemeState` synchronously for `SnapshotCache` and `UserStyleSheet`.
 pub fn start_theme_watcher(send: SendEvent) -> ThemeState {
+    if !gtk4::is_initialized() {
+        let initial = ThemeState::default();
+        send(BridgeEvent::Theme(initial.clone()));
+        return initial;
+    }
     let has_display = gdk::Display::default().is_some();
     if has_display {
         let _ = adw::init();

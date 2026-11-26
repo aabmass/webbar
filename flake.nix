@@ -26,6 +26,7 @@
           npmWorkspaceSrc = mkNpmSrc [
             ./preload/package.json
             ./examples/minimal/package.json
+            ./examples/greeter/package.json
             ./examples/sway-full-bar-shared/package.json
             ./examples/sway-full-bar/package.json
             ./examples/sway-full-bar-svelte/package.json
@@ -89,6 +90,11 @@
           minimalUi = mkWorkspaceUi {
             pname = "webbar-minimal";
             workspace = "examples/minimal";
+          };
+
+          greeterUi = mkWorkspaceUi {
+            pname = "webbar-greeter";
+            workspace = "examples/greeter";
           };
 
           swayFullBarUi = mkWorkspaceUi {
@@ -186,6 +192,7 @@
           } ''
             export WEBBAR_UI_DIR="${swayFullBarUi}"
             export WEBBAR_MULTI_SURFACE_DIR="${./examples/multi-surface}"
+            export GREETER_UI_DIR="${greeterUi}"
             export FONT_DIRS="${pkgs.inter}/share/fonts:${pkgs.jetbrains-mono}/share/fonts:${pkgs.dejavu_fonts}/share/fonts"
             export OUT_DIR="$out"
             # nix-daemon is already the networkless build sandbox; WebKit's
@@ -317,6 +324,31 @@
               touch "$out"
             '';
 
+          greeterIntegrationSrc = pkgs.lib.fileset.toSource {
+            root = ./.;
+            fileset = ./scripts/greeter-integration;
+          };
+
+          greeterIntegrationCheck =
+            pkgs.runCommand "webbar-integration-greeter" {
+              nativeBuildInputs = [
+                webbarPkg
+                pkgs.playwright-test
+              ];
+              FONTCONFIG_FILE = pkgs.makeFontsConf {
+                fontDirectories = [ pkgs.dejavu_fonts ];
+              };
+            } ''
+              export HOME="$(mktemp -d)"
+              export WEBBAR_PRELOAD_JS="${preloadPkg}/generated/preload.js"
+              export WEBBAR_UI_DIR="${greeterUi}"
+              export PLAYWRIGHT_BROWSERS_PATH="${pkgs.playwright-driver.browsers}"
+              export PLAYWRIGHT_NODE_MODULES="${pkgs.playwright-test}/lib/node_modules"
+              cd "${greeterIntegrationSrc}"
+              bash ./scripts/greeter-integration/run-greeter-test.sh
+              touch "$out"
+            '';
+
           mkBarDev = { name, workspace, defaultPort }:
             pkgs.writeShellApplication {
               inherit name;
@@ -359,6 +391,10 @@
 
           packages = {
             default = webbarPkg;
+            greeter-ui = greeterUi;
+            greeter = pkgs.writeShellScriptBin "webbar-greeter" ''
+              exec ${webbarPkg}/bin/webbar --dir ${greeterUi} "$@"
+            '';
             sway-full-bar-ui = swayFullBarUi;
             sway-full-bar = pkgs.writeShellScriptBin "webbar-sway-full-bar" ''
               exec ${webbarPkg}/bin/webbar --dir ${swayFullBarUi} "$@"
@@ -413,6 +449,7 @@
             });
             preload-test = preloadPkg;
             minimal-ui = minimalUi;
+            greeter-ui = greeterUi;
             sway-full-bar-ui = swayFullBarUi;
             sway-full-bar-svelte-ui = swayFullBarSvelteUi;
             react-tray-ui = reactTrayUi;
@@ -430,6 +467,7 @@
               node ./scripts/check-css-vars.mjs
               touch "$out"
             '';
+            integration-greeter = greeterIntegrationCheck;
             integration-parity-react = mkIntegrationParityCheck {
               target = "react";
               uiDir = swayFullBarUi;

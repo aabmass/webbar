@@ -11,6 +11,7 @@ OUT_DIR="${OUT_DIR:-$REPO_ROOT/docs/screenshots}"
 mkdir -p "$OUT_DIR"
 
 WEBBAR_UI_DIR="${WEBBAR_UI_DIR:?WEBBAR_UI_DIR must be set}"
+GREETER_UI_DIR="${GREETER_UI_DIR:-}"
 FONT_DIRS="${FONT_DIRS:-}"
 
 # shellcheck source=../harness/env.sh
@@ -324,17 +325,64 @@ populate_hero_workspace "light"
 launch_bar "theme=light" 2.5
 grim "$OUT_DIR/hero-light.png"
 
+PNGS=(
+  "$OUT_DIR/hero-dark.png"
+  "$OUT_DIR/hero-light.png"
+  "$OUT_DIR/popover-audio.png"
+  "$OUT_DIR/popover-calendar.png"
+  "$OUT_DIR/popover-bluetooth.png"
+  "$OUT_DIR/popover-display.png"
+  "$OUT_DIR/popover-notifications.png"
+  "$OUT_DIR/notifications-toasts.png"
+)
+
+if [ -n "$GREETER_UI_DIR" ]; then
+  echo "update-screenshots: capturing greeter.png..."
+  GREETER_TMP="$WORK_DIR/greeter-ui"
+  cp -r "$GREETER_UI_DIR" "$GREETER_TMP"
+  chmod -R u+w "$GREETER_TMP"
+  cp "$REPO_ROOT/scripts/screenshots/demo-fixture.js" "$GREETER_TMP/demo-fixture.js"
+  python3 - "$GREETER_TMP/index.html" <<'PY'
+import sys, pathlib
+p = pathlib.Path(sys.argv[1])
+html = p.read_text()
+tag = '<script src="/demo-fixture.js"></script>'
+html = html.replace("<head>", "<head>\n    " + tag, 1) if "<head>" in html else tag + "\n" + html
+p.write_text(html)
+PY
+  GREETER_PORT="$(harness_pick_port)"
+  harness_register_log "$WORK_DIR/http-greeter.log"
+  python3 -m http.server "$GREETER_PORT" --bind 127.0.0.1 --directory "$GREETER_TMP" >"$WORK_DIR/http-greeter.log" 2>&1 &
+  harness_register_pid "$!"
+  harness_wait_http "http://127.0.0.1:$GREETER_PORT/index.html"
+
+  if [ -n "$WEBBAR_PID" ] && kill -0 "$WEBBAR_PID" 2>/dev/null; then
+    kill "$WEBBAR_PID" 2>/dev/null || true
+    wait "$WEBBAR_PID" 2>/dev/null || true
+  fi
+  WEBKIT_DISABLE_DMABUF_RENDERER=1 \
+  WEBKIT_DISABLE_COMPOSITING_MODE=1 \
+  GSK_RENDERER=cairo \
+  webbar \
+    --url "http://127.0.0.1:$GREETER_PORT/index.html?theme=dark" \
+    --replace >"$WORK_DIR/webbar.log" 2>&1 &
+  WEBBAR_PID="$!"
+  harness_register_pid "$WEBBAR_PID"
+  sleep 2.2
+  if ! kill -0 "$WEBBAR_PID" 2>/dev/null; then
+    echo "update-screenshots: webbar exited early for greeter" >&2
+    exit 1
+  fi
+  grim "$OUT_DIR/greeter.png"
+  PNGS+=("$OUT_DIR/greeter.png")
+fi
+
+if [ -f "$OUT_DIR/multi-surface.png" ]; then
+  PNGS+=("$OUT_DIR/multi-surface.png")
+fi
+
 echo "update-screenshots: optimizing PNGs with oxipng..."
-oxipng -o 3 --strip safe --quiet \
-  "$OUT_DIR/hero-dark.png" \
-  "$OUT_DIR/hero-light.png" \
-  "$OUT_DIR/popover-audio.png" \
-  "$OUT_DIR/popover-calendar.png" \
-  "$OUT_DIR/popover-bluetooth.png" \
-  "$OUT_DIR/popover-display.png" \
-  "$OUT_DIR/popover-notifications.png" \
-  "$OUT_DIR/notifications-toasts.png" \
-  $([ -f "$OUT_DIR/multi-surface.png" ] && echo "$OUT_DIR/multi-surface.png")
+oxipng -o 3 --strip safe --quiet "${PNGS[@]}"
 
 echo "update-screenshots: done! Wrote screenshots to $OUT_DIR"
 ls -lh "$OUT_DIR"

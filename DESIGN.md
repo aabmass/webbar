@@ -12,7 +12,7 @@ Let users build a Sway status bar in plain HTML, CSS, and TypeScript/React—wit
 │  User Bar UI (examples/minimal/, examples/sway-full-bar/, etc.)      │
 │  HTML / CSS / TS / React using window.webbar.*                       │
 │  (sway, tray, notifications, audio, bluetooth, network, backlight,   │
-│   theme, surfaces)                                                   │
+│   greetd, theme, surfaces)                                           │
 └─────────────────────────────────▲────────────────────────────────────┘
                                   │ injected at DocumentStart (or Vite entry)
 ┌─────────────────────────────────┴────────────────────────────────────┐
@@ -31,6 +31,7 @@ Let users build a Sway status bar in plain HTML, CSS, and TypeScript/React—wit
 │  - icons.rs (shared IconTheme lookup, SVG recoloring, .desktop)      │
 │  - audio.rs (libpulse) + bluetooth.rs (BlueZ) + network.rs (NM)      │
 │  - backlight.rs (ddcutil D-Bus + /sys/class/backlight + logind)      │
+│  - greetd.rs (greetd_ipc sync-codec worker; passive without socket)  │
 │  - theme.rs (adw::StyleManager + gtk4::Settings + StyleContext)      │
 │  - dbus_bridge.rs / process_bridge.rs (Promise-based escape hatches) │
 └──────────────────────────────────────────────────────────────────────┘
@@ -79,3 +80,8 @@ Let users build a Sway status bar in plain HTML, CSS, and TypeScript/React—wit
    - `window.webbar.notifications` exposes a reactive `Store<NotificationsState>` (`{ available, do_not_disturb, unread_count, items }`) plus `activate`, `dismiss`, `hidePopup`, `invokeAction`, `clearAll`, `setDoNotDisturb`, `markAllRead`, `pauseTimeout`, and `resumeTimeout`; `window.webbar.focused` exposes a per-monitor `Store<boolean>` derived from the focused Sway output.
    - Passing `--no-notifications` leaves `org.freedesktop.Notifications` unclaimed (`available: false`); headless `--ws-bridge` skips claiming both D-Bus daemons by default (using `tray::spawn_observer`) unless `--ws-claim-notifications` is passed.
    - `dev.local.webbar` exposes `gio::SimpleAction`s for remote control (`devtools`, `notifications-toggle-center`, `notifications-toggle-do-not-disturb`, `notifications-dismiss-latest`, `notifications-clear-all`, `surface-show`, `surface-hide`, `surface-toggle`); `notifications-toggle-center` routes `BridgeEvent::HostAction` to the focused Sway output's WebView (falling back to broadcast) via `window.webbar.onHostAction(cb)`. See [NOTIFICATIONS.md](NOTIFICATIONS.md) for the user-facing authoring guide.
+
+9. **`greetd` Greeter Mode & Fullscreen Hardening (`src/main.rs`, `src/surface.rs`, `src/greetd.rs`)**
+   - Fullscreen greeters are declared in `webbar.json` (all four anchors, `layer: "overlay"`, `exclusive_zone: "ignore"`, `keyboard: "exclusive"`, `input_mode: "full"`), with automatic fallback to `window.fullscreen()` when `gtk4_layer_shell::is_supported()` is false (e.g. `cage`) and no monitor-geometry input-region clipping.
+   - When `DBUS_SESSION_BUS_ADDRESS` is unset, `webbar` uses `gio::ApplicationFlags::NON_UNIQUE` and skips claiming session D-Bus servers; for fullscreen or `greetd` surfaces, WebKitGTK uses `NetworkSession::new_ephemeral()` and disables Web Inspector/DevTools unless `--devtools` is explicitly passed.
+   - `src/greetd.rs` wraps `greetd_ipc` (`sync-codec`) on a dedicated worker thread, exposing `window.webbar.greetd` (`Store<GreetdState>` + `createSession`/`respond`/`cancelSession`/`launch`). `BridgeRequest::GreetdRespond` redacts credentials in `Debug` output.

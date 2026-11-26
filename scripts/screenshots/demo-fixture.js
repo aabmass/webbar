@@ -459,6 +459,19 @@
       pauseTimeout: () => {},
       resumeTimeout: () => {},
     };
+    wb.greetd = {
+      ...makeStaticStore({
+        available: true,
+        phase: "inactive",
+        user: null,
+        prompt: null,
+        error: null,
+      }),
+      createSession: async () => wb.greetd.get(),
+      respond: async () => wb.greetd.get(),
+      cancelSession: async () => {},
+      launch: async () => {},
+    };
 
     const origExec = wb.exec.bind(wb);
     wb.exec = async (argv, opts) => {
@@ -524,7 +537,9 @@
   // workspaces, clock, tray, and controls all render cleanly.
   const triggerFullBarRepaint = () => {
     setTimeout(() => {
-      const targets = document.querySelectorAll(".centerbox, .notif-toast-stack");
+      const targets = document.querySelectorAll(
+        ".centerbox, .notif-toast-stack, .backdrop",
+      );
       const elements = Array.from(targets).filter(
         (el) => el instanceof HTMLElement,
       );

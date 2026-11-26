@@ -1,0 +1,15 @@
+{
+  "name": "webbar-greeter",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "esbuild src/main.ts --bundle --format=iife --outfile=dist/bundle.js --sourcemap && cp index.html style.css webbar.json dist/",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@webbar/types": "0.1.0",
+    "esbuild": "^0.25.0",
+    "typescript": "^5.7.0"
+  }
+}

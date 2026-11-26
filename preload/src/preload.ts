@@ -10,6 +10,10 @@ import type { BluetoothDevice } from "./generated/BluetoothDevice";
 import type { BluetoothState } from "./generated/BluetoothState";
 import type { Connectivity } from "./generated/Connectivity";
 import type { ExecResult } from "./generated/ExecResult";
+import type { GreetdAuthMessageType } from "./generated/GreetdAuthMessageType";
+import type { GreetdAuthPrompt } from "./generated/GreetdAuthPrompt";
+import type { GreetdPhase } from "./generated/GreetdPhase";
+import type { GreetdState } from "./generated/GreetdState";
 import type { InputRect } from "./generated/InputRect";
 import type { NetworkLink } from "./generated/NetworkLink";
 import type { NetworkState } from "./generated/NetworkState";
@@ -49,6 +53,10 @@ export type {
   BluetoothState,
   Connectivity,
   ExecResult,
+  GreetdAuthMessageType,
+  GreetdAuthPrompt,
+  GreetdPhase,
+  GreetdState,
   InputRect,
   NetworkLink,
   NetworkState,
@@ -169,6 +177,15 @@ export type WebbarApi = {
   network: Store<NetworkState>;
   backlight: Store<BacklightState> & {
     set: (percent: number, displayId?: string) => Promise<void>;
+  };
+  greetd: Store<GreetdState> & {
+    createSession: (user: string) => Promise<GreetdState>;
+    respond: (response: string | null) => Promise<GreetdState>;
+    cancelSession: () => Promise<void>;
+    launch: (
+      command: string[],
+      opts?: { env?: string[]; exit?: boolean },
+    ) => Promise<void>;
   };
   theme: Store<ThemeState>;
   acquireOverlay: () => () => void;
@@ -691,6 +708,13 @@ export function createWebbarBridge(
       error: null,
       displays: [],
     }),
+    greetd: createStore<GreetdState>({
+      available: false,
+      phase: "inactive",
+      user: null,
+      prompt: null,
+      error: null,
+    }),
     theme: createStore<ThemeState>({
       dark: true,
       high_contrast: false,
@@ -832,6 +856,14 @@ export function createWebbarBridge(
         brightness: typeof e.brightness === "number" ? e.brightness : null,
         error: typeof e.error === "string" ? e.error : null,
         displays: (e.displays as BacklightDisplay[]) ?? [],
+      }),
+    greetd_state: (e) =>
+      stores.greetd._update({
+        available: Boolean(e.available),
+        phase: (e.phase as GreetdPhase) ?? "inactive",
+        user: typeof e.user === "string" ? e.user : null,
+        prompt: (e.prompt as GreetdAuthPrompt | null) ?? null,
+        error: typeof e.error === "string" ? e.error : null,
       }),
     theme: (e) => {
       const next = e as unknown as ThemeState;
@@ -1080,6 +1112,19 @@ export function createWebbarBridge(
         rpc("backlight_set", {
           percent,
           ...(displayId ? { display_id: displayId } : {}),
+        }),
+    }),
+    greetd: storeView(stores.greetd, {
+      createSession: (user: string) =>
+        rpc<GreetdState>("greetd_create_session", { user }),
+      respond: (response: string | null) =>
+        rpc<GreetdState>("greetd_respond", { response }),
+      cancelSession: () => rpc<void>("greetd_cancel_session"),
+      launch: (command: string[], opts?: { env?: string[]; exit?: boolean }) =>
+        rpc<void>("greetd_launch", {
+          command: [...command],
+          ...(opts?.env ? { env: [...opts.env] } : {}),
+          ...(typeof opts?.exit === "boolean" ? { exit: opts.exit } : {}),
         }),
     }),
     theme: storeView(stores.theme, {}),

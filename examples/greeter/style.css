@@ -1,0 +1,141 @@
+* {
+  box-sizing: border-box;
+}
+
+[hidden] {
+  display: none !important;
+}
+
+html,
+body {
+  margin: 0;
+  width: 100%;
+  height: 100%;
+  font-family: var(--desktop-font-family, system-ui, sans-serif);
+  font-size: 14px;
+  color: var(--desktop-window-fg, #e6edf3);
+  background: radial-gradient(
+    circle at 20% 20%,
+    color-mix(in srgb, var(--desktop-accent-bg, #3584e4) 22%, var(--desktop-window-bg, #11151c)),
+    color-mix(in srgb, var(--desktop-window-bg, #0d1117) 92%, #000) 70%
+  );
+}
+
+.backdrop {
+  display: grid;
+  place-items: center;
+  width: 100%;
+  height: 100%;
+  padding: 24px;
+}
+
+.card {
+  width: min(380px, 100%);
+  padding: 28px;
+  border-radius: 16px;
+  background: color-mix(in srgb, var(--desktop-card-bg, var(--desktop-window-bg, #1b1f27)) 88%, transparent);
+  border: 1px solid color-mix(in srgb, var(--desktop-window-fg, #e6edf3) 14%, transparent);
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.45);
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.header {
+  text-align: center;
+}
+
+.clock {
+  display: block;
+  font-size: 42px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  line-height: 1.1;
+}
+
+.date {
+  margin: 4px 0 0;
+  opacity: 0.72;
+  font-size: 13px;
+}
+
+.form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.field span {
+  font-size: 12px;
+  font-weight: 600;
+  opacity: 0.85;
+}
+
+.field input {
+  width: 100%;
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid color-mix(in srgb, var(--desktop-window-fg, #e6edf3) 20%, transparent);
+  background: color-mix(in srgb, var(--desktop-window-fg, #e6edf3) 7%, transparent);
+  color: inherit;
+  font: inherit;
+}
+
+.field input:focus {
+  outline: 2px solid var(--desktop-accent-bg, #3584e4);
+  outline-offset: 1px;
+}
+
+.actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+button {
+  padding: 9px 16px;
+  border-radius: 8px;
+  border: none;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+button:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+button.primary {
+  background: var(--desktop-accent-bg, #3584e4);
+  color: #fff;
+}
+
+button.secondary {
+  background: color-mix(in srgb, var(--desktop-window-fg, #e6edf3) 14%, transparent);
+  color: inherit;
+}
+
+.status,
+.error {
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: 8px;
+  font-size: 13px;
+}
+
+.status {
+  background: color-mix(in srgb, var(--desktop-accent-bg, #3584e4) 18%, transparent);
+}
+
+.error {
+  background: color-mix(in srgb, #e01b24 22%, transparent);
+  color: #ffb4b8;
+}

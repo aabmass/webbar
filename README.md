@@ -2,7 +2,7 @@
 
 Build your Sway status bar with plain HTML, CSS, and TypeScript/React—without switching away from Sway or reinventing Linux D-Bus plumbing.
 
-`webbar` is a Rust Wayland host (`gtk4` + `gtk4-layer-shell` + `webkit6`) that docks transparent WebViews on your monitors and automatically injects `window.webbar` into every page with reactive stores (`sway`, `tray`, `notifications`, `audio`, `bluetooth`, `network`, `backlight`, `theme`, `surfaces`) plus Promise-based `dbus` and `exec` escape hatches. System appearance (dark/light mode, accent color, font, and GTK4/Libadwaita colors) is also injected as `--desktop-*` and `--gtk-*` CSS variables—see [SURFACES.md](SURFACES.md), [THEMING.md](THEMING.md), and [NOTIFICATIONS.md](NOTIFICATIONS.md).
+`webbar` is a Rust Wayland host (`gtk4` + `gtk4-layer-shell` + `webkit6`) that docks transparent WebViews on your monitors and automatically injects `window.webbar` into every page with reactive stores (`sway`, `tray`, `notifications`, `audio`, `bluetooth`, `network`, `backlight`, `greetd`, `theme`, `surfaces`) plus Promise-based `dbus` and `exec` escape hatches. System appearance (dark/light mode, accent color, font, and GTK4/Libadwaita colors) is also injected as `--desktop-*` and `--gtk-*` CSS variables—see [SURFACES.md](SURFACES.md), [THEMING.md](THEMING.md), and [NOTIFICATIONS.md](NOTIFICATIONS.md).
 
 ## Usage
 
@@ -13,11 +13,27 @@ webbar --dir /path/to/dist
 webbar --url http://localhost:5173
 webbar --dir ./examples/sway-full-bar/dist
 webbar --dir ./examples/multi-surface
+webbar --dir ./examples/greeter/dist
 ```
 
 ### Surfaces (`webbar.json`)
 
-Every `webbar` UI declares its Wayland layer-shell surfaces in `webbar.json`—from a single top/bottom/left/right bar to a full multi-surface shell (top bar, bottom dock reserving its own exclusive zone, and a toggleable `overlay` launcher above fullscreen apps). All surfaces share a single `webbar` host process and WebSocket bridge, identify themselves via `window.webbar.surface`, and can be shown/hidden/toggled via `window.webbar.surfaces` or `gapplication`. See [SURFACES.md](SURFACES.md) for the user guide, [`webbar.schema.json`](webbar.schema.json) for the generated JSON Schema, and [`examples/multi-surface`](examples/multi-surface) for a complete example.
+Every `webbar` UI declares its Wayland layer-shell surfaces in `webbar.json`—from a single top/bottom/left/right bar to a full multi-surface shell (top bar, bottom dock reserving its own exclusive zone, and a toggleable `overlay` launcher above fullscreen apps) or a fullscreen greeter. All surfaces share a single `webbar` host process and WebSocket bridge, identify themselves via `window.webbar.surface`, and can be shown/hidden/toggled via `window.webbar.surfaces` or `gapplication`. See [SURFACES.md](SURFACES.md) for the user guide, [`webbar.schema.json`](webbar.schema.json) for the generated JSON Schema, and [`examples/multi-surface`](examples/multi-surface) for a complete example.
+
+### Custom `greetd` Greeters
+
+`webbar` includes a passive `greetd_ipc` bridge (`window.webbar.greetd`) that activates automatically whenever `GREETD_SOCK` is set, mirroring Quickshell's `Quickshell.Services.Greetd` lifecycle (`inactive` → `authenticating` → `ready_to_launch` → `launching` → `launched`). A fullscreen `webbar.json` surface (all four anchors, `layer: "overlay"`, `exclusive_zone: "ignore"`, `keyboard: "exclusive"`, `input_mode: "full"`) binds to `wlr-layer-shell` on compositors like Sway and falls back automatically to `xdg-shell` fullscreen under kiosk compositors like `cage`, using an ephemeral WebKit session, `NON_UNIQUE` GTK mode when no session D-Bus is present, and DevTools disabled unless `--devtools` is explicitly passed.
+
+Example `/etc/greetd/config.toml` using [`examples/greeter`](examples/greeter):
+
+```toml
+[terminal]
+vt = 1
+
+[default_session]
+command = "cage -s -- webbar --dir /path/to/examples/greeter/dist"
+user = "greeter"
+```
 
 ## Example Bar Screenshots
 
@@ -175,7 +191,7 @@ npm install
 # Preload bridge (@webbar/types) build, typecheck, and contract tests
 npm --workspace=@webbar/types run build && npm --workspace=@webbar/types test
 
-# Typecheck and build all workspaces (preload, examples/minimal, examples/sway-full-bar, examples/sway-full-bar-shared, examples/sway-full-bar-svelte, examples/react-tray)
+# Typecheck and build all workspaces (preload, examples/minimal, examples/greeter, examples/sway-full-bar, examples/sway-full-bar-shared, examples/sway-full-bar-svelte, examples/react-tray)
 npm run --workspaces typecheck
 npm run --workspaces build
 ```

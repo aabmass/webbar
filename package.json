@@ -5,6 +5,7 @@
   "workspaces": [
     "preload",
     "examples/minimal",
+    "examples/greeter",
     "examples/sway-full-bar-shared",
     "examples/sway-full-bar",
     "examples/sway-full-bar-svelte",

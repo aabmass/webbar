@@ -4,6 +4,7 @@ mod bluetooth;
 mod bridge;
 mod dbus_bridge;
 mod dbus_json;
+mod greetd;
 mod icons;
 mod network;
 mod notifications;
@@ -30,7 +31,7 @@ use gtk4::{Application, ApplicationWindow};
 use gtk4_layer_shell::LayerShell;
 use webkit6::prelude::*;
 use webkit6::{
-    LoadEvent, UserContentInjectedFrames, UserContentManager, UserScript,
+    LoadEvent, NetworkSession, UserContentInjectedFrames, UserContentManager, UserScript,
     UserScriptInjectionTime, UserStyleLevel, UserStyleSheet, WebContext, WebView,
 };
 
@@ -39,6 +40,7 @@ use crate::backlight::BacklightController;
 use crate::bluetooth::BluetoothController;
 use crate::bridge::{BridgeEvent, BridgeRequest, SendEvent, SnapshotCache};
 use crate::dbus_bridge::DbusBridge;
+use crate::greetd::GreetdController;
 use crate::notifications::NotificationStore;
 use crate::process_bridge::ProcessBridge;
 use crate::surface::{
@@ -185,7 +187,10 @@ impl Config {
         }
     }
 
-    fn application_flags(&self) -> gio::ApplicationFlags {
+    fn application_flags(&self, has_session_dbus: bool) -> gio::ApplicationFlags {
+        if !has_session_dbus {
+            return gio::ApplicationFlags::NON_UNIQUE;
+        }
         let mut flags = gio::ApplicationFlags::ALLOW_REPLACEMENT;
         if self.replace {
             flags |= gio::ApplicationFlags::REPLACE;
@@ -194,11 +199,16 @@ impl Config {
     }
 }
 
+fn has_session_dbus() -> bool {
+    std::env::var_os("DBUS_SESSION_BUS_ADDRESS").is_some_and(|v| !v.is_empty())
+}
+
 struct HostServices {
     notifications: NotificationStore,
     audio: AudioController,
     bluetooth: BluetoothController,
     backlight: BacklightController,
+    greetd: GreetdController,
     sway: sway_ipc::SwayCommands,
     tray_menus: tray::TrayMenuWatcher,
     icon_palette: icons::SharedIconPalette,
@@ -214,6 +224,7 @@ impl HostServices {
         send_event: SendEvent,
         claim_dbus_servers: bool,
         claim_notifications: bool,
+        on_greetd_exit: Arc<dyn Fn() + Send + Sync>,
     ) -> (Arc<Self>, theme::ThemeState) {
         let icon_palette = icons::SharedIconPalette::default();
         let tray_menus = tray::TrayMenuWatcher::new(send_event.clone(), icon_palette.clone());
@@ -276,7 +287,8 @@ impl HostServices {
         let audio = audio::spawn(send_event.clone());
         let bluetooth = bluetooth::spawn(send_event.clone());
         network::spawn(send_event.clone());
-        let backlight = backlight::spawn(send_event);
+        let backlight = backlight::spawn(send_event.clone());
+        let greetd = greetd::spawn(send_event, on_greetd_exit);
 
         (
             Arc::new(Self {
@@ -284,6 +296,7 @@ impl HostServices {
                 audio,
                 bluetooth,
                 backlight,
+                greetd,
                 sway: sway_ipc::SwayCommands::spawn(),
                 tray_menus,
                 icon_palette,
@@ -459,6 +472,25 @@ impl HostServices {
             BridgeRequest::SurfaceToggle { id } => {
                 glib::idle_add_once(move || toggle_surface_visible(&id));
             }
+            BridgeRequest::GreetdCreateSession { id, user } => {
+                self.greetd.create_session(id, user, reply_send.clone());
+            }
+            BridgeRequest::GreetdRespond { id, response } => {
+                self.greetd
+                    .respond(id, response.map(|r| r.0), reply_send.clone());
+            }
+            BridgeRequest::GreetdCancelSession { id } => {
+                self.greetd.cancel_session(id, reply_send.clone());
+            }
+            BridgeRequest::GreetdLaunch {
+                id,
+                command,
+                env,
+                exit,
+            } => {
+                self.greetd
+                    .launch(id, command, env, exit, reply_send.clone());
+            }
         }
     }
 }
@@ -574,6 +606,7 @@ fn toggle_surface_visible(surface_id: &str) {
 fn start_ws_bridge(
     config: &Config,
     claim_dbus_servers: bool,
+    on_greetd_exit: Arc<dyn Fn() + Send + Sync>,
 ) -> (
     u16,
     String,
@@ -600,6 +633,7 @@ fn start_ws_bridge(
         send_event.clone(),
         claim_dbus_servers,
         (claim_dbus_servers && config.notifications) || config.ws_claim_notifications,
+        on_greetd_exit,
     );
     let requested_port = config.ws_bridge.unwrap_or(0);
     let token = config
@@ -641,15 +675,20 @@ fn main() {
 
     if config.source.is_none() {
         let _ = gtk4::init();
-        let _ = start_ws_bridge(&config, false);
         let main_loop = glib::MainLoop::new(None, false);
+        let exit_loop = main_loop.clone();
+        let on_greetd_exit: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
+            let exit_loop = exit_loop.clone();
+            glib::idle_add_once(move || exit_loop.quit());
+        });
+        let _ = start_ws_bridge(&config, false, on_greetd_exit);
         main_loop.run();
         return;
     }
 
     let app = Application::builder()
         .application_id("dev.local.webbar")
-        .flags(config.application_flags())
+        .flags(config.application_flags(has_session_dbus()))
         .build();
 
     app.connect_activate(move |app| activate(app, &config));
@@ -669,8 +708,18 @@ fn activate(app: &Application, config: &Config) {
         register_webbar_scheme(dir.clone());
     }
 
+    let on_greetd_exit: Arc<dyn Fn() + Send + Sync> = Arc::new(|| {
+        glib::idle_add_once(|| {
+            if let Some(app) = gio::Application::default() {
+                app.quit();
+            } else {
+                std::process::exit(0);
+            }
+        });
+    });
+    let claim_dbus = has_session_dbus();
     let (ws_port, ws_token, initial_theme, services, broadcaster, send_event) =
-        start_ws_bridge(config, true);
+        start_ws_bridge(config, claim_dbus, on_greetd_exit);
 
     SURFACES.with(|cell| {
         let mut reg = cell.borrow_mut();
@@ -1047,13 +1096,25 @@ fn mime_for(rel: &str) -> &'static str {
 }
 
 fn apply_window_input_state(win: &ApplicationWindow, state: &WindowInputState) {
-    let target_kb = state.keyboard_mode();
-    if win.keyboard_mode() != target_kb {
-        win.set_keyboard_mode(target_kb);
+    if win.is_layer_window() {
+        let target_kb = state.keyboard_mode();
+        if win.keyboard_mode() != target_kb {
+            win.set_keyboard_mode(target_kb);
+        }
     }
-    if let Some(surface) = win.surface() {
-        surface.set_input_region(&state.cairo_region());
+    // Fullscreen surfaces accept pointer input across the entire surface;
+    // avoid clipping with a monitor.geometry()-derived input region (which can
+    // start at 0x0 under non-layer-shell compositors like cage).
+    if !state.is_fullscreen() {
+        if let Some(surface) = win.surface() {
+            surface.set_input_region(&state.cairo_region());
+        }
     }
+}
+
+fn allow_devtools(config: &Config, is_fullscreen: bool, has_greetd_socket: bool) -> bool {
+    let is_greeter = is_fullscreen || has_greetd_socket;
+    config.devtools || !is_greeter
 }
 
 fn build_surface_uri(source: &Source, spec: &ResolvedSurface, query: &str) -> String {
@@ -1112,29 +1173,33 @@ fn create_surface_window(
         window.set_size_request(spec.width.unwrap_or(-1), spec.height.unwrap_or(-1));
     }
 
-    window.init_layer_shell();
-    window.set_namespace(Some(&spec.namespace));
-    window.set_monitor(Some(monitor));
-    window.set_layer(spec.layer.to_layer());
-    for anchor in &spec.anchors {
-        window.set_anchor(anchor.to_layer_edge(), true);
+    if gtk4_layer_shell::is_supported() {
+        window.init_layer_shell();
+        window.set_namespace(Some(&spec.namespace));
+        window.set_monitor(Some(monitor));
+        window.set_layer(spec.layer.to_layer());
+        for anchor in &spec.anchors {
+            window.set_anchor(anchor.to_layer_edge(), true);
+        }
+        if spec.margins.top != 0 {
+            window.set_margin(gtk4_layer_shell::Edge::Top, spec.margins.top);
+        }
+        if spec.margins.right != 0 {
+            window.set_margin(gtk4_layer_shell::Edge::Right, spec.margins.right);
+        }
+        if spec.margins.bottom != 0 {
+            window.set_margin(gtk4_layer_shell::Edge::Bottom, spec.margins.bottom);
+        }
+        if spec.margins.left != 0 {
+            window.set_margin(gtk4_layer_shell::Edge::Left, spec.margins.left);
+        }
+        spec.exclusive_zone.apply_to_window(&window);
+        window.set_keyboard_mode(spec.keyboard.to_keyboard_mode());
+    } else if spec.is_fullscreen() {
+        window.fullscreen();
     }
-    if spec.margins.top != 0 {
-        window.set_margin(gtk4_layer_shell::Edge::Top, spec.margins.top);
-    }
-    if spec.margins.right != 0 {
-        window.set_margin(gtk4_layer_shell::Edge::Right, spec.margins.right);
-    }
-    if spec.margins.bottom != 0 {
-        window.set_margin(gtk4_layer_shell::Edge::Bottom, spec.margins.bottom);
-    }
-    if spec.margins.left != 0 {
-        window.set_margin(gtk4_layer_shell::Edge::Left, spec.margins.left);
-    }
-    spec.exclusive_zone.apply_to_window(&window);
-    window.set_keyboard_mode(spec.keyboard.to_keyboard_mode());
 
-    {
+    if !spec.is_fullscreen() {
         let input_state = input_state.clone();
         window.connect_realize(move |win| {
             if let Some(surface) = win.surface() {
@@ -1204,38 +1269,50 @@ fn create_surface_window(
         &[],
     ));
 
-    let web_view = WebView::builder().user_content_manager(&ucm).build();
-    if let Some(settings) = WebViewExt::settings(&web_view) {
-        settings.set_enable_developer_extras(true);
+    let has_greetd_socket = greetd::socket_path().is_some();
+    let devtools_allowed = allow_devtools(config, spec.is_fullscreen(), has_greetd_socket);
+
+    let mut web_view_builder = WebView::builder().user_content_manager(&ucm);
+    if spec.is_fullscreen() || has_greetd_socket {
+        let ephemeral = NetworkSession::new_ephemeral();
+        web_view_builder = web_view_builder.network_session(&ephemeral);
     }
-    if let Some(inspector) = web_view.inspector() {
-        inspector.connect_attach(|inspector| {
-            let inspector = inspector.clone();
-            glib::idle_add_local_once(move || {
-                inspector.detach();
+    let web_view = web_view_builder.build();
+    if let Some(settings) = WebViewExt::settings(&web_view) {
+        settings.set_enable_developer_extras(devtools_allowed);
+    }
+    if devtools_allowed {
+        if let Some(inspector) = web_view.inspector() {
+            inspector.connect_attach(|inspector| {
+                let inspector = inspector.clone();
+                glib::idle_add_local_once(move || {
+                    inspector.detach();
+                });
+                false
             });
-            false
-        });
+        }
     }
     web_view.set_background_color(&RGBA::new(0.0, 0.0, 0.0, 0.0));
     web_view.set_vexpand(true);
     web_view.set_hexpand(true);
 
-    let key_controller = gtk4::EventControllerKey::new();
-    let web_view_weak = web_view.downgrade();
-    key_controller.connect_key_pressed(move |_, key, _, mods| {
-        let is_f12 = key == gdk::Key::F12;
-        let is_ctrl_shift_i = (key == gdk::Key::I || key == gdk::Key::i)
-            && mods.contains(gdk::ModifierType::CONTROL_MASK | gdk::ModifierType::SHIFT_MASK);
-        if is_f12 || is_ctrl_shift_i {
-            if let Some(view) = web_view_weak.upgrade() {
-                open_devtools(&view);
+    if devtools_allowed {
+        let key_controller = gtk4::EventControllerKey::new();
+        let web_view_weak = web_view.downgrade();
+        key_controller.connect_key_pressed(move |_, key, _, mods| {
+            let is_f12 = key == gdk::Key::F12;
+            let is_ctrl_shift_i = (key == gdk::Key::I || key == gdk::Key::i)
+                && mods.contains(gdk::ModifierType::CONTROL_MASK | gdk::ModifierType::SHIFT_MASK);
+            if is_f12 || is_ctrl_shift_i {
+                if let Some(view) = web_view_weak.upgrade() {
+                    open_devtools(&view);
+                }
+                return glib::Propagation::Stop;
             }
-            return glib::Propagation::Stop;
-        }
-        glib::Propagation::Proceed
-    });
-    web_view.add_controller(key_controller);
+            glib::Propagation::Proceed
+        });
+        web_view.add_controller(key_controller);
+    }
 
     WEB_VIEWS.with(|cell| {
         cell.borrow_mut().push(web_view.downgrade());
@@ -1299,9 +1376,25 @@ mod tests {
         assert!(!cfg.devtools);
         assert!(cfg.notifications);
         assert_eq!(
-            cfg.application_flags(),
+            cfg.application_flags(true),
             gio::ApplicationFlags::ALLOW_REPLACEMENT
         );
+        assert_eq!(
+            cfg.application_flags(false),
+            gio::ApplicationFlags::NON_UNIQUE
+        );
+    }
+
+    #[test]
+    fn greeter_devtools_policy_disables_inspector_unless_explicit() {
+        let cfg = parse(&["--dir", "/tmp/ui"]).unwrap();
+        assert!(allow_devtools(&cfg, false, false));
+        assert!(!allow_devtools(&cfg, true, false));
+        assert!(!allow_devtools(&cfg, false, true));
+        assert!(!allow_devtools(&cfg, true, true));
+
+        let with_devtools = parse(&["--dir", "/tmp/ui", "--devtools"]).unwrap();
+        assert!(allow_devtools(&with_devtools, true, true));
     }
 
     #[test]
@@ -1320,7 +1413,7 @@ mod tests {
         let cfg = parse(&["--url", "http://localhost:8080", "--replace"]).unwrap();
         assert!(cfg.replace);
         assert_eq!(
-            cfg.application_flags(),
+            cfg.application_flags(true),
             gio::ApplicationFlags::ALLOW_REPLACEMENT | gio::ApplicationFlags::REPLACE
         );
     }

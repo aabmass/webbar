@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>webbar greeter</title>
+    <link rel="stylesheet" href="./style.css" />
+  </head>
+  <body>
+    <main class="backdrop">
+      <section class="card" aria-label="Sign in">
+        <header class="header">
+          <time id="clock" class="clock">--:--</time>
+          <p id="date" class="date"></p>
+        </header>
+
+        <p id="status" class="status" role="status" hidden></p>
+        <p id="error" class="error" role="alert" hidden></p>
+
+        <form id="login-form" class="form" autocomplete="off">
+          <label id="user-field" class="field">
+            <span>Username</span>
+            <input
+              id="username"
+              name="username"
+              type="text"
+              autocomplete="username"
+              placeholder="alice"
+              required
+              autofocus
+            />
+          </label>
+
+          <label id="prompt-field" class="field" hidden>
+            <span id="prompt-label">Password</span>
+            <input
+              id="response"
+              name="response"
+              type="password"
+              autocomplete="current-password"
+            />
+          </label>
+
+          <label id="session-field" class="field">
+            <span>Session command</span>
+            <input
+              id="session"
+              name="session"
+              type="text"
+              value="sway"
+              required
+            />
+          </label>
+
+          <div class="actions">
+            <button id="cancel-btn" type="button" class="secondary" hidden>
+              Cancel
+            </button>
+            <button id="submit-btn" type="submit" class="primary">
+              Continue
+            </button>
+          </div>
+        </form>
+      </section>
+    </main>
+    <script src="./bundle.js"></script>
+  </body>
+</html>

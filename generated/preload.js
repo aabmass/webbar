@@ -362,6 +362,13 @@
         error: null,
         displays: []
       }),
+      greetd: createStore({
+        available: false,
+        phase: "inactive",
+        user: null,
+        prompt: null,
+        error: null
+      }),
       theme: createStore({
         dark: true,
         high_contrast: false,
@@ -483,6 +490,13 @@
         brightness: typeof e.brightness === "number" ? e.brightness : null,
         error: typeof e.error === "string" ? e.error : null,
         displays: e.displays ?? []
+      }),
+      greetd_state: (e) => stores.greetd._update({
+        available: Boolean(e.available),
+        phase: e.phase ?? "inactive",
+        user: typeof e.user === "string" ? e.user : null,
+        prompt: e.prompt ?? null,
+        error: typeof e.error === "string" ? e.error : null
       }),
       theme: (e) => {
         const next = e;
@@ -711,6 +725,16 @@
         set: (percent, displayId) => rpc("backlight_set", {
           percent,
           ...displayId ? { display_id: displayId } : {}
+        })
+      }),
+      greetd: storeView(stores.greetd, {
+        createSession: (user) => rpc("greetd_create_session", { user }),
+        respond: (response) => rpc("greetd_respond", { response }),
+        cancelSession: () => rpc("greetd_cancel_session"),
+        launch: (command, opts) => rpc("greetd_launch", {
+          command: [...command],
+          ...opts?.env ? { env: [...opts.env] } : {},
+          ...typeof opts?.exit === "boolean" ? { exit: opts.exit } : {}
         })
       }),
       theme: storeView(stores.theme, {}),

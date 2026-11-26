@@ -91,6 +91,22 @@ pub struct ExecResult {
     pub stderr: String,
 }
 
+/// Wrapper for credential strings that redacts the value in `Debug` output so
+/// passwords are never printed in logs or panic messages.
+#[derive(Clone, Deserialize)]
+#[serde(transparent)]
+pub struct RedactedString(pub String);
+
+impl std::fmt::Debug for RedactedString {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("\"<redacted>\"")
+    }
+}
+
+fn default_true() -> bool {
+    true
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum BridgeRequest {
@@ -248,6 +264,25 @@ pub enum BridgeRequest {
         id: u32,
         signal: i32,
     },
+    GreetdCreateSession {
+        id: u32,
+        user: String,
+    },
+    GreetdRespond {
+        id: u32,
+        response: Option<RedactedString>,
+    },
+    GreetdCancelSession {
+        id: u32,
+    },
+    GreetdLaunch {
+        id: u32,
+        command: Vec<String>,
+        #[serde(default)]
+        env: Vec<String>,
+        #[serde(default = "default_true")]
+        exit: bool,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -312,6 +347,7 @@ pub enum BridgeEvent {
     SurfacesState {
         surfaces: Vec<SurfaceRuntimeState>,
     },
+    GreetdState(crate::greetd::GreetdState),
     // Escape-hatch events
     DbusMatchStarted {
         id: u32,
@@ -361,6 +397,7 @@ pub enum SnapshotKey {
     Bluetooth,
     Network,
     Backlight,
+    Greetd,
 }
 
 impl BridgeEvent {
@@ -375,6 +412,7 @@ impl BridgeEvent {
             BridgeEvent::BluetoothState { .. } => Some(SnapshotKey::Bluetooth),
             BridgeEvent::NetworkState { .. } => Some(SnapshotKey::Network),
             BridgeEvent::BacklightState { .. } => Some(SnapshotKey::Backlight),
+            BridgeEvent::GreetdState(_) => Some(SnapshotKey::Greetd),
             _ => None,
         }
     }
@@ -412,6 +450,7 @@ impl SnapshotCache {
             SnapshotKey::Bluetooth,
             SnapshotKey::Network,
             SnapshotKey::Backlight,
+            SnapshotKey::Greetd,
         ];
         order
             .iter()
@@ -506,6 +545,26 @@ mod tests {
                 percent,
                 display_id: Some(ref id),
             } if (percent - 45.0).abs() < f64::EPSILON && id == "ddc:2"
+        ));
+
+        let gd_resp: BridgeRequest = serde_json::from_str(
+            r#"{"type":"greetd_respond","id":9,"response":"super-secret-password"}"#,
+        )
+        .unwrap();
+        let dbg = format!("{gd_resp:?}");
+        assert!(!dbg.contains("super-secret-password"));
+        assert!(dbg.contains("<redacted>"));
+
+        let gd_launch: BridgeRequest =
+            serde_json::from_str(r#"{"type":"greetd_launch","id":10,"command":["sway"]}"#).unwrap();
+        assert!(matches!(
+            gd_launch,
+            BridgeRequest::GreetdLaunch {
+                id: 10,
+                ref command,
+                ref env,
+                exit: true,
+            } if command == &["sway"] && env.is_empty()
         ));
     }
 

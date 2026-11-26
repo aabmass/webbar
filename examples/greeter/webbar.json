@@ -1,0 +1,14 @@
+{
+  "$schema": "../../webbar.schema.json",
+  "surfaces": [
+    {
+      "id": "greeter",
+      "anchors": ["top", "bottom", "left", "right"],
+      "layer": "overlay",
+      "exclusive_zone": "ignore",
+      "keyboard": "exclusive",
+      "input_mode": "full",
+      "monitors": "all"
+    }
+  ]
+}
