@@ -1,4 +1,13 @@
-import type { GreetdState } from "@webbar/types";
+import type { GreetdSession, GreetdState } from "@webbar/types";
+
+const FALLBACK_SESSIONS: GreetdSession[] = [
+  {
+    id: "wayland:sway",
+    name: "Sway",
+    command: ["sway"],
+    kind: "wayland",
+  },
+];
 
 const clockEl = document.getElementById("clock")!;
 const dateEl = document.getElementById("date")!;
@@ -10,7 +19,7 @@ const userInput = document.getElementById("username") as HTMLInputElement;
 const promptField = document.getElementById("prompt-field")!;
 const promptLabel = document.getElementById("prompt-label")!;
 const responseInput = document.getElementById("response") as HTMLInputElement;
-const sessionInput = document.getElementById("session") as HTMLInputElement;
+const sessionSelect = document.getElementById("session") as HTMLSelectElement;
 const cancelBtn = document.getElementById("cancel-btn") as HTMLButtonElement;
 const submitBtn = document.getElementById("submit-btn") as HTMLButtonElement;
 
@@ -31,15 +40,36 @@ window.setInterval(updateClock, 1000);
 
 let busy = false;
 let localError: string | null = null;
+let renderedSessions: GreetdSession[] | null = null;
+let chosenSessionId: string | null = null;
 
-function parseCommand(raw: string): string[] {
-  return raw
-    .trim()
-    .split(/\s+/)
-    .filter((part) => part.length > 0);
+sessionSelect.addEventListener("change", () => {
+  chosenSessionId = sessionSelect.value;
+});
+
+function availableSessions(state: GreetdState): GreetdSession[] {
+  return state.sessions.length > 0 ? state.sessions : FALLBACK_SESSIONS;
+}
+
+function sessionLabel(session: GreetdSession): string {
+  return session.kind === "x11" ? `${session.name} (X11)` : session.name;
+}
+
+function syncSessions(state: GreetdState): void {
+  const sessions = availableSessions(state);
+  if (sessions === renderedSessions) return;
+  renderedSessions = sessions;
+
+  sessionSelect.replaceChildren(
+    ...sessions.map((s) => new Option(sessionLabel(s), s.id)),
+  );
+  if (chosenSessionId && sessions.some((s) => s.id === chosenSessionId)) {
+    sessionSelect.value = chosenSessionId;
+  }
 }
 
 function render(state: GreetdState): void {
+  syncSessions(state);
   const err = localError ?? state.error;
   errorEl.hidden = !err;
   errorEl.textContent = err ?? "";
@@ -47,6 +77,7 @@ function render(state: GreetdState): void {
   if (!state.available) {
     statusEl.hidden = false;
     statusEl.textContent = "Waiting for greetd socket (GREETD_SOCK)…";
+    sessionSelect.disabled = true;
     submitBtn.disabled = true;
     cancelBtn.hidden = true;
     return;
@@ -90,6 +121,7 @@ function render(state: GreetdState): void {
     statusEl.textContent = "";
   }
 
+  sessionSelect.disabled = busy || launching;
   cancelBtn.hidden = !inSession;
   cancelBtn.disabled = busy;
   submitBtn.disabled = busy || launching;
@@ -97,13 +129,10 @@ function render(state: GreetdState): void {
 }
 
 async function launchSelectedSession(): Promise<void> {
-  const cmd = parseCommand(sessionInput.value);
-  if (cmd.length === 0) {
-    localError = "Session command must not be empty";
-    render(window.webbar.greetd.get());
-    return;
-  }
-  await window.webbar.greetd.launch(cmd);
+  const sessions = availableSessions(window.webbar.greetd.get());
+  const selected =
+    sessions.find((s) => s.id === sessionSelect.value) ?? sessions[0];
+  await window.webbar.greetd.launch(selected.command);
 }
 
 form.addEventListener("submit", async (ev) => {

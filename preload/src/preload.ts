@@ -13,6 +13,8 @@ import type { ExecResult } from "./generated/ExecResult";
 import type { GreetdAuthMessageType } from "./generated/GreetdAuthMessageType";
 import type { GreetdAuthPrompt } from "./generated/GreetdAuthPrompt";
 import type { GreetdPhase } from "./generated/GreetdPhase";
+import type { GreetdSession } from "./generated/GreetdSession";
+import type { GreetdSessionKind } from "./generated/GreetdSessionKind";
 import type { GreetdState } from "./generated/GreetdState";
 import type { InputRect } from "./generated/InputRect";
 import type { NetworkLink } from "./generated/NetworkLink";
@@ -56,6 +58,8 @@ export type {
   GreetdAuthMessageType,
   GreetdAuthPrompt,
   GreetdPhase,
+  GreetdSession,
+  GreetdSessionKind,
   GreetdState,
   InputRect,
   NetworkLink,
@@ -714,6 +718,7 @@ export function createWebbarBridge(
       user: null,
       prompt: null,
       error: null,
+      sessions: [],
     }),
     theme: createStore<ThemeState>({
       dark: true,
@@ -864,6 +869,7 @@ export function createWebbarBridge(
         user: typeof e.user === "string" ? e.user : null,
         prompt: (e.prompt as GreetdAuthPrompt | null) ?? null,
         error: typeof e.error === "string" ? e.error : null,
+        sessions: (e.sessions as GreetdSession[]) ?? [],
       }),
     theme: (e) => {
       const next = e as unknown as ThemeState;

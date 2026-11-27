@@ -1489,10 +1489,15 @@ test("greetd store and RPCs follow Quickshell-aligned lifecycle", async () => {
     user: null,
     prompt: null,
     error: null,
+    sessions: [],
   });
 
   const seen = [];
   const unsub = api.greetd.subscribe(() => seen.push(api.greetd.get().phase));
+
+  const sessions = [
+    { id: "wayland:sway", name: "Sway", command: ["sway"], kind: "wayland" },
+  ];
 
   receive({
     type: "greetd_state",
@@ -1501,8 +1506,10 @@ test("greetd store and RPCs follow Quickshell-aligned lifecycle", async () => {
     user: null,
     prompt: null,
     error: null,
+    sessions,
   });
   assert.equal(api.greetd.get().available, true);
+  assert.deepEqual(api.greetd.get().sessions, sessions);
 
   const createP = api.greetd.createSession("alice");
   const createReq = sent.pop();
@@ -1514,6 +1521,7 @@ test("greetd store and RPCs follow Quickshell-aligned lifecycle", async () => {
     user: "alice",
     prompt: { kind: "secret", message: "Password:" },
     error: null,
+    sessions,
   };
   receive({ type: "greetd_state", ...authState });
   receive({ type: "rpc_reply", id: createReq.id, ok: true, data: authState });
@@ -1529,6 +1537,7 @@ test("greetd store and RPCs follow Quickshell-aligned lifecycle", async () => {
     user: "alice",
     prompt: null,
     error: null,
+    sessions,
   };
   receive({ type: "greetd_state", ...readyState });
   receive({ type: "rpc_reply", id: respondReq.id, ok: true, data: readyState });

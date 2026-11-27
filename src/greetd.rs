@@ -4,13 +4,17 @@
 //! `Inactive` -> `Authenticating` -> `ReadyToLaunch` -> `Launching` -> `Launched`.
 //! Completely passive unless `GREETD_SOCK` is set.
 
+use std::collections::HashSet;
+use std::fs;
+use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::UnixStream;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Sender};
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
+use freedesktop_desktop_entry::{get_languages_from_env, DesktopEntry};
 use greetd_ipc::codec::SyncCodec;
 use greetd_ipc::{AuthMessageType, Request, Response};
 use serde::Serialize;
@@ -57,6 +61,39 @@ pub struct GreetdAuthPrompt {
     pub message: String,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export, export_to = "../preload/src/generated/")]
+pub enum GreetdSessionKind {
+    Wayland,
+    X11,
+}
+
+impl GreetdSessionKind {
+    fn subdir(self) -> &'static str {
+        match self {
+            Self::Wayland => "wayland-sessions",
+            Self::X11 => "xsessions",
+        }
+    }
+
+    fn id_prefix(self) -> &'static str {
+        match self {
+            Self::Wayland => "wayland",
+            Self::X11 => "x11",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[ts(export, export_to = "../preload/src/generated/")]
+pub struct GreetdSession {
+    pub id: String,
+    pub name: String,
+    pub command: Vec<String>,
+    pub kind: GreetdSessionKind,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
 #[ts(export, export_to = "../preload/src/generated/")]
 pub struct GreetdState {
@@ -65,6 +102,7 @@ pub struct GreetdState {
     pub user: Option<String>,
     pub prompt: Option<GreetdAuthPrompt>,
     pub error: Option<String>,
+    pub sessions: Vec<GreetdSession>,
 }
 
 impl GreetdState {
@@ -75,16 +113,18 @@ impl GreetdState {
             user: None,
             prompt: None,
             error: None,
+            sessions: Vec::new(),
         }
     }
 
-    fn inactive() -> Self {
+    fn inactive(sessions: Vec<GreetdSession>) -> Self {
         Self {
             available: true,
             phase: GreetdPhase::Inactive,
             user: None,
             prompt: None,
             error: None,
+            sessions,
         }
     }
 }
@@ -193,9 +233,128 @@ pub fn socket_path() -> Option<PathBuf> {
         .map(PathBuf::from)
 }
 
+fn is_executable_file(path: &Path) -> bool {
+    fs::metadata(path)
+        .map(|m| m.is_file() && (m.permissions().mode() & 0o111 != 0))
+        .unwrap_or(false)
+}
+
+fn try_exec_available(program: &str) -> bool {
+    let trimmed = program.trim();
+    if trimmed.is_empty() {
+        return true;
+    }
+    let path = Path::new(trimmed);
+    if path.is_absolute() {
+        return is_executable_file(path);
+    }
+    let Some(path_env) = std::env::var_os("PATH") else {
+        return false;
+    };
+    std::env::split_paths(&path_env).any(|dir| is_executable_file(&dir.join(trimmed)))
+}
+
+fn session_data_dirs() -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+    let mut seen = HashSet::new();
+    if let Some(raw) = std::env::var_os("XDG_DATA_DIRS") {
+        for dir in std::env::split_paths(&raw) {
+            if dir.is_absolute() && seen.insert(dir.clone()) {
+                dirs.push(dir);
+            }
+        }
+    }
+    if dirs.is_empty() {
+        dirs.push(PathBuf::from("/usr/local/share"));
+        dirs.push(PathBuf::from("/usr/share"));
+    }
+    dirs
+}
+
+fn discover_sessions() -> Vec<GreetdSession> {
+    let locales = get_languages_from_env();
+    discover_sessions_in_dirs(&session_data_dirs(), &locales)
+}
+
+fn discover_sessions_in_dirs(data_dirs: &[PathBuf], locales: &[String]) -> Vec<GreetdSession> {
+    let mut sessions = Vec::new();
+    let mut seen_ids = HashSet::new();
+
+    for kind in [GreetdSessionKind::Wayland, GreetdSessionKind::X11] {
+        for root in data_dirs {
+            let dir = root.join(kind.subdir());
+            let Ok(entries) = fs::read_dir(&dir) else {
+                continue;
+            };
+
+            for entry in entries.filter_map(Result::ok) {
+                let path = entry.path();
+                if path.extension().and_then(|e| e.to_str()) != Some("desktop") {
+                    continue;
+                }
+                let Some(stem) = path
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .filter(|s| !s.is_empty())
+                else {
+                    continue;
+                };
+                let id = format!("{}:{stem}", kind.id_prefix());
+                if seen_ids.contains(&id) {
+                    continue;
+                }
+                let Ok(desktop) = DesktopEntry::from_path(&path, Some(locales)) else {
+                    continue;
+                };
+                seen_ids.insert(id.clone());
+                if desktop.hidden() || desktop.no_display() {
+                    continue;
+                }
+                if let Some(try_exec) = desktop.try_exec() {
+                    if !try_exec_available(try_exec) {
+                        continue;
+                    }
+                }
+                let Ok(command) = desktop.parse_exec() else {
+                    continue;
+                };
+                if command.is_empty() {
+                    continue;
+                }
+                let name = desktop
+                    .name(locales)
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty())
+                    .unwrap_or_else(|| stem.to_string());
+                sessions.push(GreetdSession {
+                    id,
+                    name,
+                    command,
+                    kind,
+                });
+            }
+        }
+    }
+
+    sessions.sort_by(|a, b| {
+        a.kind
+            .cmp(&b.kind)
+            .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+            .then_with(|| a.id.cmp(&b.id))
+    });
+    sessions
+}
+
 pub fn spawn(send_event: SendEvent, on_exit: Arc<dyn Fn() + Send + Sync>) -> GreetdController {
+    let sock = socket_path();
+    let sessions = if sock.is_some() {
+        discover_sessions()
+    } else {
+        Vec::new()
+    };
     spawn_with_config(
-        socket_path(),
+        sock,
+        sessions,
         send_event,
         on_exit,
         Duration::from_millis(50),
@@ -204,6 +363,7 @@ pub fn spawn(send_event: SendEvent, on_exit: Arc<dyn Fn() + Send + Sync>) -> Gre
 
 fn spawn_with_config(
     socket_path: Option<PathBuf>,
+    sessions: Vec<GreetdSession>,
     send_event: SendEvent,
     on_exit: Arc<dyn Fn() + Send + Sync>,
     exit_delay: Duration,
@@ -214,13 +374,14 @@ fn spawn_with_config(
     };
 
     let (tx, rx) = mpsc::channel::<GreetdCommand>();
-    send_event(BridgeEvent::GreetdState(GreetdState::inactive()));
+    let initial = GreetdState::inactive(sessions);
+    send_event(BridgeEvent::GreetdState(initial.clone()));
 
     thread::spawn(move || {
         let mut worker = GreetdWorker {
             path,
             stream: None,
-            state: GreetdState::inactive(),
+            state: initial,
             send_event,
             on_exit,
             exit_delay,
@@ -249,13 +410,10 @@ impl GreetdWorker {
 
     fn reset_inactive(&mut self, error: Option<String>) {
         self.stream = None;
-        self.state = GreetdState {
-            available: true,
-            phase: GreetdPhase::Inactive,
-            user: None,
-            prompt: None,
-            error,
-        };
+        self.state.phase = GreetdPhase::Inactive;
+        self.state.user = None;
+        self.state.prompt = None;
+        self.state.error = error;
         self.emit();
     }
 
@@ -322,13 +480,10 @@ impl GreetdWorker {
                     }
                 };
                 self.stream = Some(stream);
-                self.state = GreetdState {
-                    available: true,
-                    phase: GreetdPhase::Authenticating,
-                    user: Some(user.clone()),
-                    prompt: None,
-                    error: None,
-                };
+                self.state.phase = GreetdPhase::Authenticating;
+                self.state.user = Some(user.clone());
+                self.state.prompt = None;
+                self.state.error = None;
                 self.emit();
 
                 let req = Request::CreateSession { username: user };
@@ -463,6 +618,7 @@ mod tests {
         let exited = Arc::new(AtomicBool::new(false));
         let ctrl = spawn_with_config(
             None,
+            Vec::new(),
             send,
             Arc::new({
                 let exited = Arc::clone(&exited);
@@ -540,6 +696,7 @@ mod tests {
         let (exit_tx, exit_rx) = mpsc::channel();
         let ctrl = spawn_with_config(
             Some(path.clone()),
+            Vec::new(),
             send,
             Arc::new(move || {
                 let _ = exit_tx.send(());
@@ -666,6 +823,7 @@ mod tests {
         let (send, events) = collect_events();
         let ctrl = spawn_with_config(
             Some(path.clone()),
+            Vec::new(),
             send,
             Arc::new(|| {}),
             Duration::ZERO,
@@ -713,8 +871,92 @@ mod tests {
                 user: None,
                 prompt: None,
                 error: None,
+                ..
             })
         ));
         let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn discovers_and_deduplicates_desktop_sessions() {
+        let base = std::env::temp_dir().join(format!(
+            "webbar-greetd-sessions-test-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&base);
+        let hi = base.join("hi");
+        let lo = base.join("lo");
+        fs::create_dir_all(hi.join("wayland-sessions")).unwrap();
+        fs::create_dir_all(lo.join("wayland-sessions")).unwrap();
+        fs::create_dir_all(lo.join("xsessions")).unwrap();
+
+        let valid_bin = base.join("valid-bin");
+        fs::write(&valid_bin, "#!/bin/sh\n").unwrap();
+        fs::set_permissions(&valid_bin, fs::Permissions::from_mode(0o755)).unwrap();
+
+        fs::write(
+            hi.join("wayland-sessions/sway.desktop"),
+            format!(
+                "[Desktop Entry]\nName=Sway Override\nExec=sway --unsupported-gpu\nTryExec={}\nType=Application\n",
+                valid_bin.display()
+            ),
+        )
+        .unwrap();
+        fs::write(
+            hi.join("wayland-sessions/quoted.desktop"),
+            "[Desktop Entry]\nName=Quoted Session\nExec=env \"FOO=bar baz\" sway\nType=Application\n",
+        )
+        .unwrap();
+        fs::write(
+            hi.join("wayland-sessions/hidden.desktop"),
+            "[Desktop Entry]\nName=Hidden\nExec=sway\nHidden=true\n",
+        )
+        .unwrap();
+        fs::write(
+            hi.join("wayland-sessions/nodisplay.desktop"),
+            "[Desktop Entry]\nName=NoDisplay\nExec=sway\nNoDisplay=true\n",
+        )
+        .unwrap();
+        fs::write(
+            hi.join("wayland-sessions/missing.desktop"),
+            "[Desktop Entry]\nName=Missing\nExec=sway\nTryExec=/nonexistent/webbar-missing-bin\n",
+        )
+        .unwrap();
+        fs::write(
+            lo.join("wayland-sessions/sway.desktop"),
+            "[Desktop Entry]\nName=Sway Low\nExec=sway\nType=Application\n",
+        )
+        .unwrap();
+        fs::write(
+            lo.join("xsessions/i3.desktop"),
+            "[Desktop Entry]\nName=i3\nExec=i3\nType=Application\n",
+        )
+        .unwrap();
+
+        let sessions = discover_sessions_in_dirs(&[hi, lo], &[]);
+        assert_eq!(
+            sessions,
+            vec![
+                GreetdSession {
+                    id: "wayland:quoted".into(),
+                    name: "Quoted Session".into(),
+                    command: vec!["env".into(), "FOO=bar baz".into(), "sway".into()],
+                    kind: GreetdSessionKind::Wayland,
+                },
+                GreetdSession {
+                    id: "wayland:sway".into(),
+                    name: "Sway Override".into(),
+                    command: vec!["sway".into(), "--unsupported-gpu".into()],
+                    kind: GreetdSessionKind::Wayland,
+                },
+                GreetdSession {
+                    id: "x11:i3".into(),
+                    name: "i3".into(),
+                    command: vec!["i3".into()],
+                    kind: GreetdSessionKind::X11,
+                },
+            ]
+        );
+        let _ = fs::remove_dir_all(&base);
     }
 }

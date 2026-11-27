@@ -133,8 +133,12 @@ function pickFreePort() {
   });
 }
 
-function startWebbarBridge(port, sockPath, token) {
-  const env = { ...process.env, GREETD_SOCK: sockPath };
+function startWebbarBridge(port, sockPath, token, xdgDataDir) {
+  const env = {
+    ...process.env,
+    GREETD_SOCK: sockPath,
+    XDG_DATA_DIRS: xdgDataDir,
+  };
   delete env.DBUS_SESSION_BUS_ADDRESS;
   const proc = spawn(
     process.env.WEBBAR_BIN || "webbar",
@@ -177,6 +181,17 @@ test(`examples/${GREETER_TARGET} completes auth error, cancel, and login launch 
 
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "webbar-greeter-e2e-"));
   const sockPath = path.join(tmpDir, "greetd.sock");
+  const xdgDataDir = path.join(tmpDir, "share");
+  const waylandSessionsDir = path.join(xdgDataDir, "wayland-sessions");
+  fs.mkdirSync(waylandSessionsDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(waylandSessionsDir, "sway.desktop"),
+    "[Desktop Entry]\nName=Sway\nExec=sway\nType=Application\n",
+  );
+  fs.writeFileSync(
+    path.join(waylandSessionsDir, "sway-custom.desktop"),
+    "[Desktop Entry]\nName=Sway (Custom)\nExec=sway --unsupported-gpu\nType=Application\n",
+  );
   const wsToken = "greeter-e2e-token";
 
   const { server: greetdServer, recorded } = await startMockGreetd(sockPath);
@@ -186,6 +201,7 @@ test(`examples/${GREETER_TARGET} completes auth error, cancel, and login launch 
     wsPortReq,
     sockPath,
     wsToken,
+    xdgDataDir,
   );
 
   try {
@@ -233,9 +249,9 @@ test(`examples/${GREETER_TARGET} completes auth error, cancel, and login launch 
     await expect(cancelBtn).toBeHidden();
     await expect(errorEl).toBeHidden();
 
-    // 3. Valid credentials + session command -> launches session & webbar exits 0
+    // 3. Valid credentials + discovered desktop session -> launches session & webbar exits 0
     await userInput.fill("alice");
-    await sessionInput.fill("sway --unsupported-gpu");
+    await sessionInput.selectOption("wayland:sway-custom");
     await submitBtn.click();
     await expect(userInput).toBeHidden();
     await expect(responseInput).toBeVisible();

@@ -1,6 +1,13 @@
 <script lang="ts">
-  import type { GreetdState } from "@webbar/types";
+  import type { GreetdSession, GreetdState } from "@webbar/types";
   import { fromExternalStore } from "webbar-sway-full-bar-svelte/webbarStore";
+
+  const FALLBACK_SESSION: GreetdSession = {
+    id: "wayland:sway",
+    name: "Sway",
+    command: ["sway"],
+    kind: "wayland",
+  };
 
   const greetdStore = fromExternalStore(
     window.webbar.greetd.subscribe,
@@ -9,13 +16,19 @@
 
   let username = $state("");
   let response = $state("");
-  let session = $state("sway");
+  let chosenSessionId = $state<string | null>(null);
   let busy = $state(false);
   let localError = $state<string | null>(null);
   let userInputEl = $state<HTMLInputElement | null>(null);
   let responseInputEl = $state<HTMLInputElement | null>(null);
 
   let greetd = $derived(greetdStore.current);
+  let sessions = $derived(
+    greetd.sessions.length > 0 ? greetd.sessions : [FALLBACK_SESSION],
+  );
+  let selectedSession = $derived(
+    sessions.find((s) => s.id === chosenSessionId) ?? sessions[0],
+  );
   let authenticating = $derived(greetd.phase === "authenticating");
   let readyToLaunch = $derived(greetd.phase === "ready_to_launch");
   let launching = $derived(
@@ -59,22 +72,6 @@
     }
   });
 
-  function parseCommand(raw: string): string[] {
-    return raw
-      .trim()
-      .split(/\s+/)
-      .filter((part) => part.length > 0);
-  }
-
-  async function launchSelectedSession(): Promise<void> {
-    const cmd = parseCommand(session);
-    if (cmd.length === 0) {
-      localError = "Session command must not be empty";
-      return;
-    }
-    await window.webbar.greetd.launch(cmd);
-  }
-
   async function handleSubmit(ev: SubmitEvent): Promise<void> {
     ev.preventDefault();
     if (busy) return;
@@ -102,7 +99,7 @@
       }
 
       if (next.phase === "ready_to_launch") {
-        await launchSelectedSession();
+        await window.webbar.greetd.launch(selectedSession.command);
       }
     } catch (err) {
       response = "";
@@ -177,14 +174,23 @@
     </label>
 
     <label id="session-field" class="login-field">
-      <span>Session command</span>
-      <input
-        bind:value={session}
+      <span>Session</span>
+      <select
         id="session"
         name="session"
-        type="text"
+        value={selectedSession.id}
+        disabled={!greetd.available || busy || launching}
         required
-      />
+        onchange={(e) => {
+          chosenSessionId = e.currentTarget.value;
+        }}
+      >
+        {#each sessions as item (item.id)}
+          <option value={item.id}>
+            {item.kind === "x11" ? `${item.name} (X11)` : item.name}
+          </option>
+        {/each}
+      </select>
     </label>
 
     <div class="login-actions">
@@ -272,7 +278,8 @@
     color: var(--fg-muted);
   }
 
-  .login-field input {
+  .login-field input,
+  .login-field select {
     width: 100%;
     padding: 10px 12px;
     border-radius: var(--radius-sm);
@@ -291,10 +298,16 @@
     color: var(--fg-faint);
   }
 
-  .login-field input:focus {
+  .login-field input:focus,
+  .login-field select:focus {
     outline: 2px solid var(--accent-color);
     outline-offset: 1px;
     background: var(--surface-hover);
+  }
+
+  .login-field select option {
+    background: var(--panel-bg);
+    color: var(--fg-color);
   }
 
   .login-actions {

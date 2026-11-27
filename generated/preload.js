@@ -367,7 +367,8 @@
         phase: "inactive",
         user: null,
         prompt: null,
-        error: null
+        error: null,
+        sessions: []
       }),
       theme: createStore({
         dark: true,
@@ -496,7 +497,8 @@
         phase: e.phase ?? "inactive",
         user: typeof e.user === "string" ? e.user : null,
         prompt: e.prompt ?? null,
-        error: typeof e.error === "string" ? e.error : null
+        error: typeof e.error === "string" ? e.error : null,
+        sessions: e.sessions ?? []
       }),
       theme: (e) => {
         const next = e;

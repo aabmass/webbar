@@ -466,6 +466,9 @@
         user: null,
         prompt: null,
         error: null,
+        sessions: [
+          { id: "wayland:sway", name: "Sway", command: ["sway"], kind: "wayland" },
+        ],
       }),
       createSession: async () => wb.greetd.get(),
       respond: async () => wb.greetd.get(),
