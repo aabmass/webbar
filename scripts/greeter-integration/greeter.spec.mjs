@@ -104,7 +104,7 @@ function startUiServer(uiDir, preloadPath) {
     if (rel === "index.html") {
       const html = fs
         .readFileSync(target, "utf8")
-        .replace("</head>", '<script src="/__webbar_preload.js"></script></head>');
+        .replace("<head>", '<head><script src="/__webbar_preload.js"></script>');
       res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
       res.end(html);
       return;
@@ -165,7 +165,9 @@ function startWebbarBridge(port, sockPath, token) {
   return { proc, readyPromise, exitPromise };
 }
 
-test("examples/greeter completes auth error, cancel, and login launch with clean exit", async ({
+const GREETER_TARGET = process.env.WEBBAR_GREETER_TARGET || "greeter";
+
+test(`examples/${GREETER_TARGET} completes auth error, cancel, and login launch with clean exit`, async ({
   page,
 }) => {
   const uiDir = process.env.WEBBAR_UI_DIR;
@@ -266,6 +268,7 @@ test("examples/greeter completes auth error, cancel, and login launch with clean
 test("examples/greeter responds to light and dark --desktop-* theme tokens with accessible contrast", async ({
   page,
 }) => {
+  test.skip(GREETER_TARGET !== "greeter", "theme token contrast check is for examples/greeter");
   const uiDir = process.env.WEBBAR_UI_DIR;
   const preloadPath = process.env.WEBBAR_PRELOAD_JS;
   expect(uiDir, "WEBBAR_UI_DIR must be set").toBeTruthy();
@@ -384,6 +387,44 @@ test("examples/greeter responds to light and dark --desktop-* theme tokens with 
       expect(metrics.cardContrast, `${theme.name} card text contrast`).toBeGreaterThanOrEqual(4.5);
       expect(metrics.inputContrast, `${theme.name} input text contrast`).toBeGreaterThanOrEqual(4.5);
     }
+  } finally {
+    uiServer.close();
+  }
+});
+
+test("examples/sway-greeter-svelte reuses the Svelte bar and hides workspaces, tray, stasis, and notifications", async ({
+  page,
+}) => {
+  test.skip(
+    GREETER_TARGET !== "sway-greeter-svelte",
+    "bar composition check is for examples/sway-greeter-svelte",
+  );
+  const uiDir = process.env.WEBBAR_UI_DIR;
+  const preloadPath = process.env.WEBBAR_PRELOAD_JS;
+  expect(uiDir, "WEBBAR_UI_DIR must be set").toBeTruthy();
+  expect(preloadPath, "WEBBAR_PRELOAD_JS must be set").toBeTruthy();
+
+  const { server: uiServer, port: uiPort } = await startUiServer(uiDir, preloadPath);
+
+  try {
+    await page.goto(`http://127.0.0.1:${uiPort}/`);
+
+    await expect(page.locator("header.centerbox")).toBeVisible();
+    await expect(page.locator(".bar-center .clock")).toBeVisible();
+    await expect(page.locator(".widget-cluster > .bar-btn")).toHaveCount(3);
+    await expect(page.locator(".login-card")).toBeVisible();
+
+    // Hidden widgets on login screen
+    await expect(page.locator(".workspaces")).toHaveCount(0);
+    await expect(page.locator(".tray")).toHaveCount(0);
+    await expect(page.locator(".stasis-btn")).toHaveCount(0);
+    await expect(page.locator(".notif-btn")).toHaveCount(0);
+
+    // Bar popover opens cleanly above the greeter and closes with Escape
+    await page.locator(".bar-center .clock").click();
+    await expect(page.locator(".calendar")).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(page.locator(".calendar")).toHaveCount(0);
   } finally {
     uiServer.close();
   }

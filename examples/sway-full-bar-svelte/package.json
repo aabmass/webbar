@@ -3,6 +3,11 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "exports": {
+    "./Bar": "./src/App.svelte",
+    "./styles/base.css": "./src/styles/base.css",
+    "./webbarStore": "./src/lib/webbarStore.svelte.ts"
+  },
   "scripts": {
     "dev": "vite",
     "build": "vite build",

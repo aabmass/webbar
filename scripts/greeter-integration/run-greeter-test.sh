@@ -22,6 +22,7 @@ fi
 
 export WEBBAR_UI_DIR
 export WEBBAR_PRELOAD_JS
+export WEBBAR_GREETER_TARGET="${WEBBAR_GREETER_TARGET:-greeter}"
 
 cd "$TEST_DIR"
 playwright test --config "$TEST_DIR/playwright.config.mjs"

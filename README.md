@@ -24,7 +24,7 @@ Every `webbar` UI declares its Wayland layer-shell surfaces in `webbar.json`—f
 
 `webbar` includes a passive `greetd_ipc` bridge (`window.webbar.greetd`) that activates automatically whenever `GREETD_SOCK` is set, mirroring Quickshell's `Quickshell.Services.Greetd` lifecycle (`inactive` → `authenticating` → `ready_to_launch` → `launching` → `launched`). A fullscreen `webbar.json` surface (all four anchors, `layer: "overlay"`, `exclusive_zone: "ignore"`, `keyboard: "exclusive"`, `input_mode: "full"`) binds to `wlr-layer-shell` on compositors like Sway and falls back automatically to `xdg-shell` fullscreen under kiosk compositors like `cage`, using an ephemeral WebKit session, `NON_UNIQUE` GTK mode when no session D-Bus is present, and DevTools disabled unless `--devtools` is explicitly passed.
 
-Example `/etc/greetd/config.toml` using [`examples/greeter`](examples/greeter):
+Example `/etc/greetd/config.toml` using [`examples/greeter`](examples/greeter) (minimal standalone greeter) or [`examples/sway-greeter-svelte`](examples/sway-greeter-svelte) (reusing the Svelte bar from `examples/sway-full-bar-svelte` with workspaces, tray, idle, and notifications hidden):
 
 ```toml
 [terminal]
@@ -33,6 +33,12 @@ vt = 1
 [default_session]
 command = "cage -s -- webbar --dir /path/to/examples/greeter/dist"
 user = "greeter"
+```
+
+When running [`examples/sway-greeter-svelte`](examples/sway-greeter-svelte) under Sway in `greetd` (e.g. `command = "sway --config /etc/greetd/sway-config"`), launch `webbar` from the greeter Sway config and exit Sway once `webbar` exits after login:
+
+```sway
+exec "webbar --dir /path/to/examples/sway-greeter-svelte/dist --no-notifications; swaymsg exit"
 ```
 
 ## Example Bar Screenshots
@@ -191,7 +197,7 @@ npm install
 # Preload bridge (@webbar/types) build, typecheck, and contract tests
 npm --workspace=@webbar/types run build && npm --workspace=@webbar/types test
 
-# Typecheck and build all workspaces (preload, examples/minimal, examples/greeter, examples/sway-full-bar, examples/sway-full-bar-shared, examples/sway-full-bar-svelte, examples/react-tray)
+# Typecheck and build all workspaces (preload, examples/minimal, examples/greeter, examples/sway-full-bar, examples/sway-full-bar-shared, examples/sway-full-bar-svelte, examples/sway-greeter-svelte, examples/react-tray)
 npm run --workspaces typecheck
 npm run --workspaces build
 ```

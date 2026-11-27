@@ -11,6 +11,7 @@ const ROOT = process.cwd();
 const SCAN_DIRS = [
   "examples/sway-full-bar-shared/styles",
   "examples/sway-full-bar-svelte/src",
+  "examples/sway-greeter-svelte/src",
 ];
 
 const RUNTIME_PREFIXES = [

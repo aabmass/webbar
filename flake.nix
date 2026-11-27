@@ -30,6 +30,7 @@
             ./examples/sway-full-bar-shared/package.json
             ./examples/sway-full-bar/package.json
             ./examples/sway-full-bar-svelte/package.json
+            ./examples/sway-greeter-svelte/package.json
             ./examples/react-tray/package.json
           ];
 
@@ -107,6 +108,15 @@
             pname = "webbar-sway-full-bar-svelte";
             workspace = "examples/sway-full-bar-svelte";
             extraDirs = [ ./examples/sway-full-bar-shared ];
+          };
+
+          swayGreeterSvelteUi = mkWorkspaceUi {
+            pname = "webbar-sway-greeter-svelte";
+            workspace = "examples/sway-greeter-svelte";
+            extraDirs = [
+              ./examples/sway-full-bar-shared
+              ./examples/sway-full-bar-svelte
+            ];
           };
 
           reactTrayUi = mkWorkspaceUi {
@@ -329,8 +339,8 @@
             fileset = ./scripts/greeter-integration;
           };
 
-          greeterIntegrationCheck =
-            pkgs.runCommand "webbar-integration-greeter" {
+          mkGreeterIntegrationCheck = { target, uiDir }:
+            pkgs.runCommand "webbar-integration-${target}" {
               nativeBuildInputs = [
                 webbarPkg
                 pkgs.playwright-test
@@ -341,7 +351,8 @@
             } ''
               export HOME="$(mktemp -d)"
               export WEBBAR_PRELOAD_JS="${preloadPkg}/generated/preload.js"
-              export WEBBAR_UI_DIR="${greeterUi}"
+              export WEBBAR_UI_DIR="${uiDir}"
+              export WEBBAR_GREETER_TARGET="${target}"
               export PLAYWRIGHT_BROWSERS_PATH="${pkgs.playwright-driver.browsers}"
               export PLAYWRIGHT_NODE_MODULES="${pkgs.playwright-test}/lib/node_modules"
               cd "${greeterIntegrationSrc}"
@@ -403,6 +414,10 @@
             sway-full-bar-svelte = pkgs.writeShellScriptBin "webbar-sway-full-bar-svelte" ''
               exec ${webbarPkg}/bin/webbar --dir ${swayFullBarSvelteUi} "$@"
             '';
+            sway-greeter-svelte-ui = swayGreeterSvelteUi;
+            sway-greeter-svelte = pkgs.writeShellScriptBin "webbar-sway-greeter-svelte" ''
+              exec ${webbarPkg}/bin/webbar --dir ${swayGreeterSvelteUi} "$@"
+            '';
             sway-full-bar-dev = mkBarDev {
               name = "webbar-sway-full-bar-dev";
               workspace = "examples/sway-full-bar";
@@ -413,6 +428,11 @@
               workspace = "examples/sway-full-bar-svelte";
               defaultPort = 5174;
             };
+            sway-greeter-svelte-dev = mkBarDev {
+              name = "webbar-sway-greeter-svelte-dev";
+              workspace = "examples/sway-greeter-svelte";
+              defaultPort = 5175;
+            };
             sway-full-bar-browser-dev = mkBrowserDev {
               name = "webbar-sway-full-bar-browser-dev";
               workspace = "examples/sway-full-bar";
@@ -422,6 +442,11 @@
               name = "webbar-sway-full-bar-svelte-browser-dev";
               workspace = "examples/sway-full-bar-svelte";
               defaultPort = 5174;
+            };
+            sway-greeter-svelte-browser-dev = mkBrowserDev {
+              name = "webbar-sway-greeter-svelte-browser-dev";
+              workspace = "examples/sway-greeter-svelte";
+              defaultPort = 5175;
             };
           };
 
@@ -452,6 +477,7 @@
             greeter-ui = greeterUi;
             sway-full-bar-ui = swayFullBarUi;
             sway-full-bar-svelte-ui = swayFullBarSvelteUi;
+            sway-greeter-svelte-ui = swayGreeterSvelteUi;
             react-tray-ui = reactTrayUi;
             css-vars-check = pkgs.runCommand "webbar-css-vars-check" {
               nativeBuildInputs = [ pkgs.nodejs ];
@@ -462,12 +488,20 @@
                   ./scripts/check-css-vars.mjs
                   ./examples/sway-full-bar-shared/styles
                   ./examples/sway-full-bar-svelte/src
+                  ./examples/sway-greeter-svelte/src
                 ];
               }}"
               node ./scripts/check-css-vars.mjs
               touch "$out"
             '';
-            integration-greeter = greeterIntegrationCheck;
+            integration-greeter = mkGreeterIntegrationCheck {
+              target = "greeter";
+              uiDir = greeterUi;
+            };
+            integration-sway-greeter-svelte = mkGreeterIntegrationCheck {
+              target = "sway-greeter-svelte";
+              uiDir = swayGreeterSvelteUi;
+            };
             integration-parity-react = mkIntegrationParityCheck {
               target = "react";
               uiDir = swayFullBarUi;

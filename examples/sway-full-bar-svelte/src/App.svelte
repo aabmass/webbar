@@ -9,13 +9,27 @@
   import Tray from "./components/Tray.svelte";
   import Workspaces from "./components/Workspaces.svelte";
 
+  let {
+    showWorkspaces = true,
+    showTray = true,
+    showStasis = true,
+    showNotifications = true,
+  }: {
+    showWorkspaces?: boolean;
+    showTray?: boolean;
+    showStasis?: boolean;
+    showNotifications?: boolean;
+  } = $props();
+
   let notifOpen = $state(false);
 </script>
 
 <div class="bar-shell">
   <header class="centerbox">
     <div class="bar-start">
-      <Workspaces />
+      {#if showWorkspaces}
+        <Workspaces />
+      {/if}
     </div>
 
     <div class="bar-center">
@@ -23,20 +37,28 @@
     </div>
 
     <div class="bar-end">
-      <Tray />
+      {#if showTray}
+        <Tray />
+      {/if}
       <div class="widget-cluster" role="group" aria-label="System controls">
-        <Stasis />
+        {#if showStasis}
+          <Stasis />
+        {/if}
         <AudioOutput />
         <MonitorBacklight />
         <Bluetooth />
-        <Notifications
-          open={notifOpen}
-          onOpenChange={(next) => {
-            notifOpen = next;
-          }}
-        />
+        {#if showNotifications}
+          <Notifications
+            open={notifOpen}
+            onOpenChange={(next) => {
+              notifOpen = next;
+            }}
+          />
+        {/if}
       </div>
     </div>
   </header>
 </div>
-<NotificationToasts hidden={notifOpen} />
+{#if showNotifications}
+  <NotificationToasts hidden={notifOpen} />
+{/if}

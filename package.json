@@ -9,6 +9,7 @@
     "examples/sway-full-bar-shared",
     "examples/sway-full-bar",
     "examples/sway-full-bar-svelte",
+    "examples/sway-greeter-svelte",
     "examples/react-tray"
   ]
 }
