@@ -1,33 +1,33 @@
-/* Tray: visually separate from persistent widgets */
+/* Tray: rounded Noctalia capsule */
 .tray {
   display: inline-flex;
   align-items: center;
-  gap: 2px;
-  height: 44px;
-  padding: 4px;
-  border-radius: var(--radius-md);
-  background: color-mix(in srgb, var(--surface-color) 42%, transparent);
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--fg-color) 7%, transparent);
+  gap: 6px;
+  height: 38px;
+  padding: 0 14px;
+  border-radius: 999px;
+  background: var(--tray-capsule-bg);
+  box-shadow: none;
 }
 
 .tray-divider {
   width: 1px;
-  height: 28px;
+  height: 20px;
   background: var(--panel-border);
   flex: none;
 }
 
 .tray-item.bar-btn {
-  height: 36px;
+  height: 28px;
   font-size: 11px;
-  padding: 0 8px;
-  border-radius: var(--radius-sm);
+  padding: 0 6px;
+  border-radius: 999px;
   background: transparent;
   color: var(--fg-muted);
 }
 
 .tray-item.bar-btn:hover {
-  background: var(--surface-hover);
+  background: color-mix(in srgb, var(--fg-color) 8%, transparent);
   color: var(--fg-color);
 }
 
@@ -38,16 +38,16 @@
 }
 
 .tray-item.icon-btn {
-  width: 36px;
+  width: 28px;
   padding: 0;
 }
 
 .tray-icon {
-  width: 18px;
-  height: 18px;
+  width: 16px;
+  height: 16px;
   object-fit: contain;
   display: block;
-  opacity: 0.88;
+  opacity: 0.9;
   transition:
     opacity var(--dur-fast) var(--ease-out),
     scale var(--dur-fast) var(--ease-out);

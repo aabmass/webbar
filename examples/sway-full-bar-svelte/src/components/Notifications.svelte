@@ -82,7 +82,7 @@
   {/if}
 </button>
 
-<Popover {open} onClose={close} anchorEl={btnEl} align="end">
+<Popover {open} onClose={close} anchorEl={btnEl} align="center">
   <div class="notif-popover">
     <div class="notif-header">
       <div class="qs-heading">
@@ -145,20 +145,20 @@
 
 .notif-badge {
   position: absolute;
-  top: 8px;
-  right: 7px;
-  min-width: 15px;
-  height: 15px;
-  padding: 0 4px;
+  top: 2px;
+  right: 2px;
+  min-width: 14px;
+  height: 14px;
+  padding: 0 3.5px;
   border-radius: 999px;
   background: var(--accent-color);
   color: var(--accent-fg);
-  font-size: 10px;
+  font-size: 9.5px;
   font-weight: 700;
-  line-height: 15px;
+  line-height: 14px;
   text-align: center;
   font-variant-numeric: tabular-nums;
-  box-shadow: 0 0 0 2px var(--bar-bg);
+  box-shadow: 0 0 0 1.5px var(--bar-bg);
 }
 
 .notif-btn.is-dnd {

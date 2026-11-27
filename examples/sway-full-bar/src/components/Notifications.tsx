@@ -91,7 +91,7 @@ export function Notifications({
         )}
       </button>
 
-      <Popover open={open} onClose={close} anchorRef={btnRef} align="end">
+      <Popover open={open} onClose={close} anchorRef={btnRef} align="center">
         <div className="notif-popover">
           <div className="notif-header">
             <div className="qs-heading">

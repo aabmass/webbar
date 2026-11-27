@@ -1,8 +1,8 @@
 const TIME_FORMATTER = new Intl.DateTimeFormat("en-US", {
-  hour: "numeric",
+  hour: "2-digit",
   minute: "2-digit",
   second: "2-digit",
-  hour12: true,
+  hour12: false,
   timeZoneName: "short",
 });
 

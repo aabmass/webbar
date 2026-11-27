@@ -22,6 +22,7 @@ export function App() {
 
           <div className="bar-center">
             <Clock />
+            <Notifications open={notifOpen} onOpenChange={setNotifOpen} />
           </div>
 
           <div className="bar-end">
@@ -35,7 +36,6 @@ export function App() {
               <AudioOutput />
               <MonitorBacklight />
               <Bluetooth />
-              <Notifications open={notifOpen} onOpenChange={setNotifOpen} />
             </div>
           </div>
         </header>

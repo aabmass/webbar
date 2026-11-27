@@ -1,5 +1,5 @@
 /*
- * sway-full-bar theme.
+ * sway-full-bar theme — Noctalia / Gruvbox Material Hard aesthetic.
  *
  * Follows the system light/dark mode automatically via `data-desktop-theme`
  * injected by webbar (with a prefers-color-scheme fallback for standalone
@@ -14,27 +14,32 @@
  * wallpaper (pywal, matugen, ...) and @import it after this one.
  */
 :root {
-  /* ---- Base palette: dark (default) ---- */
-  --bar-bg: #18181c;
-  --panel-bg: #1c1c21;
-  --surface-color: #26262c;
-  --fg-color: #ececf1;
-  --fg-muted: #9a9aa6;
-  --fg-faint: #5c5c66;
-  --accent-color: #8ab4f8;
-  --accent-fg: #0e1420;
-  --accent-green: #6fcf97;
-  --accent-yellow: #f2c94c;
-  --accent-yellow-fg: #1c1700;
-  --accent-red: #f2726f;
-  --urgent-bg: #e5484d;
-  --urgent-fg: #ffffff;
+  /* ---- Base palette: Gruvbox Material Hard Dark (default) ---- */
+  --bar-bg: #1d2021;
+  --bar-surface: color-mix(in srgb, var(--bar-bg) 38%, transparent);
+  --panel-bg: #252728;
+  --surface-color: #32302f;
+  --tray-capsule-bg: color-mix(in srgb, #282828 48%, transparent);
+  --ws-occupied-bg: color-mix(in srgb, #282828 84%, transparent);
+  --ws-empty-bg: color-mix(in srgb, #32302f 30%, transparent);
+  --bar-shadow: color-mix(in srgb, #000000 18%, transparent);
+  --fg-color: #d4be98;
+  --fg-muted: #a89984;
+  --fg-faint: #7c6f64;
+  --accent-color: #a9b665;
+  --accent-fg: #1d2021;
+  --accent-green: #a9b665;
+  --accent-yellow: #d8a657;
+  --accent-yellow-fg: #1d2021;
+  --accent-red: #ea6962;
+  --urgent-bg: #ea6962;
+  --urgent-fg: #1d2021;
   --shadow-color: #000000;
 
   /* ---- Shape ---- */
-  --radius-lg: 14px;
+  --radius-lg: 12px;
   --radius-md: 10px;
-  --radius-sm: 7px;
+  --radius-sm: 6px;
 
   /* ---- Motion: short and crisp ---- */
   --ease-out: cubic-bezier(0.2, 0, 0, 1);
@@ -42,58 +47,63 @@
   --dur-med: 110ms;
 
   /* ---- Derived (normally no need to edit) ---- */
-  --hairline: color-mix(in srgb, var(--fg-color) 6%, transparent);
+  --hairline: color-mix(in srgb, var(--fg-color) 7%, transparent);
   --bar-border: var(--hairline);
-  --panel-border: color-mix(in srgb, var(--fg-color) 8%, transparent);
-  --surface-hover: color-mix(in srgb, var(--surface-color), var(--fg-color) 6%);
-  --surface-active: color-mix(in srgb, var(--surface-color), var(--fg-color) 11%);
-  --accent-soft: color-mix(in srgb, var(--accent-color) 16%, transparent);
-  --accent-glow: color-mix(in srgb, var(--accent-color) 35%, transparent);
-  --green-soft: color-mix(in srgb, var(--accent-green) 13%, transparent);
-  --green-glow: color-mix(in srgb, var(--accent-green) 60%, transparent);
-  --yellow-soft: color-mix(in srgb, var(--accent-yellow) 14%, transparent);
-  --yellow-glow: color-mix(in srgb, var(--accent-yellow) 45%, transparent);
-  --red-soft: color-mix(in srgb, var(--urgent-bg) 14%, transparent);
-  --urgent-glow: color-mix(in srgb, var(--urgent-bg) 55%, transparent);
-  --shadow-sm: color-mix(in srgb, var(--shadow-color) 35%, transparent);
-  --shadow-lg: color-mix(in srgb, var(--shadow-color) 50%, transparent);
+  --panel-border: color-mix(in srgb, var(--fg-color) 9%, transparent);
+  --surface-hover: color-mix(in srgb, var(--surface-color), var(--fg-color) 7%);
+  --surface-active: color-mix(in srgb, var(--surface-color), var(--fg-color) 13%);
+  --accent-soft: color-mix(in srgb, var(--accent-color) 17%, transparent);
+  --accent-glow: color-mix(in srgb, var(--accent-color) 32%, transparent);
+  --green-soft: color-mix(in srgb, var(--accent-green) 14%, transparent);
+  --green-glow: color-mix(in srgb, var(--accent-green) 55%, transparent);
+  --yellow-soft: color-mix(in srgb, var(--accent-yellow) 15%, transparent);
+  --yellow-glow: color-mix(in srgb, var(--accent-yellow) 40%, transparent);
+  --red-soft: color-mix(in srgb, var(--urgent-bg) 15%, transparent);
+  --urgent-glow: color-mix(in srgb, var(--urgent-bg) 50%, transparent);
+  --shadow-sm: color-mix(in srgb, var(--shadow-color) 32%, transparent);
+  --shadow-lg: color-mix(in srgb, var(--shadow-color) 48%, transparent);
 
   /* Backwards-compatible aliases */
   --theme-bg-color: var(--bar-bg);
   --theme-fg-color: var(--fg-color);
 }
 
-/* ---- Light theme (driven by webbar's data-desktop-theme="light") ---- */
+/* ---- Light theme: Gruvbox Material Hard Light (driven by data-desktop-theme="light") ---- */
 :root[data-desktop-theme="light"] {
-  --bar-bg: #f4f4f7;
-  --panel-bg: #fafafc;
-  --surface-color: #e7e7ee;
-  --fg-color: #18181f;
-  --fg-muted: #5c5c6a;
-  --fg-faint: #8e8e9c;
-  --accent-color: #2b6de0;
-  --accent-fg: #ffffff;
-  --accent-green: #1f8f54;
-  --accent-yellow: #c5820a;
-  --accent-yellow-fg: #ffffff;
-  --accent-red: #d63638;
-  --urgent-bg: #d9383e;
-  --urgent-fg: #ffffff;
-  --shadow-color: #101018;
+  --bar-bg: #fbfaf2;
+  --bar-surface: color-mix(in srgb, var(--bar-bg) 34%, transparent);
+  --panel-bg: #fbf7e4;
+  --surface-color: #efe4be;
+  --tray-capsule-bg: color-mix(in srgb, #ebdbb2 56%, transparent);
+  --ws-occupied-bg: color-mix(in srgb, #efe0a8 78%, transparent);
+  --ws-empty-bg: color-mix(in srgb, #ebdbb2 46%, transparent);
+  --bar-shadow: color-mix(in srgb, #3c3836 14%, transparent);
+  --fg-color: #4f3829;
+  --fg-muted: #7c6f64;
+  --fg-faint: #a89984;
+  --accent-color: #6c782e;
+  --accent-fg: #f9f5d7;
+  --accent-green: #6c782e;
+  --accent-yellow: #b47109;
+  --accent-yellow-fg: #f9f5d7;
+  --accent-red: #c14a4a;
+  --urgent-bg: #c14a4a;
+  --urgent-fg: #f9f5d7;
+  --shadow-color: #3c3836;
 
   --hairline: color-mix(in srgb, var(--fg-color) 9%, transparent);
   --bar-border: var(--hairline);
   --panel-border: color-mix(in srgb, var(--fg-color) 11%, transparent);
   --surface-hover: color-mix(in srgb, var(--surface-color), var(--fg-color) 6%);
   --surface-active: color-mix(in srgb, var(--surface-color), var(--fg-color) 12%);
-  --accent-soft: color-mix(in srgb, var(--accent-color) 13%, transparent);
+  --accent-soft: color-mix(in srgb, var(--accent-color) 14%, transparent);
   --accent-glow: color-mix(in srgb, var(--accent-color) 24%, transparent);
-  --green-soft: color-mix(in srgb, var(--accent-green) 13%, transparent);
-  --green-glow: color-mix(in srgb, var(--accent-green) 40%, transparent);
+  --green-soft: color-mix(in srgb, var(--accent-green) 14%, transparent);
+  --green-glow: color-mix(in srgb, var(--accent-green) 36%, transparent);
   --yellow-soft: color-mix(in srgb, var(--accent-yellow) 14%, transparent);
-  --yellow-glow: color-mix(in srgb, var(--accent-yellow) 32%, transparent);
+  --yellow-glow: color-mix(in srgb, var(--accent-yellow) 30%, transparent);
   --red-soft: color-mix(in srgb, var(--urgent-bg) 12%, transparent);
-  --urgent-glow: color-mix(in srgb, var(--urgent-bg) 38%, transparent);
-  --shadow-sm: color-mix(in srgb, var(--shadow-color) 10%, transparent);
-  --shadow-lg: color-mix(in srgb, var(--shadow-color) 18%, transparent);
+  --urgent-glow: color-mix(in srgb, var(--urgent-bg) 36%, transparent);
+  --shadow-sm: color-mix(in srgb, var(--shadow-color) 12%, transparent);
+  --shadow-lg: color-mix(in srgb, var(--shadow-color) 20%, transparent);
 }

@@ -284,7 +284,7 @@ grim -g "1000,0 600x400" "$OUT_DIR/popover-display.png"
 
 echo "update-screenshots: capturing popover-notifications.png..."
 launch_bar "theme=dark&open=notifications" 2.0
-grim -g "1000,0 600x520" "$OUT_DIR/popover-notifications.png"
+grim -g "480,0 640x520" "$OUT_DIR/popover-notifications.png"
 
 echo "update-screenshots: capturing notifications-toasts.png..."
 launch_bar "theme=dark&toasts=1" 2.0
@@ -338,6 +338,9 @@ PNGS=(
 
 if [ -n "$GREETER_UI_DIR" ]; then
   echo "update-screenshots: capturing greeter.png..."
+  set_wallpaper "$WORK_DIR/dark.png"
+  swaymsg '[app_id="^demo-hero-"] kill' >/dev/null 2>&1 || true
+  wait_ws_count "1" 0
   GREETER_TMP="$WORK_DIR/greeter-ui"
   cp -r "$GREETER_UI_DIR" "$GREETER_TMP"
   chmod -R u+w "$GREETER_TMP"

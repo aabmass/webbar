@@ -79,10 +79,10 @@
 
 .workspaces-grid {
   display: grid;
-  grid-auto-rows: 28px;
-  grid-auto-columns: 36px;
-  gap: 4px;
-  padding: 3px 4px;
+  grid-auto-rows: 21px;
+  grid-auto-columns: 24px;
+  gap: 3px;
+  padding: 0;
   contain: paint;
 }
 
@@ -91,18 +91,19 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  border-radius: var(--radius-sm);
-  background: var(--surface-color);
+  border-radius: 6px;
+  background: var(--ws-occupied-bg);
   color: var(--fg-color);
-  padding: 0 6px 2px;
-  font-size: 12px;
-  font-weight: 700;
+  padding: 0 3px 5px;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1;
   text-transform: uppercase;
 }
 
 .ws-dots {
   position: absolute;
-  bottom: 3px;
+  bottom: 2px;
   left: 0;
   right: 0;
   display: flex;
@@ -144,13 +145,13 @@
 .ws-btn.focused {
   background: var(--accent-color);
   color: var(--accent-fg);
-  box-shadow: 0 0 10px var(--accent-glow);
+  box-shadow: none;
 }
 
 /* Pinned slot with no workspace: quiet placeholder, label on hover */
 .ws-btn.virtual {
-  background: color-mix(in srgb, var(--fg-color) 2.5%, transparent);
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--fg-color) 5%, transparent);
+  background: var(--ws-empty-bg);
+  box-shadow: none;
   color: var(--fg-faint);
 }
 

@@ -22,9 +22,9 @@
     width: 100%;
     height: 100%;
     background: radial-gradient(
-      circle at 50% 40%,
-      transparent 0%,
-      color-mix(in srgb, var(--shadow-color) 28%, transparent) 100%
+      circle at 50% 42%,
+      color-mix(in srgb, var(--bar-bg) 16%, transparent) 0%,
+      color-mix(in srgb, var(--shadow-color) 34%, transparent) 100%
     );
   }
 

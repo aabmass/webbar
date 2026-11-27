@@ -82,7 +82,7 @@
 .notif-toast-stack {
   position: fixed;
   inset: auto;
-  top: calc(var(--webbar-height, 86px) + 10px);
+  top: calc(var(--webbar-height, 60px) + 10px);
   right: 12px;
   width: 340px;
   margin: 0;

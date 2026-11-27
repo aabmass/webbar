@@ -541,7 +541,7 @@
   const triggerFullBarRepaint = () => {
     setTimeout(() => {
       const targets = document.querySelectorAll(
-        ".centerbox, .notif-toast-stack, .backdrop",
+        ".centerbox, .notif-toast-stack, .backdrop, .greeter-shell",
       );
       const elements = Array.from(targets).filter(
         (el) => el instanceof HTMLElement,

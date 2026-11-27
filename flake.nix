@@ -202,7 +202,7 @@
           } ''
             export WEBBAR_UI_DIR="${swayFullBarUi}"
             export WEBBAR_MULTI_SURFACE_DIR="${./examples/multi-surface}"
-            export GREETER_UI_DIR="${greeterUi}"
+            export GREETER_UI_DIR="${swayGreeterSvelteUi}"
             export FONT_DIRS="${pkgs.inter}/share/fonts:${pkgs.jetbrains-mono}/share/fonts:${pkgs.dejavu_fonts}/share/fonts"
             export OUT_DIR="$out"
             # nix-daemon is already the networkless build sandbox; WebKit's

@@ -106,14 +106,14 @@
 </Popover>
 
 <style>
-/* Clock: big time over a quiet date line */
+/* Clock: compact single-line readout matching Noctalia */
 .clock {
-  flex-direction: column;
-  gap: 2px;
-  min-width: 200px;
-  padding: 0 20px;
+  flex-direction: row;
+  gap: 4px;
+  min-width: auto;
+  padding: 0 7px;
   font-variant-numeric: tabular-nums;
-  line-height: 1.1;
+  line-height: 1;
 }
 
 .clock.bar-btn {
@@ -121,37 +121,29 @@
 }
 
 .clock.bar-btn:hover {
-  background: var(--surface-color);
+  background: color-mix(in srgb, var(--fg-color) 8%, transparent);
 }
 
 .clock.bar-btn.is-open {
-  background: var(--surface-hover);
+  background: color-mix(in srgb, var(--fg-color) 13%, transparent);
 }
 
 .clock-time {
-  font-size: 20px;
-  font-weight: 700;
+  font-size: 15px;
+  font-weight: 500;
   letter-spacing: 0.01em;
 }
 
 .clock-seconds {
-  font-size: 14px;
-  font-weight: 600;
-  color: var(--fg-muted);
+  font-size: 15px;
+  font-weight: 500;
+  color: var(--fg-color);
 }
 
 .clock-ampm,
-.clock-tz {
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--fg-muted);
-  margin-left: 4px;
-}
-
+.clock-tz,
 .clock-date {
-  font-size: 12px;
-  font-weight: 500;
-  color: var(--fg-muted);
+  display: none;
 }
 
 /* Calendar */

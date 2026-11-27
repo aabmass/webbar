@@ -218,15 +218,15 @@
 
 <style>
   .login-card {
-    width: min(380px, 100%);
-    padding: 24px;
-    border-radius: var(--radius-lg);
-    background: var(--panel-bg);
+    width: min(392px, 100%);
+    padding: 26px;
+    border-radius: 14px;
+    background: color-mix(in srgb, var(--panel-bg) 90%, transparent);
     color: var(--fg-color);
     border: 1px solid var(--panel-border);
     box-shadow:
-      0 16px 48px var(--shadow-lg),
-      0 2px 8px var(--shadow-sm);
+      0 20px 54px var(--shadow-lg),
+      0 3px 10px var(--shadow-sm);
     display: flex;
     flex-direction: column;
     gap: 16px;

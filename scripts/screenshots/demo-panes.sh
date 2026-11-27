@@ -59,7 +59,7 @@ case "$mode" in
   status)
     printf '\n'
     printf "  ${c_green}❯${c_reset} ${c_bold}${c_fg}nix run .#sway-full-bar${c_reset}\n"
-    printf "  ${c_muted}info${c_reset}  docked on ${c_accent}DP-1${c_reset} (1600×900 · height 86px)\n"
+    printf "  ${c_muted}info${c_reset}  docked on ${c_accent}DP-1${c_reset} (1600×900 · height 60px)\n"
     printf "  ${c_muted}info${c_reset}  injected ${c_violet}window.webbar${c_reset} + ${c_accent}--desktop-*${c_reset} tokens\n"
     printf '\n'
     printf "  ${c_green}❯${c_reset} ${c_bold}${c_fg}nix flake check${c_reset}\n"

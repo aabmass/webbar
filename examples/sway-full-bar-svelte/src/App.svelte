@@ -34,6 +34,14 @@
 
     <div class="bar-center">
       <Clock />
+      {#if showNotifications}
+        <Notifications
+          open={notifOpen}
+          onOpenChange={(next) => {
+            notifOpen = next;
+          }}
+        />
+      {/if}
     </div>
 
     <div class="bar-end">
@@ -47,14 +55,6 @@
         <AudioOutput />
         <MonitorBacklight />
         <Bluetooth />
-        {#if showNotifications}
-          <Notifications
-            open={notifOpen}
-            onOpenChange={(next) => {
-              notifOpen = next;
-            }}
-          />
-        {/if}
       </div>
     </div>
   </header>
